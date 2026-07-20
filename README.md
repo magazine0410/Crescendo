@@ -1,8 +1,8 @@
 # Crescendo
 
-A desktop music player for Linux that replicates the look of the foobar2000
-**Eole** theme (dark mode). Built with Tauri 2, Svelte 5, and GStreamer for a
-136k+ track FLAC library.
+A desktop music player for Linux that replicates the look of the [foobar2000
+**Eole** theme](https://github.com/Ottodix/Eole-foobar-theme) (dark mode). 
+Built with Tauri 2, Svelte 5, and GStreamer. Supports vast libraries; the player is tested with a library containing 100k+ songs.
 
 ## Stack
 
@@ -11,8 +11,7 @@ A desktop music player for Linux that replicates the look of the foobar2000
   Opus, Vorbis, WAV, AAC; gapless via `about-to-finish`
 - **Library**: SQLite (WAL) at `~/.local/share/crescendo/library.db`;
   incremental scans are stat-only (mtime/size diff), tags read with lofty
-- **Search**: Quod Libet-style query syntax compiled to SQL
-  (`artist=parker`, `#(1994 <= year < 2000)`, `&(a, b)`, `album=/regex/`, …)
+- **Search**: Query syntax compiled to SQL inspired by [Quod Libet](https://github.com/quodlibet/quodlibet)
 - **Art**: no blobs in the DB; `folder.jpg`/embedded art resolved lazily,
   256px thumbnails cached in `~/.cache/crescendo/thumbs/`, served over the
   `crescendo-art://` protocol
