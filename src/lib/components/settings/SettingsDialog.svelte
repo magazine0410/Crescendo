@@ -90,6 +90,31 @@
 
       <section>
         <h3>Display</h3>
+        <label for="libview">Library view</label>
+        <select
+          id="libview"
+          value={prefs.values.library_view}
+          onchange={(e) =>
+            prefs.set("library_view", e.currentTarget.value as "album_wall" | "track_list")}
+        >
+          <option value="album_wall">Album wall</option>
+          <option value="track_list">Track list</option>
+        </select>
+        <p class="hint">
+          Album wall shows a grid of album covers; Track list shows every track as a
+          flat, scrollable list. Both respect the left panel and search.
+        </p>
+
+        <label class="check" class:disabled={prefs.values.library_view !== "track_list"}>
+          <input
+            type="checkbox"
+            checked={prefs.values.track_separators}
+            disabled={prefs.values.library_view !== "track_list"}
+            onchange={(e) => prefs.set("track_separators", e.currentTarget.checked)}
+          />
+          Show clickable album separators in the track list
+        </label>
+
         <label class="check">
           <input
             type="checkbox"
@@ -212,6 +237,25 @@
     color: var(--txt);
     margin-bottom: 8px;
   }
+  select {
+    width: 100%;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 6px 26px 6px 8px;
+    color: var(--txt);
+    margin-bottom: 8px;
+    /* WebKitGTK renders a native (light) combobox unless appearance is cleared */
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    cursor: pointer;
+  }
+  select option {
+    background: var(--bg-main);
+    color: var(--txt);
+  }
   input.short {
     width: 80px;
   }
@@ -230,6 +274,13 @@
     flex: none;
     accent-color: var(--txt-full);
     cursor: pointer;
+  }
+  label.check.disabled {
+    color: var(--txt-faded);
+    cursor: default;
+  }
+  label.check.disabled input {
+    cursor: default;
   }
   .pathrow {
     display: flex;

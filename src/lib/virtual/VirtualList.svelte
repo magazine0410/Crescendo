@@ -10,8 +10,12 @@
     padBottom?: number;
     row: Snippet<[number]>;
     onNearEnd?: () => void;
+    /** Fires whenever the visible (overscanned) index range changes — used by
+        windowed lists to fetch the pages covering [first, last]. */
+    onVisibleRange?: (first: number, last: number) => void;
   }
-  let { count, itemHeight, overscan = 8, padBottom = 0, row, onNearEnd }: Props = $props();
+  let { count, itemHeight, overscan = 8, padBottom = 0, row, onNearEnd, onVisibleRange }: Props =
+    $props();
 
   let viewport: HTMLDivElement | null = $state(null);
   let scrollTop = $state(0);
@@ -57,6 +61,10 @@
   const last = $derived(
     count === 0 ? -1 : Math.min(count - 1, indexAt(scrollTop + viewportH) + overscan),
   );
+
+  $effect(() => {
+    if (onVisibleRange && count > 0) onVisibleRange(first, last);
+  });
 
   function offsetOf(i: number): number {
     if (typeof itemHeight === "number") return i * itemHeight;

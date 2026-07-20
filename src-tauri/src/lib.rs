@@ -57,6 +57,8 @@ pub fn run() {
             commands::library::album_tracks,
             commands::library::track_count,
             commands::library::tracks_range,
+            commands::library::track_groups,
+            commands::library::album_by_id,
             commands::library::search_validate,
             commands::player::player_play_context,
             commands::player::player_jump_to,
