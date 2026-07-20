@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
         let t = Instant::now();
         match crescendo_core::search::compile(q) {
             Ok(filter) => {
-                let n = db.track_count(Some(&filter))?;
+                let n = db.track_count(Some(&filter), BrowseMode::Artist, None)?;
                 eprintln!("search {q:40} -> {n} tracks in {:.1?}", t.elapsed());
             }
             Err(e) => eprintln!("search {q:40} -> PARSE ERROR: {e}"),

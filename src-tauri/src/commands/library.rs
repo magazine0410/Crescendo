@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crescendo_core::model::{Album, BrowseMode, LibraryStats, Track};
+use crescendo_core::model::{Album, BrowseMode, LibraryStats, Track, TrackGroup};
 use crescendo_core::scanner::{scan, ScanOptions};
 use crescendo_core::search::SearchFilter;
 use std::sync::atomic::Ordering;
@@ -115,23 +115,52 @@ pub async fn album_tracks(state: State<'_, AppState>, album_id: i64) -> Result<V
 pub async fn track_count(
     state: State<'_, AppState>,
     query: Option<String>,
+    mode: BrowseMode,
+    value: Option<String>,
 ) -> Result<i64, String> {
     let filter = filter_for(query.as_deref())?;
-    state.db.track_count(filter.as_ref()).map_err(|e| e.to_string())
+    state
+        .db
+        .track_count(filter.as_ref(), mode, value.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn tracks_range(
     state: State<'_, AppState>,
     query: Option<String>,
+    mode: BrowseMode,
+    value: Option<String>,
     offset: i64,
     limit: i64,
 ) -> Result<Vec<Track>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .tracks_range(filter.as_ref(), offset, limit.clamp(1, 2000))
+        .tracks_range(filter.as_ref(), mode, value.as_deref(), offset, limit.clamp(1, 2000))
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn track_groups(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    mode: BrowseMode,
+    value: Option<String>,
+) -> Result<Vec<TrackGroup>, String> {
+    let filter = filter_for(query.as_deref())?;
+    state
+        .db
+        .track_groups(filter.as_ref(), mode, value.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn album_by_id(
+    state: State<'_, AppState>,
+    album_id: i64,
+) -> Result<Option<Album>, String> {
+    state.db.album_by_id(album_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

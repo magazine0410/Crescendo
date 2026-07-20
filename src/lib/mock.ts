@@ -100,6 +100,25 @@ function browseCol(t: Track, mode: string): string {
   return v ?? "";
 }
 
+/** Track-list filter: search query AND optional left-panel mode=value. */
+function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
+  if (!matches(t, args.query as string | null | undefined)) return false;
+  const value = args.value as string | null | undefined;
+  return value == null || browseCol(t, args.mode as string) === value;
+}
+
+/** Mirror the backend LIBRARY_SORT so the dev track list groups by album. */
+function libSort(a: Track, b: Track): number {
+  return (
+    (a.albumartist ?? "").localeCompare(b.albumartist ?? "") ||
+    (a.year ?? 0) - (b.year ?? 0) ||
+    (a.album ?? "").localeCompare(b.album ?? "") ||
+    (a.disc_no ?? 0) - (b.disc_no ?? 0) ||
+    (a.track_no ?? 0) - (b.track_no ?? 0) ||
+    a.path.localeCompare(b.path)
+  );
+}
+
 export async function mockCall<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   build();
   const query = args.query as string | null | undefined;
@@ -139,12 +158,41 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "album_tracks":
       return tracks.filter((t) => t.album_id === (args.albumId as number)) as T;
     case "track_count":
-      return tracks.filter((t) => matches(t, query)).length as T;
+      return tracks.filter((t) => trackListMatch(t, args)).length as T;
     case "tracks_range": {
-      const filtered = tracks.filter((t) => matches(t, query));
+      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(libSort);
       const offset = args.offset as number;
       const limit = args.limit as number;
       return filtered.slice(offset, offset + limit) as T;
+    }
+    case "album_by_id":
+      return (albums.find((a) => a.id === (args.albumId as number)) ?? null) as T;
+    case "track_groups": {
+      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(libSort);
+      const groups: {
+        album_id: number | null;
+        album: string | null;
+        artist: string | null;
+        artist_sort: string | null;
+        year: number | null;
+        count: number;
+      }[] = [];
+      let cur: (typeof groups)[number] | null = null;
+      for (const t of filtered) {
+        if (!cur || cur.album_id !== t.album_id) {
+          cur = {
+            album_id: t.album_id,
+            album: t.album,
+            artist: t.albumartist ?? t.artist,
+            artist_sort: t.albumartistsort ?? t.artistsort,
+            year: t.year,
+            count: 0,
+          };
+          groups.push(cur);
+        }
+        cur.count++;
+      }
+      return groups as T;
     }
     case "search_validate":
       return ((args.query as string).includes('"') ? "mock: unbalanced quote?" : null) as T;

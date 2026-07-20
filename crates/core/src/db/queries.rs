@@ -1,5 +1,5 @@
 use super::Db;
-use crate::model::{Album, BrowseMode, LibraryStats, PlayContext, Track};
+use crate::model::{Album, BrowseMode, LibraryStats, PlayContext, Track, TrackGroup};
 use crate::search::SearchFilter;
 use anyhow::Result;
 use rusqlite::{params_from_iter, types::Value, Connection, Row};
@@ -54,6 +54,15 @@ fn track_where(filter: Option<&SearchFilter>) -> (String, Vec<Value>) {
         Some(f) => (format!("missing = 0 AND ({})", f.where_sql), f.params.clone()),
         None => ("missing = 0".into(), vec![]),
     }
+}
+
+/// Append a `<mode column> = value` equality to a `track_where` fragment, in place.
+/// NULLs collate to "" (so selecting the "?" group matches untagged tracks) — this
+/// is the single source of the left-panel value filter shared by browse_albums,
+/// track_count/tracks_range, and the ValueTracks play context.
+fn push_value_clause(where_sql: &mut String, params: &mut Vec<Value>, mode: BrowseMode, value: &str) {
+    *where_sql = format!("{where_sql} AND COALESCE({}, '') = ?{}", mode.column(), params.len() + 1);
+    params.push(Value::from(value.to_string()));
 }
 
 impl Db {
@@ -119,12 +128,7 @@ impl Db {
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            where_sql = format!(
-                "{where_sql} AND COALESCE({}, '') = ?{}",
-                mode.column(),
-                params.len() + 1
-            );
-            params.push(Value::from(v.to_string()));
+            push_value_clause(&mut where_sql, &mut params, mode, v);
         }
         self.with(|conn| {
             let sql = format!(
@@ -175,8 +179,17 @@ impl Db {
         })
     }
 
-    pub fn track_count(&self, filter: Option<&SearchFilter>) -> Result<i64> {
-        let (where_sql, params) = track_where(filter);
+    /// Count of live tracks matching (search filter AND optional mode=value).
+    pub fn track_count(
+        &self,
+        filter: Option<&SearchFilter>,
+        mode: BrowseMode,
+        value: Option<&str>,
+    ) -> Result<i64> {
+        let (mut where_sql, mut params) = track_where(filter);
+        if let Some(v) = value {
+            push_value_clause(&mut where_sql, &mut params, mode, v);
+        }
         self.with(|conn| {
             Ok(conn.query_row(
                 &format!("SELECT COUNT(*) FROM tracks WHERE {where_sql}"),
@@ -186,14 +199,21 @@ impl Db {
         })
     }
 
-    /// Windowed page of the library view (search filter + stable sort).
+    /// Windowed page of the library view (search filter + optional mode=value +
+    /// stable sort). The sort matches `resolve_context` so a row's index is its
+    /// index in the resolved play queue.
     pub fn tracks_range(
         &self,
         filter: Option<&SearchFilter>,
+        mode: BrowseMode,
+        value: Option<&str>,
         offset: i64,
         limit: i64,
     ) -> Result<Vec<Track>> {
-        let (where_sql, mut params) = track_where(filter);
+        let (mut where_sql, mut params) = track_where(filter);
+        if let Some(v) = value {
+            push_value_clause(&mut where_sql, &mut params, mode, v);
+        }
         self.with(|conn| {
             let sql = format!(
                 "SELECT {TRACK_COLS} FROM tracks WHERE {where_sql} \
@@ -206,6 +226,63 @@ impl Db {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(params_from_iter(params.iter()), track_from_row)?;
             rows.map(|r| Ok(r?)).collect()
+        })
+    }
+
+    /// Album runs for the Track-list view: consecutive same-album_id blocks over
+    /// the same filtered + LIBRARY_SORT-ordered set as `tracks_range`. Uses the
+    /// gaps-and-islands pattern so a re-appearing album_id (e.g. split by a year
+    /// change) and scattered NULL-album tracks each form their own run.
+    pub fn track_groups(
+        &self,
+        filter: Option<&SearchFilter>,
+        mode: BrowseMode,
+        value: Option<&str>,
+    ) -> Result<Vec<TrackGroup>> {
+        let (mut where_sql, mut params) = track_where(filter);
+        if let Some(v) = value {
+            push_value_clause(&mut where_sql, &mut params, mode, v);
+        }
+        self.with(|conn| {
+            let sql = format!(
+                "WITH ordered AS ( \
+                   SELECT album_id, album, \
+                          COALESCE(albumartist, artist) AS artist, \
+                          COALESCE(albumartistsort, artistsort) AS artist_sort, year, \
+                          ROW_NUMBER() OVER (ORDER BY {LIBRARY_SORT}) AS rn \
+                   FROM tracks WHERE {where_sql} \
+                 ), islands AS ( \
+                   SELECT *, rn - ROW_NUMBER() OVER (PARTITION BY album_id ORDER BY rn) AS grp \
+                   FROM ordered \
+                 ) \
+                 SELECT album_id, MIN(album), MIN(artist), MIN(artist_sort), MIN(year), COUNT(*) \
+                 FROM islands GROUP BY album_id, grp ORDER BY MIN(rn)"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(params.iter()), |r| {
+                Ok(TrackGroup {
+                    album_id: r.get(0)?,
+                    album: r.get(1)?,
+                    artist: r.get(2)?,
+                    artist_sort: r.get(3)?,
+                    year: r.get(4)?,
+                    count: r.get(5)?,
+                })
+            })?;
+            rows.map(|r| Ok(r?)).collect()
+        })
+    }
+
+    pub fn album_by_id(&self, id: i64) -> Result<Option<Album>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT id, album, albumartist, albumartist_sort, year, genre, \
+                            track_count, total_duration_ms FROM albums WHERE id = ?1",
+                    [id],
+                    album_from_row,
+                )
+                .ok())
         })
     }
 
@@ -245,12 +322,7 @@ impl Db {
             PlayContext::ValueTracks { mode, value, query } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                where_sql = format!(
-                    "{where_sql} AND COALESCE({}, '') = ?{}",
-                    mode.column(),
-                    params.len() + 1
-                );
-                params.push(Value::from(value.clone()));
+                push_value_clause(&mut where_sql, &mut params, *mode, value);
                 self.with(|conn| {
                     collect_ids(
                         conn,

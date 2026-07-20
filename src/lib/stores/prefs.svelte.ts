@@ -8,6 +8,8 @@ export interface Prefs {
   track_detail_format: string;
   scan_threads: number;
   show_waveform: boolean;
+  library_view: "album_wall" | "track_list";
+  track_separators: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -17,6 +19,8 @@ const DEFAULTS: Prefs = {
   track_detail_format: "",
   scan_threads: 4,
   show_waveform: false,
+  library_view: "album_wall",
+  track_separators: false,
 };
 
 class PrefsStore {
@@ -36,6 +40,9 @@ class PrefsStore {
     if (raw.track_detail_format) v.track_detail_format = raw.track_detail_format;
     if (raw.scan_threads) v.scan_threads = parseInt(raw.scan_threads, 10) || 4;
     if (raw.show_waveform) v.show_waveform = raw.show_waveform === "true";
+    if (raw.library_view === "track_list" || raw.library_view === "album_wall")
+      v.library_view = raw.library_view;
+    if (raw.track_separators) v.track_separators = raw.track_separators === "true";
     this.values = v;
     this.loaded = true;
   }

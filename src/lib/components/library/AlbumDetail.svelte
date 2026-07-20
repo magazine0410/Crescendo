@@ -28,7 +28,9 @@
 
 {#if album}
   <div class="detail" style:padding-bottom={`${ui.bottombarH + 10}px`}>
-    <button class="back" onclick={() => library.selectAlbum(null)}>‹ Albums</button>
+    <button class="back" onclick={() => library.selectAlbum(null)}>
+      {prefs.values.library_view === "track_list" ? "‹ Back" : "‹ Albums"}
+    </button>
     <header>
       <img class="cover" src={artUrl("album", album.id, "thumb")} alt="" onerror={onImgError} />
       <div class="info">

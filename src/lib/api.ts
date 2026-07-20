@@ -42,6 +42,16 @@ export interface Album {
   total_duration_ms: number;
 }
 
+/** One album run in the Track-list view (see Db::track_groups). */
+export interface TrackGroup {
+  album_id: number | null;
+  album: string | null;
+  artist: string | null;
+  artist_sort: string | null;
+  year: number | null;
+  count: number;
+}
+
 export interface PlaylistInfo {
   id: number;
   name: string;

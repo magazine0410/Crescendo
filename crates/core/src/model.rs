@@ -34,6 +34,19 @@ pub struct Album {
     pub total_duration_ms: i64,
 }
 
+/// One album run in the Track-list view: a maximal block of consecutive tracks
+/// (in LIBRARY_SORT order) sharing an album_id. `count` is the number of tracks
+/// in this run for the current filter, so the runs' counts sum to `track_count`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackGroup {
+    pub album_id: Option<i64>,
+    pub album: Option<String>,
+    pub artist: Option<String>,
+    pub artist_sort: Option<String>,
+    pub year: Option<i64>,
+    pub count: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LibraryStats {
     pub tracks: i64,

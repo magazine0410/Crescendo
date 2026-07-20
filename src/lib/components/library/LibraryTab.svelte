@@ -1,10 +1,12 @@
 <script lang="ts">
   import { library } from "$lib/stores/library.svelte";
   import { ui } from "$lib/stores/ui.svelte";
+  import { prefs } from "$lib/stores/prefs.svelte";
   import ModeSelector from "./ModeSelector.svelte";
   import ValueList from "./ValueList.svelte";
   import AlbumWall from "./AlbumWall.svelte";
   import AlbumDetail from "./AlbumDetail.svelte";
+  import TrackList from "./TrackList.svelte";
   import Splitter from "../common/Splitter.svelte";
   import ScanProgress from "../common/ScanProgress.svelte";
   import QueuePanel from "../playlists/QueuePanel.svelte";
@@ -13,6 +15,12 @@
     const q = ui.searchQuery;
     const t = setTimeout(() => library.setQuery(q), 200);
     return () => clearTimeout(t);
+  });
+
+  // Switching the library view drops any drilled-in album so the new view shows.
+  $effect(() => {
+    prefs.values.library_view;
+    library.selectAlbum(null);
   });
 </script>
 
@@ -32,6 +40,8 @@
     />
     {#if library.selectedAlbum}
       <AlbumDetail />
+    {:else if prefs.values.library_view === "track_list"}
+      <TrackList />
     {:else}
       <AlbumWall />
     {/if}
