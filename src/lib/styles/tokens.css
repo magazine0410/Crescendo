@@ -1,0 +1,33 @@
+/* Eole dark-mode design tokens, verified against
+   reference/Ottodix-Eole-foobar-theme-ea6744c/themes/eole/js/JStheme_common.js
+   get_colors_global(), dark branch. */
+:root {
+  --bg-main: #1e1e1e;
+  --bg-panel: #1b1b1b;
+  --bg-headerbar: rgba(30, 30, 30, 0.86);
+  --bg-popup: #000000;
+
+  --txt: #f0f0f0;
+  --txt-faded: #6e6e6e;
+  --txt-superfaded: #3c3c3c;
+  --txt-full: #ffffff;
+
+  --accent: #ffaf32;              /* now-playing highlight (orange) */
+  --selection: rgba(15, 177, 255, 0.63);
+  --search-invalid: #ff5050;
+
+  --row-alt: rgba(0, 0, 0, 0.12);
+  --hairline: rgba(255, 255, 255, 0.15);
+  --sidesline: rgba(255, 255, 255, 0.10);
+  --border: rgba(255, 255, 255, 0.20);
+  --popup-border: rgba(255, 255, 255, 0.22);
+  --hover-row: rgba(255, 255, 255, 0.16);
+
+  --scroll-thumb: rgba(255, 255, 255, 0.24);
+  --scroll-thumb-hover: #e1e1e1;
+
+  /* layout */
+  --topbar-h: 42px;
+  --bottombar-h: 76px;
+  --font-base: 12px;
+}

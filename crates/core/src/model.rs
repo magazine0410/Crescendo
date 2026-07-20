@@ -1,0 +1,86 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Track {
+    pub id: i64,
+    pub path: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub albumartist: Option<String>,
+    pub titlesort: Option<String>,
+    pub artistsort: Option<String>,
+    pub albumartistsort: Option<String>,
+    pub genre: Option<String>,
+    pub grouping: Option<String>,
+    pub track_no: Option<i64>,
+    pub disc_no: Option<i64>,
+    pub year: Option<i64>,
+    pub duration_ms: i64,
+    pub format: String,
+    pub album_id: Option<i64>,
+    pub rating: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Album {
+    pub id: i64,
+    pub album: Option<String>,
+    pub albumartist: Option<String>,
+    pub albumartist_sort: Option<String>,
+    pub year: Option<i64>,
+    pub genre: Option<String>,
+    pub track_count: i64,
+    pub total_duration_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryStats {
+    pub tracks: i64,
+    pub albums: i64,
+    pub total_duration_ms: i64,
+    pub formats: std::collections::HashMap<String, i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanProgress {
+    pub scanned: u64,
+    pub added: u64,
+    pub updated: u64,
+    pub removed: u64,
+    pub errors: u64,
+    pub current_path: String,
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowseMode {
+    Genre,
+    Artist,
+    Album,
+    Grouping,
+}
+
+impl BrowseMode {
+    /// Column backing this browse mode on `tracks`.
+    pub fn column(self) -> &'static str {
+        match self {
+            BrowseMode::Genre => "genre",
+            BrowseMode::Artist => "artist",
+            BrowseMode::Album => "album",
+            BrowseMode::Grouping => "grouping",
+        }
+    }
+}
+
+/// What ordered set of tracks playback iterates over. Resolved to concrete
+/// track ids in Rust so the frontend never ships id lists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PlayContext {
+    Album { id: i64 },
+    Playlist { id: i64 },
+    LibraryView { query: Option<String>, sort: Option<String> },
+    ValueTracks { mode: BrowseMode, value: String, query: Option<String> },
+}

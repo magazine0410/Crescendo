@@ -1,0 +1,26 @@
+[package]
+name = "crescendo-core"
+version = "0.1.0"
+edition = "2021"
+description = "Library, scanner, search and metadata core for Crescendo (no UI deps)"
+
+[lib]
+name = "crescendo_core"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled", "functions"] }
+lofty = "0.22"
+walkdir = "2"
+crossbeam-channel = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+ureq = { version = "2", features = ["json"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "gif"] }
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+env_logger = "0.11"

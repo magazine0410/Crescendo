@@ -1,0 +1,18 @@
+.DS_Store
+node_modules
+/build
+/.svelte-kit
+/package
+
+# Rust build artifacts (workspace target/ — ~9 GB, never commit)
+/target
+src-tauri/target
+.env
+.env.*
+!.env.example
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Bundled copy of the Eole foobar theme (no license granted upstream).
+# Kept locally as documentation only — never redistribute.
+/reference/

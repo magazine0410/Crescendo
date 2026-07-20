@@ -1,0 +1,140 @@
+use crate::state::AppState;
+use crescendo_core::model::{Album, BrowseMode, LibraryStats, Track};
+use crescendo_core::scanner::{scan, ScanOptions};
+use crescendo_core::search::SearchFilter;
+use std::sync::atomic::Ordering;
+use tauri::{AppHandle, Emitter, State};
+
+fn filter_for(query: Option<&str>) -> Result<Option<SearchFilter>, String> {
+    match query {
+        Some(q) if !q.trim().is_empty() => {
+            crescendo_core::search::compile(q).map(Some).map_err(|e| e.to_string())
+        }
+        _ => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn scan_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    full: bool,
+) -> Result<(), String> {
+    if state.scanning.swap(true, Ordering::SeqCst) {
+        return Err("a scan is already running".into());
+    }
+    state.scan_cancel.store(false, Ordering::SeqCst);
+
+    let db = state.db.clone();
+    let scanning = state.scanning.clone();
+    let cancel = state.scan_cancel.clone();
+    let root = db
+        .prefs_get("library_path")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "/mnt/Mythic_Meme/Music/".to_string());
+    let threads: usize = db
+        .prefs_get("scan_threads")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4);
+
+    std::thread::Builder::new()
+        .name("scanner".into())
+        .spawn(move || {
+            let opts = ScanOptions { root: root.into(), threads, full };
+            let progress_app = app.clone();
+            let outcome = scan(
+                &db,
+                &opts,
+                &move |p| {
+                    let _ = progress_app.emit("scan:progress", &p);
+                },
+                &cancel,
+            );
+            scanning.store(false, Ordering::SeqCst);
+            match outcome {
+                Ok(p) => {
+                    let _ = app.emit("scan:done", &p);
+                    let _ = app.emit("library:changed", ());
+                }
+                Err(e) => {
+                    log::error!("scan failed: {e}");
+                    let _ = app.emit("scan:error", e.to_string());
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn scan_cancel(state: State<'_, AppState>) -> Result<(), String> {
+    state.scan_cancel.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn library_stats(state: State<'_, AppState>) -> Result<LibraryStats, String> {
+    let stats = state.db.library_stats().map_err(|e| e.to_string())?;
+    log::info!("library_stats served to webview: {} tracks", stats.tracks);
+    Ok(stats)
+}
+
+#[tauri::command]
+pub async fn browse_values(
+    state: State<'_, AppState>,
+    mode: BrowseMode,
+    query: Option<String>,
+) -> Result<Vec<(String, i64, String)>, String> {
+    let filter = filter_for(query.as_deref())?;
+    state.db.browse_values(mode, filter.as_ref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn browse_albums(
+    state: State<'_, AppState>,
+    mode: BrowseMode,
+    value: Option<String>,
+    query: Option<String>,
+) -> Result<Vec<Album>, String> {
+    let filter = filter_for(query.as_deref())?;
+    state
+        .db
+        .browse_albums(mode, value.as_deref(), filter.as_ref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn album_tracks(state: State<'_, AppState>, album_id: i64) -> Result<Vec<Track>, String> {
+    state.db.album_tracks(album_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn track_count(
+    state: State<'_, AppState>,
+    query: Option<String>,
+) -> Result<i64, String> {
+    let filter = filter_for(query.as_deref())?;
+    state.db.track_count(filter.as_ref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn tracks_range(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<Track>, String> {
+    let filter = filter_for(query.as_deref())?;
+    state
+        .db
+        .tracks_range(filter.as_ref(), offset, limit.clamp(1, 2000))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn search_validate(query: String) -> Result<Option<String>, String> {
+    Ok(crescendo_core::search::validate(&query))
+}
