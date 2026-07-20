@@ -8,6 +8,8 @@ Crescendo is a Tauri 2 + Svelte 5 music player for Linux that replicates the foo
 
 The visual source of truth is the original theme in `reference/Ottodix-Eole-foobar-theme-ea6744c/` — colors and layout constants were extracted from `themes/eole/js/JStheme_common.js` into `src/lib/styles/tokens.css`. When adjusting the look, check the reference theme (and its `preview.png`) before inventing values. Priority order for appearance decisions: theme files > user's foobar screenshots > written specs.
 
+**Icons are the exception**: they are inline **Lucide** SVGs (see *Frontend > icons* below), not theme sprites — the Eole PNG glyphs were removed for licensing reasons, so don't reach for `/eole/controls/*.png`. Colors and layout still follow the theme.
+
 ## Commands
 
 ```bash
@@ -46,10 +48,12 @@ Runtime data: DB at `~/.local/share/crescendo/library.db` (SQLite WAL — safe t
 
 **Frontend** (`src/lib/`): Svelte 5 runes stores in `stores/*.svelte.ts`; `api.ts` routes `call()` to real IPC or to `mock.ts` when not in Tauri — keep mock.ts in sync when adding commands so `npm run dev` stays useful. `events.ts` bridges Tauri events into stores. Virtualization is hand-rolled (`virtual/VirtualList.svelte` with prefix-sum offsets for mixed-height rows, `VirtualGrid.svelte` on top of it); mixed-height lists like the grouped playlist view pass an `itemHeight(index)` function. Panel sizes persist via `prefs.setLayout` into the backend `prefs` table (the only settings store — no tauri-plugin-store).
 
+**Icons** (`src/lib/components/common/Icon.svelte` + `src/lib/icons.ts`): UI glyphs are inline **Lucide** SVGs (ISC-licensed), not the old Eole PNG sprites. `icons.ts` is **hand-maintained** (no generator) and holds two maps: `iconMap` (Eole glyph name → icon name, e.g. `"prev" → "skip-back"`) and `lucideIcons` (icon name → inner SVG markup, a 24×24 viewBox with no `<svg>` wrapper). `Icon.svelte` takes an Eole *or* Lucide name and renders it at `stroke-width 1.5` with `stroke="currentColor"`, so **color and hover come from CSS `color`, not opacity** (`SpriteButton` brightens on hover; the shuffle toggle stays full-opacity and signals state by *shape*, while repeat still dims when off). *To add/change an icon*: paste the target Lucide icon's inner paths into `lucideIcons` and point the Eole name at it in `iconMap` — that's it. A few icons are **custom composites** built from Lucide primitives: `rotate-cw-1` (repeat-one = rotate-cw ring + Lucide's repeat-1 "1"), `two-arrows-right` (shuffle-off = arrow-right-left with the bottom arrow mirrored right), and `volume-1..4` — a 4-wave fan (speaker path + N concentric arcs, center x≈10.5, half-angle 37°, radii 4/7/10/13 for 1→4 waves) that **overrides official Lucide `volume-1`/`-2`** so all four levels share geometry. Only two Eole PNGs remain in `static/eole/` — the `no_cover` and `nothing_played` placeholders (kept deliberately); everything else there was deleted.
+
 ## Gotchas
 
 - **Tauri capabilities**: webview-side APIs (dialogs, `window.close()`, …) silently no-op unless allowed in `src-tauri/capabilities/default.json`, and each window label must be listed there. If a frontend API "does nothing", check this file first — it has bitten twice (m3u file picker, cover-window Esc).
 - **NVIDIA blank window**: `WEBKIT_DISABLE_DMABUF_RENDERER=1` is set in `src-tauri/src/main.rs`; removing it makes the window render black on this machine.
 - Tauri command args: snake_case parameter names in Rust, camelCase keys from JS (`album_id` ↔ `albumId`) — Tauri converts automatically.
 - AppImage bundling fails at linuxdeploy's GStreamer step; bundle targets are intentionally restricted to `deb` + `rpm` in `tauri.conf.json`.
-- `reference/` is excluded from Vite's watcher (see `vite.config.js`) and is not part of the build — it is documentation.
+- `reference/` is excluded from Vite's watcher (see `vite.config.js`) and is not part of the build — it is documentation. It is also **gitignored**: the bundled Eole theme carries no license, so never commit or redistribute it. The built `.deb`/`.rpm` still embed the two Eole placeholder PNGs (`no_cover`, `nothing_played`) — swap those before any *public* release.

@@ -1,6 +1,8 @@
-// AUTO-GENERATED — do not hand-edit. Source: replacement.md (Eole -> Lucide).
-// Lucide icons (https://lucide.dev), ISC licensed. Rendered by Icon.svelte at
-// stroke-width 1.5 via currentColor. Regenerate with scratchpad/gen_icons_ts.py.
+// Icon registry for Icon.svelte. Lucide icons (https://lucide.dev), ISC licensed,
+// rendered at stroke-width 1.5 via currentColor. Hand-maintained — see CLAUDE.md
+// (Frontend > icons) for how to add/change an icon and the custom-icon details.
+//   iconMap:     Eole glyph name  -> Lucide (or custom) icon name
+//   lucideIcons: icon name        -> inner SVG markup (24x24 viewBox, no <svg> wrapper)
 
 /** Eole theme glyph name -> Lucide icon name. */
 export const iconMap: Record<string, string> = {
