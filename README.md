@@ -1,7 +1,7 @@
 # Crescendo
 
 A desktop music player for Linux that replicates the look of the [foobar2000
-**Eole** theme](https://github.com/Ottodix/Eole-foobar-theme) (dark mode). 
+**Eole** theme](https://github.com/Ottodix/Eole-foobar-theme) in dark mode. 
 Built with Tauri 2, Svelte 5, and GStreamer. Supports vast libraries; the player is tested with a library containing 100k+ songs.
 
 ## Stack
@@ -14,7 +14,7 @@ Built with Tauri 2, Svelte 5, and GStreamer. Supports vast libraries; the player
 - **Search**: Query syntax compiled to SQL inspired by [Quod Libet](https://github.com/quodlibet/quodlibet)
 - **Art**: no blobs in the DB; `folder.jpg`/embedded art resolved lazily,
   256px thumbnails cached in `~/.cache/crescendo/thumbs/`, served over the
-  `crescendo-art://` protocol
+  `crescendo-art://` protocol, icons provided by [Lucide](https://github.com/lucide-icons/lucide)
 - **Now Playing**: Last.fm artist/album info (API key set in Settings, 30-day
   cache) with local-tag fallback
 
