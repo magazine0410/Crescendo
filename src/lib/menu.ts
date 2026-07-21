@@ -6,9 +6,14 @@ import type { MenuItem } from "./components/common/ContextMenu.svelte";
  * the playlist list in a submenu (so a large library never floods the menu).
  * Falls back to a disabled item when there are no playlists yet. `add` is
  * called with the chosen playlist id.
+ *
+ * `memberOf` (used for single-track menus) marks playlists the track already
+ * belongs to — those entries are disabled and annotated, so you can't add a
+ * duplicate. For multi-track menus leave it unset; the backend dedupes on add.
  */
 export function addToPlaylistItem(
   add: (playlistId: number) => void | Promise<void>,
+  opts: { memberOf?: Set<number> } = {},
 ): MenuItem {
   const list = playlists.list;
   if (list.length === 0) {
@@ -16,9 +21,10 @@ export function addToPlaylistItem(
   }
   return {
     label: "Add to playlist",
-    submenu: list.map((p) => ({
-      label: p.name,
-      action: () => add(p.id),
-    })),
+    submenu: list.map((p) =>
+      opts.memberOf?.has(p.id)
+        ? { label: `${p.name} (already in the playlist)`, disabled: true }
+        : { label: p.name, action: () => add(p.id) },
+    ),
   };
 }

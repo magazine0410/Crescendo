@@ -249,6 +249,30 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       if (i >= 0) playlists.splice(i, 1);
       return undefined as T;
     }
+    case "playlist_add_tracks": {
+      const id = args.id as number;
+      const ids = playlistTracks.get(id) ?? [];
+      const present = new Set(ids);
+      for (const tid of args.trackIds as number[]) {
+        if (!present.has(tid)) {
+          ids.push(tid);
+          present.add(tid);
+        }
+      }
+      playlistTracks.set(id, ids);
+      const p = playlists.find((p) => p.id === id);
+      if (p) {
+        p.track_count = ids.length;
+        p.total_duration_ms = ids.reduce((s, t) => s + (tracks[t - 1]?.duration_ms ?? 0), 0);
+      }
+      return undefined as T;
+    }
+    case "track_playlist_ids": {
+      const tid = args.trackId as number;
+      const out: number[] = [];
+      for (const [pid, ids] of playlistTracks) if (ids.includes(tid)) out.push(pid);
+      return out as T;
+    }
     case "queue_add":
       queue.push(...(args.trackIds as number[]));
       return undefined as T;

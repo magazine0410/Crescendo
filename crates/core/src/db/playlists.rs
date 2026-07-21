@@ -78,6 +78,17 @@ impl Db {
 
     pub fn playlist_add_tracks(&self, id: i64, track_ids: &[i64]) -> Result<()> {
         self.with(|conn| {
+            // Skip tracks already in the playlist so the same song is never
+            // appended twice (deduped against the playlist's current members;
+            // repeats within `track_ids` itself are preserved).
+            let existing: std::collections::HashSet<i64> = {
+                let mut stmt =
+                    conn.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1")?;
+                let set = stmt
+                    .query_map([id], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                set
+            };
             let mut next: i64 = conn.query_row(
                 "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_tracks \
                  WHERE playlist_id = ?1",
@@ -90,11 +101,27 @@ impl Db {
             )?;
             conn.execute_batch("BEGIN")?;
             for tid in track_ids {
+                if existing.contains(tid) {
+                    continue;
+                }
                 insert.execute(rusqlite::params![id, next, tid])?;
                 next += 1;
             }
             conn.execute_batch("COMMIT")?;
             Ok(())
+        })
+    }
+
+    /// Playlist ids that already contain `track_id` (used to grey out
+    /// "Add to playlist" targets a song is already a member of).
+    pub fn playlist_ids_with_track(&self, track_id: i64) -> Result<Vec<i64>> {
+        self.with(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT DISTINCT playlist_id FROM playlist_tracks WHERE track_id = ?1")?;
+            let ids = stmt
+                .query_map([track_id], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<i64>>>()?;
+            Ok(ids)
         })
     }
 

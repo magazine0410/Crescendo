@@ -50,6 +50,14 @@ pub async fn playlist_tracks(state: State<'_, AppState>, id: i64) -> Result<Vec<
 }
 
 #[tauri::command]
+pub async fn track_playlist_ids(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<Vec<i64>, String> {
+    state.db.playlist_ids_with_track(track_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn playlist_add_tracks(
     app: AppHandle,
     state: State<'_, AppState>,

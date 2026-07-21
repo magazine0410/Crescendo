@@ -65,8 +65,13 @@ class LibraryStore {
   trackEpoch = $state(0);
   /** Non-null when album separators are on: the flat row layout over `tracks`. */
   trackModel = $state<RowModel | null>(null);
-  private loadedPages = new Set<number>();
+  private pagePromises = new Map<number, Promise<void>>();
   private trackReqId = 0;
+
+  /** Track-list selection, by (flat) track index. `selectionAnchor` is the
+      base row for Shift-range selects. Reset whenever the view reloads. */
+  selection = $state<Set<number>>(new Set());
+  selectionAnchor = $state<number | null>(null);
 
   scanning = $state(false);
   scanProgress = $state<ScanProgress | null>(null);
@@ -233,9 +238,52 @@ class LibraryStore {
     // returning from an album" bug).
     this.trackModel = model;
     this.trackCount = count;
-    this.loadedPages.clear();
+    this.pagePromises.clear();
     this.tracks = new Array(count);
+    this.clearSelection();
     this.trackEpoch++;
+  }
+
+  // --- Track-list selection ---------------------------------------------
+
+  isSelected(index: number): boolean {
+    return this.selection.has(index);
+  }
+
+  clearSelection() {
+    if (this.selection.size > 0) this.selection = new Set();
+    this.selectionAnchor = null;
+  }
+
+  /** Update the selection for a click on a track row. Plain click selects only
+      that row; Ctrl toggles it; Shift selects the range from the anchor. */
+  selectTrack(index: number, mods: { ctrl?: boolean; shift?: boolean }) {
+    if (mods.shift && this.selectionAnchor != null) {
+      const lo = Math.min(this.selectionAnchor, index);
+      const hi = Math.max(this.selectionAnchor, index);
+      const next = new Set<number>();
+      for (let i = lo; i <= hi; i++) next.add(i);
+      this.selection = next;
+    } else if (mods.ctrl) {
+      const next = new Set(this.selection);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      this.selection = next;
+      this.selectionAnchor = index;
+    } else {
+      this.selection = new Set([index]);
+      this.selectionAnchor = index;
+    }
+  }
+
+  /** The selected tracks (in row order), loading any pages the selection spans
+      that aren't in cache yet — so acting on a Shift-range that reaches past the
+      visible window still yields every track. */
+  async collectSelectedTracks(): Promise<Track[]> {
+    const idx = [...this.selection].sort((a, b) => a - b);
+    if (idx.length === 0) return [];
+    await this.ensureTrackRangeLoaded(idx[0], idx[idx.length - 1]);
+    return idx.map((i) => this.tracks[i]).filter((t): t is Track => t != null);
   }
 
   /** Fetch the pages covering a flat row range (mapped through any separators). */
@@ -250,17 +298,32 @@ class LibraryStore {
     if (a) await this.selectAlbum(a);
   }
 
-  /** Ensure every page covering track indices [first, last] is fetched. */
-  async ensureTrackRange(first: number, last: number) {
+  /** Ensure every page covering track indices [first, last] is fetched
+      (fire-and-forget; used by scrolling). */
+  ensureTrackRange(first: number, last: number) {
+    void this.ensureTrackRangeLoaded(first, last);
+  }
+
+  /** Awaitable variant: resolves once every page covering [first, last] has
+      loaded (or its fetch settled). */
+  async ensureTrackRangeLoaded(first: number, last: number): Promise<void> {
     if (this.trackCount === 0) return;
     const firstPage = Math.max(0, Math.floor(first / TRACK_PAGE));
     const lastPage = Math.floor(Math.min(last, this.trackCount - 1) / TRACK_PAGE);
-    for (let p = firstPage; p <= lastPage; p++) this.loadTrackPage(p);
+    const pending: Promise<void>[] = [];
+    for (let p = firstPage; p <= lastPage; p++) pending.push(this.loadTrackPage(p));
+    await Promise.all(pending);
   }
 
-  private async loadTrackPage(page: number) {
-    if (this.loadedPages.has(page)) return;
-    this.loadedPages.add(page);
+  private loadTrackPage(page: number): Promise<void> {
+    const inflight = this.pagePromises.get(page);
+    if (inflight) return inflight;
+    const p = this.fetchTrackPage(page);
+    this.pagePromises.set(page, p);
+    return p;
+  }
+
+  private async fetchTrackPage(page: number): Promise<void> {
     const reqId = this.trackReqId;
     const offset = page * TRACK_PAGE;
     let rows: Track[];
@@ -274,7 +337,7 @@ class LibraryStore {
         limit: TRACK_PAGE,
       });
     } catch (e) {
-      this.loadedPages.delete(page); // let a later pass retry
+      this.pagePromises.delete(page); // let a later pass retry
       console.debug("tracks_range failed:", e);
       return;
     }

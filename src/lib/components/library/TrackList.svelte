@@ -5,7 +5,7 @@
   import { playlists } from "$lib/stores/playlists.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import type { PlayContext, Track } from "$lib/api";
+  import { call, type PlayContext } from "$lib/api";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem } from "$lib/menu";
@@ -48,18 +48,46 @@
     player.playContext(ctx, trackIndex);
   }
 
-  function trackMenu(e: MouseEvent, t: Track) {
-    const items: MenuItem[] = [
-      { label: "Add to queue", action: () => queue.add([t.id]) },
-    ];
-    if (t.album_id != null) {
-      const albumId = t.album_id;
-      items.push({ label: "Open album", action: () => library.openAlbumById(albumId) });
+  function onRowClick(e: MouseEvent, trackIndex: number) {
+    library.selectTrack(trackIndex, {
+      ctrl: e.ctrlKey || e.metaKey,
+      shift: e.shiftKey,
+    });
+  }
+
+  async function trackMenu(e: MouseEvent, trackIndex: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Right-clicking a row outside the current selection selects just that row.
+    if (!library.isSelected(trackIndex)) library.selectTrack(trackIndex, {});
+
+    const sel = await library.collectSelectedTracks();
+    if (sel.length === 0) return;
+    const ids = sel.map((t) => t.id);
+
+    // "Open album" only when the whole selection shares one album.
+    const albumId = sel[0].album_id;
+    const sameAlbum = albumId != null && sel.every((t) => t.album_id === albumId);
+
+    // For a single track, grey out playlists it already belongs to.
+    let memberOf: Set<number> | undefined;
+    if (ids.length === 1) {
+      memberOf = new Set(await call<number[]>("track_playlist_ids", { trackId: ids[0] }));
     }
-    items.push(
+
+    const items: MenuItem[] = [
+      {
+        label: ids.length > 1 ? `Add ${ids.length} tracks to queue` : "Add to queue",
+        action: () => queue.add(ids),
+      },
+      {
+        label: "Open album",
+        disabled: !sameAlbum,
+        action: sameAlbum ? () => library.openAlbumById(albumId) : undefined,
+      },
       { separator: true, label: "" },
-      addToPlaylistItem((pid) => playlists.addTracks(pid, [t.id])),
-    );
+      addToPlaylistItem((pid) => playlists.addTracks(pid, ids), { memberOf }),
+    ];
     openContextMenu(e, items);
   }
 </script>
@@ -95,9 +123,11 @@
       <button
         class="trow"
         class:alt
+        class:selected={library.isSelected(cell.trackIndex)}
         class:playing={player.track?.id === t.id}
+        onclick={(e) => onRowClick(e, cell.trackIndex)}
         ondblclick={() => playAt(cell.trackIndex)}
-        oncontextmenu={(e) => trackMenu(e, t)}
+        oncontextmenu={(e) => trackMenu(e, cell.trackIndex)}
       >
         <span class="no">{t.track_no ?? cell.trackIndex + 1}</span>
         <span class="ttitle">{displayTitle(t)}</span>
@@ -210,12 +240,17 @@
     padding: 0 16px 0 12px;
     color: var(--txt);
     text-align: left;
+    user-select: none;
   }
   .trow.alt {
     background: var(--row-alt);
   }
   .trow:hover:not(.placeholder) {
     background: var(--hover-row);
+  }
+  .trow.selected,
+  .trow.selected:hover {
+    background: var(--selection);
   }
   .trow.playing {
     color: var(--accent);
