@@ -187,7 +187,6 @@ class LibraryStore {
       the mounted view re-fetches its visible range. */
   async reloadTrackView(withGroups: boolean) {
     const reqId = ++this.trackReqId;
-    this.loadedPages.clear();
     let count: number;
     try {
       count = await call<number>("track_count", {
@@ -216,8 +215,14 @@ class LibraryStore {
         // fall back to a flat list rather than leaving the view empty
       }
     }
+    // Reset the page cache and the sparse array together, so an in-flight
+    // loadTrackPage from the async window above can't leave a page marked
+    // "loaded" against the array we're about to replace (which would blank
+    // that page until a scroll re-triggered it — the "empty top after
+    // returning from an album" bug).
     this.trackModel = model;
     this.trackCount = count;
+    this.loadedPages.clear();
     this.tracks = new Array(count);
     this.trackEpoch++;
   }

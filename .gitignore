@@ -16,3 +16,7 @@ vite.config.ts.timestamp-*
 # Bundled copy of the Eole foobar theme (no license granted upstream).
 # Kept locally as documentation only — never redistribute.
 /reference/
+
+# Local release notes scratchpad — source for GitHub Release descriptions,
+# not part of the tracked codebase.
+/CHANGELOG.md
