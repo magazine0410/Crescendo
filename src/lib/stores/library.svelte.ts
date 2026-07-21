@@ -7,6 +7,7 @@ import {
   type Track,
   type TrackGroup,
 } from "../api";
+import { prefs } from "./prefs.svelte";
 
 /** Rows fetched per windowed page in the Track-list view. */
 const TRACK_PAGE = 200;
@@ -71,6 +72,12 @@ class LibraryStore {
   scanProgress = $state<ScanProgress | null>(null);
   scanError = $state<string | null>(null);
 
+  /** Whether the GROUPING view is collapsed to primary themes right now.
+      Only grouping mode collapses; other modes always match exactly. */
+  get groupingCollapse(): boolean {
+    return this.mode === "grouping" && !prefs.values.grouping_split_multi;
+  }
+
   async init() {
     await this.refresh();
   }
@@ -113,6 +120,7 @@ class LibraryStore {
       this.values = await call<[string, number, string][]>("browse_values", {
         mode: this.mode,
         query: this.query,
+        collapse: this.groupingCollapse,
       });
     } catch (e) {
       // invalid search query mid-typing — keep the previous list
@@ -133,6 +141,7 @@ class LibraryStore {
         mode: this.mode,
         value: this.selectedValue,
         query: this.query,
+        collapse: this.groupingCollapse,
       });
     } catch (e) {
       console.debug("browse_albums failed:", e);
@@ -193,6 +202,7 @@ class LibraryStore {
         query: this.query,
         mode: this.mode,
         value: this.selectedValue,
+        collapse: this.groupingCollapse,
       });
     } catch (e) {
       console.debug("track_count failed:", e);
@@ -207,6 +217,7 @@ class LibraryStore {
           query: this.query,
           mode: this.mode,
           value: this.selectedValue,
+          collapse: this.groupingCollapse,
         });
         if (reqId !== this.trackReqId) return;
         model = buildRowModel(groups);
@@ -258,6 +269,7 @@ class LibraryStore {
         query: this.query,
         mode: this.mode,
         value: this.selectedValue,
+        collapse: this.groupingCollapse,
         offset,
         limit: TRACK_PAGE,
       });

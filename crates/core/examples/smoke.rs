@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
 
     for mode in [BrowseMode::Genre, BrowseMode::Artist] {
         let t = Instant::now();
-        let values = db.browse_values(mode, None)?;
+        let values = db.browse_values(mode, None, false)?;
         eprintln!("browse {:?}: {} values in {:.1?} (first 5: {:?})",
             mode, values.len(), t.elapsed(),
             values.iter().take(5).collect::<Vec<_>>());
@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
         let t = Instant::now();
         match crescendo_core::search::compile(q) {
             Ok(filter) => {
-                let n = db.track_count(Some(&filter), BrowseMode::Artist, None)?;
+                let n = db.track_count(Some(&filter), BrowseMode::Artist, None, false)?;
                 eprintln!("search {q:40} -> {n} tracks in {:.1?}", t.elapsed());
             }
             Err(e) => eprintln!("search {q:40} -> PARSE ERROR: {e}"),
@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Art resolution for the first few albums
-    let albums = db.browse_albums(BrowseMode::Album, None, None)?;
+    let albums = db.browse_albums(BrowseMode::Album, None, None, false)?;
     let cache_dir = db_path.parent().unwrap().join("art-cache");
     let store = ArtStore::new(&cache_dir)?;
     let mut ok = 0;

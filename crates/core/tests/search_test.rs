@@ -54,7 +54,7 @@ fn test_db() -> (tempfile::TempDir, Db) {
 
 fn count(db: &Db, q: &str) -> i64 {
     let filter = search::compile(q).unwrap();
-    db.track_count(Some(&filter), crescendo_core::model::BrowseMode::Artist, None).unwrap()
+    db.track_count(Some(&filter), crescendo_core::model::BrowseMode::Artist, None, false).unwrap()
 }
 
 #[test]

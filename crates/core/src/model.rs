@@ -95,5 +95,13 @@ pub enum PlayContext {
     Album { id: i64 },
     Playlist { id: i64 },
     LibraryView { query: Option<String>, sort: Option<String> },
-    ValueTracks { mode: BrowseMode, value: String, query: Option<String> },
+    ValueTracks {
+        mode: BrowseMode,
+        value: String,
+        query: Option<String>,
+        /// Collapse multi-theme grouping tags under their primary theme (only
+        /// meaningful when `mode == Grouping`).
+        #[serde(default)]
+        collapse: bool,
+    },
 }

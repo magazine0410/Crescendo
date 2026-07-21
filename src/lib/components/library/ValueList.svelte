@@ -17,7 +17,13 @@
 
   async function playValue(value: string) {
     await player.playContext(
-      { type: "value_tracks", mode: library.mode, value, query: library.query },
+      {
+        type: "value_tracks",
+        mode: library.mode,
+        value,
+        query: library.query,
+        collapse: library.groupingCollapse,
+      },
       0,
     );
   }
@@ -35,6 +41,7 @@
       mode: library.mode,
       value,
       query: library.query,
+      collapse: library.groupingCollapse,
     });
     const lists = await Promise.all(
       albums.map((a) => call<Track[]>("album_tracks", { albumId: a.id })),

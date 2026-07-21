@@ -23,6 +23,19 @@ const ARTISTS: [string, string | null][] = [
 const ALBUM_COUNT = 400;
 const TRACKS_PER_ALBUM = 12;
 
+// Grouping tags with semicolon-joined multi-theme variants, so the GROUPING
+// "collapse multi-tagged" toggle has something to fold: the three `"Old Adam"
+// Bar…` strings collapse to one umbrella, the two `Native Faith…` to another.
+const GROUPINGS: (string | null)[] = [
+  null,
+  '"Old Adam" Bar',
+  '"Old Adam" Bar; A Drunkard\'s Lemuria',
+  '"Old Adam" Bar; Hangover of Bedfellows Dreaming Differently',
+  "Native Faith",
+  "Native Faith; Faith is for the Transient People",
+  "U.N. Owen Was Her?",
+];
+
 let built = false;
 const tracks: Track[] = [];
 const albums: Album[] = [];
@@ -58,7 +71,7 @@ function build() {
         artistsort,
         albumartistsort: artistsort,
         genre,
-        grouping: a % 7 === 0 ? "Favorites" : null,
+        grouping: GROUPINGS[(a * 3 + t) % GROUPINGS.length],
         track_no: t + 1,
         disc_no: 1,
         year,
@@ -100,11 +113,27 @@ function browseCol(t: Track, mode: string): string {
   return v ?? "";
 }
 
+/** Primary theme of a grouping tag: text before the first ';' (trimmed). */
+function firstSeg(v: string): string {
+  const i = v.indexOf(";");
+  return (i >= 0 ? v.slice(0, i) : v).trim();
+}
+
+/** The value a track buckets under, collapsing grouping to its primary theme
+    when `collapse` is set (mirrors the backend's GROUPING_FIRST_SEG). */
+function browseKey(t: Track, mode: string, collapse: boolean): string {
+  const v = browseCol(t, mode);
+  return mode === "grouping" && collapse ? firstSeg(v) : v;
+}
+
 /** Track-list filter: search query AND optional left-panel mode=value. */
 function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
   if (!matches(t, args.query as string | null | undefined)) return false;
   const value = args.value as string | null | undefined;
-  return value == null || browseCol(t, args.mode as string) === value;
+  return (
+    value == null ||
+    browseKey(t, args.mode as string, args.collapse as boolean) === value
+  );
 }
 
 /** Mirror the backend LIBRARY_SORT so the dev track list groups by album. */
@@ -132,11 +161,12 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       } as T;
     case "browse_values": {
       const mode = args.mode as string;
+      const collapse = args.collapse as boolean;
       const counts = new Map<string, number>();
       const sorts = new Map<string, string>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
-        const v = browseCol(t, mode);
+        const v = browseKey(t, mode, collapse);
         counts.set(v, (counts.get(v) ?? 0) + 1);
         if (mode === "artist" && t.artistsort) sorts.set(v, t.artistsort);
       }
@@ -147,10 +177,11 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "browse_albums": {
       const mode = args.mode as string;
       const value = args.value as string | null;
+      const collapse = args.collapse as boolean;
       const ids = new Set<number>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
-        if (value != null && browseCol(t, mode) !== value) continue;
+        if (value != null && browseKey(t, mode, collapse) !== value) continue;
         if (t.album_id != null) ids.add(t.album_id);
       }
       return albums.filter((a) => ids.has(a.id)) as T;

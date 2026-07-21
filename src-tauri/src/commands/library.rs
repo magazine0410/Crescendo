@@ -87,9 +87,10 @@ pub async fn browse_values(
     state: State<'_, AppState>,
     mode: BrowseMode,
     query: Option<String>,
+    collapse: bool,
 ) -> Result<Vec<(String, i64, String)>, String> {
     let filter = filter_for(query.as_deref())?;
-    state.db.browse_values(mode, filter.as_ref()).map_err(|e| e.to_string())
+    state.db.browse_values(mode, filter.as_ref(), collapse).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -98,11 +99,12 @@ pub async fn browse_albums(
     mode: BrowseMode,
     value: Option<String>,
     query: Option<String>,
+    collapse: bool,
 ) -> Result<Vec<Album>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .browse_albums(mode, value.as_deref(), filter.as_ref())
+        .browse_albums(mode, value.as_deref(), filter.as_ref(), collapse)
         .map_err(|e| e.to_string())
 }
 
@@ -117,11 +119,12 @@ pub async fn track_count(
     query: Option<String>,
     mode: BrowseMode,
     value: Option<String>,
+    collapse: bool,
 ) -> Result<i64, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .track_count(filter.as_ref(), mode, value.as_deref())
+        .track_count(filter.as_ref(), mode, value.as_deref(), collapse)
         .map_err(|e| e.to_string())
 }
 
@@ -131,13 +134,14 @@ pub async fn tracks_range(
     query: Option<String>,
     mode: BrowseMode,
     value: Option<String>,
+    collapse: bool,
     offset: i64,
     limit: i64,
 ) -> Result<Vec<Track>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .tracks_range(filter.as_ref(), mode, value.as_deref(), offset, limit.clamp(1, 2000))
+        .tracks_range(filter.as_ref(), mode, value.as_deref(), collapse, offset, limit.clamp(1, 2000))
         .map_err(|e| e.to_string())
 }
 
@@ -147,11 +151,12 @@ pub async fn track_groups(
     query: Option<String>,
     mode: BrowseMode,
     value: Option<String>,
+    collapse: bool,
 ) -> Result<Vec<TrackGroup>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .track_groups(filter.as_ref(), mode, value.as_deref())
+        .track_groups(filter.as_ref(), mode, value.as_deref(), collapse)
         .map_err(|e| e.to_string())
 }
 

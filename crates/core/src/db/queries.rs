@@ -12,6 +12,16 @@ pub const TRACK_COLS: &str = "id, path, title, artist, album, albumartist, title
 pub const LIBRARY_SORT: &str = "albumartist COLLATE NOCASE, year, album COLLATE NOCASE, \
                                 disc_no, track_no, path";
 
+/// SQL for the "primary theme" of a grouping tag: the text before the first
+/// ';' (trimmed). Used to collapse multi-theme grouping tags (Touhou remixes
+/// tagged `A; B; C`) under one umbrella. `;` is ASCII so INSTR/SUBSTR stay
+/// Unicode-safe on the CJK-heavy library; NULL/empty grouping folds to '' (the
+/// "?" bucket the UI already renders).
+const GROUPING_FIRST_SEG: &str =
+    "TRIM(CASE WHEN INSTR(COALESCE(grouping, ''), ';') > 0 \
+              THEN SUBSTR(COALESCE(grouping, ''), 1, INSTR(COALESCE(grouping, ''), ';') - 1) \
+              ELSE COALESCE(grouping, '') END)";
+
 pub fn track_from_row(r: &Row) -> rusqlite::Result<Track> {
     Ok(Track {
         id: r.get(0)?,
@@ -59,9 +69,23 @@ fn track_where(filter: Option<&SearchFilter>) -> (String, Vec<Value>) {
 /// Append a `<mode column> = value` equality to a `track_where` fragment, in place.
 /// NULLs collate to "" (so selecting the "?" group matches untagged tracks) — this
 /// is the single source of the left-panel value filter shared by browse_albums,
-/// track_count/tracks_range, and the ValueTracks play context.
-fn push_value_clause(where_sql: &mut String, params: &mut Vec<Value>, mode: BrowseMode, value: &str) {
-    *where_sql = format!("{where_sql} AND COALESCE({}, '') = ?{}", mode.column(), params.len() + 1);
+/// track_count/tracks_range, and the ValueTracks play context. When `collapse` is
+/// set for grouping mode, the value is matched against the primary theme
+/// (`GROUPING_FIRST_SEG`) instead of the whole tag, so an umbrella row selects
+/// every track whose first theme equals `value`.
+fn push_value_clause(
+    where_sql: &mut String,
+    params: &mut Vec<Value>,
+    mode: BrowseMode,
+    value: &str,
+    collapse: bool,
+) {
+    let lhs = if collapse && matches!(mode, BrowseMode::Grouping) {
+        GROUPING_FIRST_SEG.to_string()
+    } else {
+        format!("COALESCE({}, '')", mode.column())
+    };
+    *where_sql = format!("{where_sql} AND {lhs} = ?{}", params.len() + 1);
     params.push(Value::from(value.to_string()));
 }
 
@@ -95,6 +119,7 @@ impl Db {
         &self,
         mode: BrowseMode,
         filter: Option<&SearchFilter>,
+        collapse: bool,
     ) -> Result<Vec<(String, i64, String)>> {
         let col = mode.column();
         let (where_sql, params) = track_where(filter);
@@ -104,6 +129,11 @@ impl Db {
                  FROM tracks WHERE {where_sql} GROUP BY COALESCE({col}, '') \
                  ORDER BY COALESCE(NULLIF(COALESCE(MAX(artistsort), ''), ''), \
                                    COALESCE({col}, '')) COLLATE NOCASE"
+            ),
+            // Collapse multi-theme grouping tags under their primary theme.
+            BrowseMode::Grouping if collapse => format!(
+                "SELECT {GROUPING_FIRST_SEG}, COUNT(*), '' FROM tracks WHERE {where_sql} \
+                 GROUP BY {GROUPING_FIRST_SEG} ORDER BY 1 COLLATE NOCASE"
             ),
             _ => format!(
                 "SELECT COALESCE({col}, ''), COUNT(*), '' FROM tracks WHERE {where_sql} \
@@ -125,10 +155,11 @@ impl Db {
         mode: BrowseMode,
         value: Option<&str>,
         filter: Option<&SearchFilter>,
+        collapse: bool,
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v);
+            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
         }
         self.with(|conn| {
             let sql = format!(
@@ -185,10 +216,11 @@ impl Db {
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
         value: Option<&str>,
+        collapse: bool,
     ) -> Result<i64> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v);
+            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
         }
         self.with(|conn| {
             Ok(conn.query_row(
@@ -207,12 +239,13 @@ impl Db {
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
         value: Option<&str>,
+        collapse: bool,
         offset: i64,
         limit: i64,
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v);
+            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
         }
         self.with(|conn| {
             let sql = format!(
@@ -238,10 +271,11 @@ impl Db {
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
         value: Option<&str>,
+        collapse: bool,
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v);
+            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
         }
         self.with(|conn| {
             let sql = format!(
@@ -319,10 +353,10 @@ impl Db {
                     )
                 })
             }
-            PlayContext::ValueTracks { mode, value, query } => {
+            PlayContext::ValueTracks { mode, value, query, collapse } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                push_value_clause(&mut where_sql, &mut params, *mode, value);
+                push_value_clause(&mut where_sql, &mut params, *mode, value, *collapse);
                 self.with(|conn| {
                     collect_ids(
                         conn,

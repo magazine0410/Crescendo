@@ -1,5 +1,7 @@
 <script lang="ts">
   import { library } from "$lib/stores/library.svelte";
+  import { prefs } from "$lib/stores/prefs.svelte";
+  import { openContextMenu } from "../common/ContextMenu.svelte";
   import type { BrowseMode } from "$lib/api";
 
   const modes: { id: BrowseMode; label: string }[] = [
@@ -8,6 +10,25 @@
     { id: "album", label: "ALBUM" },
     { id: "grouping", label: "GROUPING" },
   ];
+
+  /** Right-click the GROUPING tab: toggle collapsing multi-theme grouping tags
+      under their primary theme. Other tabs have no menu. */
+  function tabMenu(e: MouseEvent, id: BrowseMode) {
+    if (id !== "grouping") return;
+    openContextMenu(e, [
+      {
+        label: "Show multi-tagged titles separately",
+        checked: prefs.values.grouping_split_multi,
+        action: async () => {
+          await prefs.set("grouping_split_multi", !prefs.values.grouping_split_multi);
+          // Umbrella values change meaning between modes; drop any selection
+          // (this re-runs the track view) and rebuild the value list.
+          library.selectValue(null);
+          await library.loadValues();
+        },
+      },
+    ]);
+  }
 </script>
 
 <div class="modes">
@@ -16,6 +37,7 @@
       class="mode"
       class:active={library.mode === m.id}
       onclick={() => library.setMode(m.id)}
+      oncontextmenu={(e) => tabMenu(e, m.id)}
     >
       {m.label}
     </button>

@@ -125,7 +125,14 @@ export type PlayContext =
   | { type: "album"; id: number }
   | { type: "playlist"; id: number }
   | { type: "library_view"; query: string | null; sort: string | null }
-  | { type: "value_tracks"; mode: BrowseMode; value: string; query: string | null };
+  | {
+      type: "value_tracks";
+      mode: BrowseMode;
+      value: string;
+      query: string | null;
+      /** Collapse multi-theme grouping tags under their primary theme. */
+      collapse: boolean;
+    };
 
 export function artUrl(
   kind: "album" | "track",

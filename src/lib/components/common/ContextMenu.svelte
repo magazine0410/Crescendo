@@ -4,6 +4,8 @@
     action?: () => void;
     separator?: boolean;
     disabled?: boolean;
+    /** When set, renders a checkbox-style item (leading ✓ when true). */
+    checked?: boolean;
   }
 
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -44,6 +46,9 @@
         <div class="sep"></div>
       {:else}
         <button class="item" class:disabled={item.disabled} onclick={() => pick(item)}>
+          {#if item.checked !== undefined}
+            <span class="check">{item.checked ? "✓" : ""}</span>
+          {/if}
           {item.label}
         </button>
       {/if}
@@ -74,6 +79,12 @@
   .item.disabled {
     color: var(--txt-faded);
     cursor: default;
+  }
+  .check {
+    display: inline-block;
+    width: 1em;
+    margin-right: 2px;
+    text-align: center;
   }
   .sep {
     height: 1px;

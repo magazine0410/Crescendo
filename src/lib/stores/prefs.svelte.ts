@@ -10,6 +10,9 @@ export interface Prefs {
   show_waveform: boolean;
   library_view: "album_wall" | "track_list";
   track_separators: boolean;
+  /** GROUPING filter: show each full (semicolon-joined) tag as its own row
+      instead of collapsing multi-theme tags under their primary theme. */
+  grouping_split_multi: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -21,6 +24,7 @@ const DEFAULTS: Prefs = {
   show_waveform: false,
   library_view: "album_wall",
   track_separators: false,
+  grouping_split_multi: false,
 };
 
 class PrefsStore {
@@ -43,6 +47,8 @@ class PrefsStore {
     if (raw.library_view === "track_list" || raw.library_view === "album_wall")
       v.library_view = raw.library_view;
     if (raw.track_separators) v.track_separators = raw.track_separators === "true";
+    if (raw.grouping_split_multi)
+      v.grouping_split_multi = raw.grouping_split_multi === "true";
     this.values = v;
     this.loaded = true;
   }

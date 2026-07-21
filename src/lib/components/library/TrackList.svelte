@@ -41,6 +41,7 @@
             mode: library.mode,
             value: library.selectedValue,
             query: library.query,
+            collapse: library.groupingCollapse,
           }
         : { type: "library_view", query: library.query, sort: null };
     player.playContext(ctx, trackIndex);
