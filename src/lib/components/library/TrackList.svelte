@@ -5,9 +5,10 @@
   import { playlists } from "$lib/stores/playlists.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import type { PlayContext } from "$lib/api";
+  import type { PlayContext, Track } from "$lib/api";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName } from "$lib/format";
-  import { openContextMenu } from "../common/ContextMenu.svelte";
+  import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
+  import { addToPlaylistItem } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
 
   const ROW_H = 26;
@@ -47,14 +48,19 @@
     player.playContext(ctx, trackIndex);
   }
 
-  function trackMenu(e: MouseEvent, trackId: number) {
-    openContextMenu(e, [
-      { label: "Add to queue", action: () => queue.add([trackId]) },
-      ...playlists.list.map((p) => ({
-        label: `Add to playlist: ${p.name}`,
-        action: () => playlists.addTracks(p.id, [trackId]),
-      })),
-    ]);
+  function trackMenu(e: MouseEvent, t: Track) {
+    const items: MenuItem[] = [
+      { label: "Add to queue", action: () => queue.add([t.id]) },
+    ];
+    if (t.album_id != null) {
+      const albumId = t.album_id;
+      items.push({ label: "Open album", action: () => library.openAlbumById(albumId) });
+    }
+    items.push(
+      { separator: true, label: "" },
+      addToPlaylistItem((pid) => playlists.addTracks(pid, [t.id])),
+    );
+    openContextMenu(e, items);
   }
 </script>
 
@@ -91,7 +97,7 @@
         class:alt
         class:playing={player.track?.id === t.id}
         ondblclick={() => playAt(cell.trackIndex)}
-        oncontextmenu={(e) => trackMenu(e, t.id)}
+        oncontextmenu={(e) => trackMenu(e, t)}
       >
         <span class="no">{t.track_no ?? cell.trackIndex + 1}</span>
         <span class="ttitle">{displayTitle(t)}</span>

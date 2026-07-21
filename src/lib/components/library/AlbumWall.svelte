@@ -6,6 +6,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, call, type Album, type Track } from "$lib/api";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
+  import { addToPlaylistItem } from "$lib/menu";
   import VirtualGrid from "$lib/virtual/VirtualGrid.svelte";
   import { displayName } from "$lib/format";
 
@@ -28,13 +29,10 @@
         },
       },
       { separator: true, label: "" },
-      ...playlists.list.map((p) => ({
-        label: `Add to playlist: ${p.name}`,
-        action: async () => {
-          const tracks = await call<Track[]>("album_tracks", { albumId: a.id });
-          await playlists.addTracks(p.id, tracks.map((t) => t.id));
-        },
-      })),
+      addToPlaylistItem(async (pid) => {
+        const tracks = await call<Track[]>("album_tracks", { albumId: a.id });
+        await playlists.addTracks(pid, tracks.map((t) => t.id));
+      }),
     ];
     openContextMenu(e, items);
   }

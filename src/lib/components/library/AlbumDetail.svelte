@@ -8,6 +8,7 @@
   import { prefs } from "$lib/stores/prefs.svelte";
   import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
+  import { addToPlaylistItem } from "$lib/menu";
 
   const album = $derived(library.selectedAlbum);
 
@@ -18,10 +19,7 @@
   function trackMenu(e: MouseEvent, trackId: number) {
     openContextMenu(e, [
       { label: "Add to queue", action: () => queue.add([trackId]) },
-      ...playlists.list.map((p) => ({
-        label: `Add to playlist: ${p.name}`,
-        action: () => playlists.addTracks(p.id, [trackId]),
-      })),
+      addToPlaylistItem((pid) => playlists.addTracks(pid, [trackId])),
     ]);
   }
 </script>
