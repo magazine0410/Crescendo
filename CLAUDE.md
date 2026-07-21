@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Crescendo is a Tauri 2 + Svelte 5 music player for Linux that replicates the foobar2000 **Eole** theme (dark mode). It is built for a ~136k-track, FLAC-heavy library on an HDD — every design decision below follows from "never make the UI wait on 136k rows".
 
-The visual source of truth is the original theme in `reference/Ottodix-Eole-foobar-theme-ea6744c/` — colors and layout constants were extracted from `themes/eole/js/JStheme_common.js` into `src/lib/styles/tokens.css`. When adjusting the look, check the reference theme (and its `preview.png`) before inventing values. Priority order for appearance decisions: theme files > user's foobar screenshots > written specs.
+The visual source of truth is the original theme in `reference/Ottodix-Eole-foobar-theme-ea6744c/` — colors and layout constants were extracted from `themes/eole/js/JStheme_common.js` into `src/lib/styles/tokens.css`. When adjusting the look, check the reference theme (and its `preview.png`) before inventing values. Priority order for appearance decisions: theme files > user's screenshots > written specs.
 
 **Icons are the exception**: they are inline **Lucide** SVGs (see *Frontend > icons* below), not theme sprites — the Eole PNG glyphs were removed for licensing reasons, so don't reach for `/eole/controls/*.png`. Colors and layout still follow the theme.
 
@@ -57,3 +57,4 @@ Runtime data: DB at `~/.local/share/crescendo/library.db` (SQLite WAL — safe t
 - Tauri command args: snake_case parameter names in Rust, camelCase keys from JS (`album_id` ↔ `albumId`) — Tauri converts automatically.
 - AppImage bundling fails at linuxdeploy's GStreamer step; bundle targets are intentionally restricted to `deb` + `rpm` in `tauri.conf.json`.
 - `reference/` is excluded from Vite's watcher (see `vite.config.js`) and is not part of the build — it is documentation. It is also **gitignored**: the bundled Eole theme carries no license, so never commit or redistribute it. The built `.deb`/`.rpm` still embed the two Eole placeholder PNGs (`no_cover`, `nothing_played`) — swap those before any *public* release.
+- `CHANGELOG.md` is **intentionally gitignored** (local-only, never committed): it tracks changes between releases, grouped under version headers. When you land a user-facing change, add a concise bullet under `## Unreleased` in the same style as the existing entries. The `## Unreleased` section becomes the GitHub release description text for the next version bump — write bullets accordingly.
