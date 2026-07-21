@@ -3,6 +3,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import ModeSelector from "./ModeSelector.svelte";
+  import ValueFilter from "./ValueFilter.svelte";
   import ValueList from "./ValueList.svelte";
   import AlbumWall from "./AlbumWall.svelte";
   import AlbumDetail from "./AlbumDetail.svelte";
@@ -29,6 +30,7 @@
   <div class="cols">
     <div class="left" style:width={`${ui.libraryValueListW}px`}>
       <ModeSelector />
+      <ValueFilter />
       <ValueList />
     </div>
     <Splitter

@@ -49,6 +49,9 @@ class LibraryStore {
   mode = $state<BrowseMode>("artist");
   /** [value, track count, sort/display value ("" when none)] */
   values = $state<[string, number, string][]>([]);
+  /** Plain-text narrowing of the left-panel value list (not a search query).
+      Matches the raw value or its sort/romaji, case-insensitively. */
+  valueFilter = $state("");
   selectedValue = $state<string | null>(null);
   albums = $state<Album[]>([]);
   selectedAlbum = $state<Album | null>(null);
@@ -83,6 +86,15 @@ class LibraryStore {
     return this.mode === "grouping" && !prefs.values.grouping_split_multi;
   }
 
+  /** `values` narrowed by `valueFilter` (memoized). Empty filter -> all values. */
+  filteredValues = $derived.by(() => {
+    const f = this.valueFilter.trim().toLowerCase();
+    if (!f) return this.values;
+    return this.values.filter(
+      ([v, , sort]) => v.toLowerCase().includes(f) || sort.toLowerCase().includes(f),
+    );
+  });
+
   async init() {
     await this.refresh();
   }
@@ -99,6 +111,7 @@ class LibraryStore {
     this.selectedValue = null;
     this.selectedAlbum = null;
     this.albumTracks = [];
+    this.valueFilter = "";
     await this.loadValues();
     await this.loadAlbums();
   }

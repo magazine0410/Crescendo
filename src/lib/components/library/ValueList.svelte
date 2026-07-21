@@ -8,8 +8,8 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { displayName } from "$lib/format";
 
-  // row 0 = "All", rows 1.. = values
-  const count = $derived(library.values.length + 1);
+  // row 0 = "All", rows 1.. = values (narrowed by the filter bar)
+  const count = $derived(library.filteredValues.length + 1);
 
   function label(v: string): string {
     return v === "" ? "?" : v;
@@ -74,7 +74,7 @@
         : library.mode === "album" ? "albums" : "groups"})</span>
     </button>
   {:else}
-    {@const [value, n, sort] = library.values[i - 1]}
+    {@const [value, n, sort] = library.filteredValues[i - 1]}
     <button
       class="row"
       class:selected={library.selectedValue === value}
