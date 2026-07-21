@@ -160,11 +160,37 @@ fn names_of(v: &Value) -> Vec<String> {
     }
 }
 
-/// Last.fm bios end with a boilerplate "<a href=...>Read more on Last.fm</a>";
-/// drop tags and that trailer for plain-text display.
+/// Last.fm bios end with a boilerplate trailer, e.g.
+/// `<a href=...>Read more on Last.fm</a>. User-contributed text is available
+/// under the Creative Commons By-SA License; additional terms may apply.`
+/// Drop tags and everything from that trailer on for plain-text display.
 fn strip_lastfm_link(s: String) -> String {
     let no_tags = regex::Regex::new("<[^>]+>")
         .map(|re| re.replace_all(&s, "").to_string())
         .unwrap_or(s);
-    no_tags.trim().trim_end_matches("Read more on Last.fm").trim().to_string()
+    let trimmed = match no_tags.find("Read more on Last.fm") {
+        Some(idx) => &no_tags[..idx],
+        None => &no_tags,
+    };
+    trimmed.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_lastfm_link;
+
+    #[test]
+    fn strips_link_and_cc_trailer() {
+        let raw = "A great band. <a href=\"https://www.last.fm/music/Band\">\
+            Read more on Last.fm</a>. User-contributed text is available under \
+            the Creative Commons By-SA License; additional terms may apply."
+            .to_string();
+        assert_eq!(strip_lastfm_link(raw), "A great band.");
+    }
+
+    #[test]
+    fn leaves_plain_bio_untouched() {
+        let raw = "Just a description with no trailer.".to_string();
+        assert_eq!(strip_lastfm_link(raw.clone()), raw);
+    }
 }
