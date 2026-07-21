@@ -94,6 +94,7 @@ export interface PlayerState {
   repeat: RepeatMode;
   volume: number;
   muted: boolean;
+  stop_after_current: boolean;
 }
 
 export interface ArtistInfo {

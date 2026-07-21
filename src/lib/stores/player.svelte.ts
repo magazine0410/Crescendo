@@ -10,6 +10,7 @@ class PlayerStore {
   muted = $state(false);
   shuffle = $state(false);
   repeat = $state<RepeatMode>("off");
+  stopAfterCurrent = $state(false);
   contextIndex = $state<number | null>(null);
   contextLen = $state(0);
   /** true while the user drags the seek handle (position events pause) */
@@ -20,6 +21,7 @@ class PlayerStore {
     this.track = s.track;
     this.shuffle = s.shuffle;
     this.repeat = s.repeat;
+    this.stopAfterCurrent = s.stop_after_current;
     this.volume = s.volume;
     this.muted = s.muted;
     this.contextIndex = s.context_index;
@@ -104,6 +106,11 @@ class PlayerStore {
     const order: RepeatMode[] = ["off", "all", "one"];
     this.repeat = order[(order.indexOf(this.repeat) + 1) % 3];
     if (isTauri) await call("player_cycle_repeat");
+  }
+
+  async toggleStopAfterCurrent() {
+    this.stopAfterCurrent = !this.stopAfterCurrent;
+    if (isTauri) await call("player_set_stop_after_current", { on: this.stopAfterCurrent });
   }
 }
 

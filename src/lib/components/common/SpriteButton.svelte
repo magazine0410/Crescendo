@@ -8,12 +8,25 @@
     size?: number;
     title?: string;
     disabled?: boolean;
+    /** Small badge drawn over the bottom-right corner, e.g. a state indicator. */
+    overlay?: string;
     onclick?: (e: MouseEvent) => void;
     onwheel?: (e: WheelEvent) => void;
+    oncontextmenu?: (e: MouseEvent) => void;
   }
-  let { icon, size = 30, title = "", disabled = false, onclick, onwheel }: Props = $props();
+  let {
+    icon,
+    size = 30,
+    title = "",
+    disabled = false,
+    overlay,
+    onclick,
+    onwheel,
+    oncontextmenu,
+  }: Props = $props();
 
   const glyph = $derived(Math.round(size * 0.72));
+  const badge = $derived(Math.round(size * 0.44));
 </script>
 
 <button
@@ -26,12 +39,17 @@
   {disabled}
   {onclick}
   {onwheel}
+  {oncontextmenu}
 >
   <Icon name={icon} size={glyph} />
+  {#if overlay}
+    <span class="overlay"><Icon name={overlay} size={badge} /></span>
+  {/if}
 </button>
 
 <style>
   .sprite {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -50,5 +68,20 @@
   .sprite.disabled {
     opacity: 0.35;
     cursor: default;
+  }
+  /* Corner state badge: accent-colored, ringed by the bar bg so it reads
+     clearly over the glyph behind it. */
+  .overlay {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: var(--accent);
+    background: var(--bg-headerbar);
+    box-shadow: 0 0 0 1.5px var(--bg-headerbar);
+    pointer-events: none;
   }
 </style>

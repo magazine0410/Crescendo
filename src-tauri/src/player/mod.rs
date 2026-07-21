@@ -8,6 +8,7 @@ use crescendo_core::model::{PlayContext, Track};
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use gstreamer::prelude::*;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,6 +27,7 @@ pub enum Cmd {
     SetMuted(bool),
     SetShuffle(bool),
     CycleRepeat,
+    SetStopAfterCurrent(bool),
     QueueAdd(Vec<i64>),
     QueueRemove(Vec<usize>),
     QueueClear,
@@ -49,6 +51,8 @@ pub struct PlayerState {
     pub repeat: RepeatMode,
     pub volume: f64,
     pub muted: bool,
+    /// One-shot: stop playback when the current track finishes, then reset.
+    pub stop_after_current: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,6 +92,7 @@ pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
         repeat: RepeatMode::Off,
         volume: 0.8,
         muted: false,
+        stop_after_current: false,
     }));
     let queue_shared = Arc::new(Mutex::new(Vec::new()));
 
@@ -116,6 +121,10 @@ struct Engine {
     current_duration_ms: u64,
     /// Set inside about-to-finish; consumed on the next stream-start.
     gapless_pending: Arc<Mutex<bool>>,
+    /// One-shot "stop after this song": suppresses the gapless handoff so EOS
+    /// fires, then the EOS handler stops and clears it. Shared with the
+    /// about-to-finish callback (streaming thread), hence atomic.
+    stop_after_current: Arc<AtomicBool>,
 }
 
 fn run_player(
@@ -128,6 +137,7 @@ fn run_player(
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
     let queue = Arc::new(Mutex::new(PlayQueue::default()));
     let gapless_pending = Arc::new(Mutex::new(false));
+    let stop_after_current = Arc::new(AtomicBool::new(false));
 
     // Gapless: when the current track is about to end, hand playbin the next
     // uri synchronously from the streaming thread.
@@ -135,7 +145,13 @@ fn run_player(
         let queue = queue.clone();
         let db = db.clone();
         let gapless_pending = gapless_pending.clone();
+        let stop_after_current = stop_after_current.clone();
         playbin.connect("about-to-finish", false, move |values| {
+            // "Stop after current": skip the handoff so the stream ends and
+            // EOS fires; the EOS handler does the actual stop.
+            if stop_after_current.load(Ordering::SeqCst) {
+                return None;
+            }
             let playbin = values[0].get::<gstreamer::Element>().ok()?;
             let next_id = queue.lock().ok()?.advance()?;
             let track = db.track_by_id(next_id).ok().flatten()?;
@@ -161,6 +177,7 @@ fn run_player(
         status: Status::Stopped,
         current_duration_ms: 0,
         gapless_pending,
+        stop_after_current,
     };
     engine.apply_volume();
 
@@ -278,6 +295,10 @@ impl Engine {
                 self.queue.lock().expect("queue poisoned").cycle_repeat();
                 self.publish_state();
             }
+            Cmd::SetStopAfterCurrent(on) => {
+                self.stop_after_current.store(on, Ordering::SeqCst);
+                self.publish_state();
+            }
             Cmd::QueueAdd(ids) => {
                 self.queue.lock().expect("queue poisoned").queue_add(&ids);
                 self.sync_queue_shared();
@@ -297,6 +318,13 @@ impl Engine {
         use gstreamer::MessageView;
         match msg.view() {
             MessageView::Eos(_) => {
+                // "Stop after current" armed: consume the one-shot flag and
+                // stop instead of advancing. publish_state() (via stop) then
+                // reports the flag cleared.
+                if self.stop_after_current.swap(false, Ordering::SeqCst) {
+                    self.stop();
+                    return;
+                }
                 // Normal end without gapless handoff (e.g. repeat-off at the
                 // end of the context).
                 let id = self.queue.lock().expect("queue poisoned").advance();
@@ -411,6 +439,7 @@ impl Engine {
             repeat: q.repeat,
             volume: self.volume,
             muted: self.muted,
+            stop_after_current: self.stop_after_current.load(Ordering::SeqCst),
             track,
         };
         drop(q);

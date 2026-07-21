@@ -75,6 +75,15 @@ pub async fn player_cycle_repeat(state: State<'_, AppState>) -> Result<(), Strin
 }
 
 #[tauri::command]
+pub async fn player_set_stop_after_current(
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<(), String> {
+    state.player.send(Cmd::SetStopAfterCurrent(on));
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn player_get_state(state: State<'_, AppState>) -> Result<PlayerState, String> {
     Ok(state.player.state())
 }
