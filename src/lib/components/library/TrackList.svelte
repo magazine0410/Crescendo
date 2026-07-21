@@ -6,7 +6,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import type { PlayContext } from "$lib/api";
-  import { formatTime, formatTitle, displayTitle, displayArtist, displayName } from "$lib/format";
+  import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
 
@@ -95,8 +95,12 @@
       >
         <span class="no">{t.track_no ?? cell.trackIndex + 1}</span>
         <span class="ttitle">{displayTitle(t)}</span>
-        {#if t.artist && t.artist !== (t.albumartist ?? t.artist)}
-          <span class="tartist">- {displayArtist(t)}</span>
+        {#if prefs.values.track_separators}
+          {#if t.artist && t.artist !== (t.albumartist ?? t.artist)}
+            <span class="tartist">- {displayArtist(t)}</span>
+          {/if}
+        {:else if t.albumartist ?? t.artist}
+          <span class="tartist">- {displayAlbumartist(t)}</span>
         {/if}
         <span class="tdetail" title={detail}>{detail}</span>
         <span class="dur">{formatTime(t.duration_ms)}</span>
