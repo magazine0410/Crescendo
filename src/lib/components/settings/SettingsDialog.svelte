@@ -210,8 +210,8 @@
       </section>
 
       <section>
-        <h3>Last.fm</h3>
-        <label for="lfmkey">API key (get one at last.fm/api)</label>
+        <h3>Now playing</h3>
+        <label for="lfmkey">Last.fm API key (get one at last.fm/api)</label>
         <div class="pathrow">
           <input
             id="lfmkey"
