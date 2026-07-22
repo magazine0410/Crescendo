@@ -107,6 +107,9 @@ function matches(t: Track, query: string | null | undefined): boolean {
   );
 }
 
+/** Wire form of BrowseMode (see api.ts): a fixed mode name, or the custom tag. */
+type WireMode = string | { custom: string };
+
 function browseCol(t: Track, mode: string): string {
   const v =
     mode === "genre" ? t.genre
@@ -116,15 +119,44 @@ function browseCol(t: Track, mode: string): string {
   return v ?? "";
 }
 
+/** Map a resolved custom tag to a Track field getter, mirroring the backend's
+    browse_column whitelist over the mock's available columns. null = unbrowsable
+    (→ empty value list). Integer columns stringify like the backend's TEXT cast. */
+function customField(tag: string): ((t: Track) => string) | null {
+  switch (tag.trim().toLowerCase()) {
+    case "year":
+    case "date": return (t) => (t.year != null ? String(t.year) : "");
+    case "genre": return (t) => t.genre ?? "";
+    case "artist": return (t) => t.artist ?? "";
+    case "album": return (t) => t.album ?? "";
+    case "albumartist": return (t) => t.albumartist ?? "";
+    case "grouping": return (t) => t.grouping ?? "";
+    case "title": return (t) => t.title ?? "";
+    case "format":
+    case "codec": return (t) => t.format ?? "";
+    case "track":
+    case "tracknumber": return (t) => (t.track_no != null ? String(t.track_no) : "");
+    case "disc":
+    case "discnumber": return (t) => (t.disc_no != null ? String(t.disc_no) : "");
+    case "rating": return (t) => (t.rating != null ? String(t.rating) : "");
+    default: return null;
+  }
+}
+
 /** Primary theme of a grouping tag: text before the first ';' (trimmed). */
 function firstSeg(v: string): string {
   const i = v.indexOf(";");
   return (i >= 0 ? v.slice(0, i) : v).trim();
 }
 
-/** The value a track buckets under, collapsing grouping to its primary theme
-    when `collapse` is set (mirrors the backend's GROUPING_FIRST_SEG). */
-function browseKey(t: Track, mode: string, collapse: boolean): string {
+/** The value a track buckets under. Collapses grouping to its primary theme when
+    `collapse` is set (mirrors GROUPING_FIRST_SEG); routes custom modes through
+    the resolved tag (unbrowsable tag → "", never selected in practice). */
+function browseKey(t: Track, mode: WireMode, collapse: boolean): string {
+  if (typeof mode === "object") {
+    const f = customField(mode.custom);
+    return f ? f(t) : "";
+  }
   const v = browseCol(t, mode);
   return mode === "grouping" && collapse ? firstSeg(v) : v;
 }
@@ -135,7 +167,7 @@ function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
   const value = args.value as string | null | undefined;
   return (
     value == null ||
-    browseKey(t, args.mode as string, args.collapse as boolean) === value
+    browseKey(t, args.mode as WireMode, args.collapse as boolean) === value
   );
 }
 
@@ -163,8 +195,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         formats: { FLAC: tracks.length },
       } as T;
     case "browse_values": {
-      const mode = args.mode as string;
+      const mode = args.mode as WireMode;
       const collapse = args.collapse as boolean;
+      // Unresolvable custom tag → empty list (mirrors the backend).
+      if (typeof mode === "object" && customField(mode.custom) === null) return [] as T;
       const counts = new Map<string, number>();
       const sorts = new Map<string, string>();
       for (const t of tracks) {
@@ -178,7 +212,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         .sort((a, b) => (a[2] || a[0]).localeCompare(b[2] || b[0])) as T;
     }
     case "browse_albums": {
-      const mode = args.mode as string;
+      const mode = args.mode as WireMode;
       const value = args.value as string | null;
       const collapse = args.collapse as boolean;
       const ids = new Set<number>();

@@ -6,11 +6,31 @@ import {
   type ScanProgress,
   type Track,
   type TrackGroup,
+  type WireBrowseMode,
 } from "../api";
 import { prefs } from "./prefs.svelte";
 
 /** Rows fetched per windowed page in the Track-list view. */
 const TRACK_PAGE = 200;
+
+/** Parse the raw "custom" filter text into a single tag name, or null when it
+    isn't exactly one tag. Accepts one `%tag%` token (matching the app's display
+    placeholders) or a single bare word; anything with zero or several `%…%`
+    tokens, or extra literal text, is rejected so the value list shows nothing. */
+export function parseCustomTag(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const tokens = s.match(/%[^%]+%/g);
+  if (tokens) {
+    // Exactly one %…% token and no surrounding literal text.
+    if (tokens.length === 1 && s === tokens[0]) {
+      return s.slice(1, -1).trim().toLowerCase() || null;
+    }
+    return null;
+  }
+  // No %…% at all: accept a single bare word (e.g. `year`).
+  return /^\w+$/.test(s) ? s.toLowerCase() : null;
+}
 
 /** A visible row in the Track-list view: an album separator or a track. */
 export type TrackRow = { sep: TrackGroup; albumId: number | null } | { trackIndex: number };
@@ -92,6 +112,36 @@ class LibraryStore {
     return this.mode === "grouping" && !prefs.values.grouping_split_multi;
   }
 
+  /** Raw text of the custom filter (persisted centrally in prefs). */
+  get customTag(): string {
+    return prefs.values.custom_browse_tag;
+  }
+
+  /** The custom filter's single resolved tag name, or null when the text isn't
+      exactly one tag. Drives the tab label and whether the value list loads. */
+  customTagName = $derived.by(() => parseCustomTag(prefs.values.custom_browse_tag));
+
+  /** The active mode marshalled for the backend: `custom` becomes
+      `{ custom: "<tag>" }`, every other mode stays a plain string. Passed to all
+      value/album/track queries so the custom tab filters like the built-in ones. */
+  get wireMode(): WireBrowseMode {
+    if (this.mode === "custom") return { custom: this.customTagName ?? "" };
+    return this.mode;
+  }
+
+  /** Set (and persist) the custom filter text, switch to the custom tab, and
+      reload it — configuring the filter implies you want to use it. */
+  async setCustomTag(raw: string) {
+    await prefs.set("custom_browse_tag", raw);
+    this.mode = "custom";
+    this.selectedValue = null;
+    this.selectedAlbum = null;
+    this.albumTracks = [];
+    this.resetScroll();
+    await this.loadValues();
+    await this.loadAlbums();
+  }
+
   /** `values` narrowed by `valueFilter` (memoized). Empty filter -> all values. */
   filteredValues = $derived.by(() => {
     const f = this.valueFilter.trim().toLowerCase();
@@ -148,9 +198,14 @@ class LibraryStore {
   }
 
   async loadValues() {
+    // Custom tab with no single valid tag set → empty value list ("show nothing").
+    if (this.mode === "custom" && this.customTagName === null) {
+      this.values = [];
+      return;
+    }
     try {
       this.values = await call<[string, number, string][]>("browse_values", {
-        mode: this.mode,
+        mode: this.wireMode,
         query: this.query,
         collapse: this.groupingCollapse,
       });
@@ -171,7 +226,7 @@ class LibraryStore {
   async loadAlbums() {
     try {
       this.albums = await call<Album[]>("browse_albums", {
-        mode: this.mode,
+        mode: this.wireMode,
         value: this.selectedValue,
         query: this.query,
         collapse: this.groupingCollapse,
@@ -240,7 +295,7 @@ class LibraryStore {
     try {
       count = await call<number>("track_count", {
         query: this.query,
-        mode: this.mode,
+        mode: this.wireMode,
         value: this.selectedValue,
         collapse: this.groupingCollapse,
       });
@@ -255,7 +310,7 @@ class LibraryStore {
       try {
         const groups = await call<TrackGroup[]>("track_groups", {
           query: this.query,
-          mode: this.mode,
+          mode: this.wireMode,
           value: this.selectedValue,
           collapse: this.groupingCollapse,
         });
@@ -365,7 +420,7 @@ class LibraryStore {
     try {
       rows = await call<Track[]>("tracks_range", {
         query: this.query,
-        mode: this.mode,
+        mode: this.wireMode,
         value: this.selectedValue,
         collapse: this.groupingCollapse,
         offset,

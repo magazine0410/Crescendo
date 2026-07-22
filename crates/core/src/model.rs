@@ -68,23 +68,31 @@ pub struct ScanProgress {
     pub done: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BrowseMode {
     Genre,
     Artist,
     Album,
     Grouping,
+    /// User-defined left-panel filter: browse a single tag the user typed
+    /// (e.g. `year`). Serializes as `{"custom": "year"}`. Only tags that map to
+    /// a real, stored column are browsable — anything else resolves to `None`
+    /// below and the value list comes back empty.
+    Custom(String),
 }
 
 impl BrowseMode {
-    /// Column backing this browse mode on `tracks`.
-    pub fn column(self) -> &'static str {
+    /// Column backing this browse mode on `tracks`, or `None` when a custom tag
+    /// does not resolve to a real, browsable column (→ empty value list). The
+    /// returned name is always a hardcoded literal, never the raw user input.
+    pub fn column(&self) -> Option<&'static str> {
         match self {
-            BrowseMode::Genre => "genre",
-            BrowseMode::Artist => "artist",
-            BrowseMode::Album => "album",
-            BrowseMode::Grouping => "grouping",
+            BrowseMode::Genre => Some("genre"),
+            BrowseMode::Artist => Some("artist"),
+            BrowseMode::Album => Some("album"),
+            BrowseMode::Grouping => Some("grouping"),
+            BrowseMode::Custom(tag) => crate::search::browse_column(tag),
         }
     }
 }

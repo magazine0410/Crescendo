@@ -10,6 +10,7 @@
   import NowPlayingTab from "$lib/components/nowplaying/NowPlayingTab.svelte";
   import ContextMenu from "$lib/components/common/ContextMenu.svelte";
   import SettingsDialog from "$lib/components/settings/SettingsDialog.svelte";
+  import SetFilterDialog from "$lib/components/library/SetFilterDialog.svelte";
   import SearchHelp from "$lib/components/SearchHelp.svelte";
 
   let settingsOpen = $state(false);
@@ -76,6 +77,7 @@
   <BottomBar />
   <ContextMenu />
   <SettingsDialog open={settingsOpen} onclose={() => (settingsOpen = false)} />
+  <SetFilterDialog />
   <SearchHelp open={ui.searchHelpOpen} onclose={() => (ui.searchHelpOpen = false)} />
 </div>
 

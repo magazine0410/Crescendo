@@ -19,7 +19,7 @@
     await player.playContext(
       {
         type: "value_tracks",
-        mode: library.mode,
+        mode: library.wireMode,
         value,
         query: library.query,
         collapse: library.groupingCollapse,
@@ -38,7 +38,7 @@
     // value's track list in one range call is not filtered by value, so go
     // through albums for now (values rarely exceed a few hundred albums).
     const albums = await call<{ id: number }[]>("browse_albums", {
-      mode: library.mode,
+      mode: library.wireMode,
       value,
       query: library.query,
       collapse: library.groupingCollapse,
@@ -71,7 +71,8 @@
       <span class="name">All ({library.values.length}
         {library.mode === "genre" ? "genres"
         : library.mode === "artist" ? "artists"
-        : library.mode === "album" ? "albums" : "groups"})</span>
+        : library.mode === "album" ? "albums"
+        : library.mode === "grouping" ? "groups" : "values"})</span>
     </button>
   {:else}
     {@const [value, n, sort] = library.filteredValues[i - 1]}

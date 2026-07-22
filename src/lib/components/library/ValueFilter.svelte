@@ -5,7 +5,8 @@
   const noun = $derived(
     library.mode === "genre" ? "genres"
     : library.mode === "artist" ? "artists"
-    : library.mode === "album" ? "albums" : "groups",
+    : library.mode === "album" ? "albums"
+    : library.mode === "grouping" ? "groups" : "values",
   );
 </script>
 

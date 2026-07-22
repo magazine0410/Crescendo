@@ -21,6 +21,29 @@ fn str_col(tag: &str) -> Option<&'static str> {
     })
 }
 
+/// Resolve a user-typed tag to a real, browsable `tracks` column for the custom
+/// left-panel filter. Reuses the search string-tag vocabulary, plus the numeric
+/// tags that are backed by a plain column (excluding computed exprs like
+/// `length`). The result is always a hardcoded column literal — never the raw
+/// input — so it is safe to interpolate into SQL. `None` = unbrowsable tag,
+/// which the caller turns into an empty value list.
+pub(crate) fn browse_column(tag: &str) -> Option<&'static str> {
+    let t = tag.trim().to_lowercase();
+    if let Some(c) = str_col(&t) {
+        return Some(c);
+    }
+    Some(match t.as_str() {
+        "track" | "tracknumber" => "track_no",
+        "disc" | "discnumber" => "disc_no",
+        "year" | "date" => "year",
+        "rating" => "rating",
+        "bitrate" => "bitrate",
+        "samplerate" => "sample_rate",
+        "bitdepth" => "bit_depth",
+        _ => return None,
+    })
+}
+
 /// Numeric-tag -> SQL expression yielding a number.
 fn num_expr(tag: &str) -> Option<&'static str> {
     Some(match tag {

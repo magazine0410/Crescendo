@@ -16,6 +16,9 @@ export interface Prefs {
   /** GROUPING filter: show each full (semicolon-joined) tag as its own row
       instead of collapsing multi-theme tags under their primary theme. */
   grouping_split_multi: boolean;
+  /** Raw text of the user-defined "custom" left-panel filter, e.g. `%year%`.
+      Parsed to a single tag in LibraryStore; blank = unset (tab reads "CUSTOM"). */
+  custom_browse_tag: string;
 }
 
 const DEFAULTS: Prefs = {
@@ -29,6 +32,7 @@ const DEFAULTS: Prefs = {
   library_view: "album_wall",
   track_separators: false,
   grouping_split_multi: false,
+  custom_browse_tag: "",
 };
 
 class PrefsStore {
@@ -54,6 +58,7 @@ class PrefsStore {
     if (raw.track_separators) v.track_separators = raw.track_separators === "true";
     if (raw.grouping_split_multi)
       v.grouping_split_multi = raw.grouping_split_multi === "true";
+    if (raw.custom_browse_tag) v.custom_browse_tag = raw.custom_browse_tag;
     this.values = v;
     this.loaded = true;
   }

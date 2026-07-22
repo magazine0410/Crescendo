@@ -12,6 +12,8 @@
 mod parser;
 mod sql;
 
+pub(crate) use sql::browse_column;
+
 use rusqlite::types::Value;
 
 #[derive(Debug, Clone, PartialEq)]

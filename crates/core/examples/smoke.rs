@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
 
     for mode in [BrowseMode::Genre, BrowseMode::Artist] {
         let t = Instant::now();
-        let values = db.browse_values(mode, None, false)?;
+        let values = db.browse_values(mode.clone(), None, false)?;
         eprintln!("browse {:?}: {} values in {:.1?} (first 5: {:?})",
             mode, values.len(), t.elapsed(),
             values.iter().take(5).collect::<Vec<_>>());

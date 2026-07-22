@@ -120,7 +120,21 @@ export interface AlbumInfo {
   url: string | null;
 }
 
-export type BrowseMode = "genre" | "artist" | "album" | "grouping";
+/** The left-panel filter category. `custom` is a user-defined single-tag filter
+    (see LibraryStore.customTag); it is the only mode that carries extra data. */
+export type BrowseMode = "genre" | "artist" | "album" | "grouping" | "custom";
+
+/** Wire form of the backend `BrowseMode` enum. The four fixed modes serialize as
+    their lowercase name; `custom` serializes as `{ custom: "year" }` (serde
+    externally-tagged newtype variant). Never send the bare string "custom" — the
+    Rust enum has no such unit variant and deserialization would fail. Build this
+    with `library.wireMode`. */
+export type WireBrowseMode =
+  | "genre"
+  | "artist"
+  | "album"
+  | "grouping"
+  | { custom: string };
 
 /** Context descriptor: what ordered set of tracks playback walks through. */
 export type PlayContext =
@@ -129,7 +143,7 @@ export type PlayContext =
   | { type: "library_view"; query: string | null; sort: string | null }
   | {
       type: "value_tracks";
-      mode: BrowseMode;
+      mode: WireBrowseMode;
       value: string;
       query: string | null;
       /** Collapse multi-theme grouping tags under their primary theme. */

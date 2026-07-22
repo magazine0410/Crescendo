@@ -78,17 +78,30 @@ fn track_where(filter: Option<&SearchFilter>) -> (String, Vec<Value>) {
 fn push_value_clause(
     where_sql: &mut String,
     params: &mut Vec<Value>,
-    mode: BrowseMode,
+    mode: &BrowseMode,
     value: &str,
     collapse: bool,
 ) {
     let lhs = if collapse && matches!(mode, BrowseMode::Grouping) {
-        GROUPING_FIRST_SEG.to_string()
+        Some(GROUPING_FIRST_SEG.to_string())
     } else {
-        format!("COALESCE({}, '')", mode.column())
+        mode.column().map(col_expr)
     };
-    *where_sql = format!("{where_sql} AND {lhs} = ?{}", params.len() + 1);
-    params.push(Value::from(value.to_string()));
+    match lhs {
+        Some(lhs) => {
+            *where_sql = format!("{where_sql} AND {lhs} = ?{}", params.len() + 1);
+            params.push(Value::from(value.to_string()));
+        }
+        // Custom tag that resolves to no real column: select nothing.
+        None => where_sql.push_str(" AND 0"),
+    }
+}
+
+/// GROUP BY / equality expression for a value-filterable column: coalesce NULL
+/// to '' and force TEXT, so integer columns (year, rating, …) round-trip through
+/// the string-based value list and still compare equal to the selected value.
+fn col_expr(col: &str) -> String {
+    format!("CAST(COALESCE({col}, '') AS TEXT)")
 }
 
 impl Db {
@@ -123,9 +136,14 @@ impl Db {
         filter: Option<&SearchFilter>,
         collapse: bool,
     ) -> Result<Vec<(String, i64, String)>> {
-        let col = mode.column();
+        // Unresolvable custom tag (unknown / not a stored column) → empty list.
+        let col = match mode.column() {
+            Some(c) => c,
+            None => return Ok(vec![]),
+        };
         let (where_sql, params) = track_where(filter);
-        let sql = match mode {
+        let val = col_expr(col);
+        let sql = match &mode {
             BrowseMode::Artist => format!(
                 "SELECT COALESCE({col}, ''), COUNT(*), COALESCE(MAX(artistsort), '') \
                  FROM tracks WHERE {where_sql} GROUP BY COALESCE({col}, '') \
@@ -137,9 +155,11 @@ impl Db {
                 "SELECT {GROUPING_FIRST_SEG}, COUNT(*), '' FROM tracks WHERE {where_sql} \
                  GROUP BY {GROUPING_FIRST_SEG} ORDER BY 1 COLLATE NOCASE"
             ),
+            // Genre / Album / non-collapsed Grouping / Custom. TEXT-cast so
+            // integer columns (year, rating, …) come back as strings.
             _ => format!(
-                "SELECT COALESCE({col}, ''), COUNT(*), '' FROM tracks WHERE {where_sql} \
-                 GROUP BY COALESCE({col}, '') ORDER BY 1 COLLATE NOCASE"
+                "SELECT {val}, COUNT(*), '' FROM tracks WHERE {where_sql} \
+                 GROUP BY {val} ORDER BY 1 COLLATE NOCASE"
             ),
         };
         self.with(|conn| {
@@ -161,7 +181,7 @@ impl Db {
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
+            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
         }
         self.with(|conn| {
             let sql = format!(
@@ -236,7 +256,7 @@ impl Db {
     ) -> Result<i64> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
+            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
         }
         self.with(|conn| {
             Ok(conn.query_row(
@@ -261,7 +281,7 @@ impl Db {
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
+            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
         }
         self.with(|conn| {
             let sql = format!(
@@ -291,7 +311,7 @@ impl Db {
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
         if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, mode, v, collapse);
+            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
         }
         self.with(|conn| {
             let sql = format!(
@@ -372,7 +392,7 @@ impl Db {
             PlayContext::ValueTracks { mode, value, query, collapse } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                push_value_clause(&mut where_sql, &mut params, *mode, value, *collapse);
+                push_value_clause(&mut where_sql, &mut params, mode, value, *collapse);
                 self.with(|conn| {
                     collect_ids(
                         conn,

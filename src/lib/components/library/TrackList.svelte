@@ -42,7 +42,7 @@
       library.selectedValue != null
         ? {
             type: "value_tracks",
-            mode: library.mode,
+            mode: library.wireMode,
             value: library.selectedValue,
             query: library.query,
             collapse: library.groupingCollapse,
