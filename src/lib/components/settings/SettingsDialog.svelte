@@ -272,7 +272,7 @@
     border-bottom: 1px solid var(--sidesline);
   }
   h3 {
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--txt-faded);
@@ -282,7 +282,7 @@
     display: block;
     color: var(--txt-faded);
     margin-bottom: 4px;
-    font-size: 11px;
+    font-size: 12px;
   }
   input {
     width: 100%;
@@ -369,9 +369,10 @@
     margin-bottom: 8px;
   }
   .hint {
-    color: var(--txt-superfaded);
+    color: var(--txt-faded);
     font-size: 11px;
     line-height: 1.5;
+    margin-bottom: 14px;
   }
   .ok {
     color: #5fbf5f;
