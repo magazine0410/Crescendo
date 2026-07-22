@@ -342,6 +342,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "lastfm_artist_info":
     case "lastfm_album_info":
       return null as T;
+    case "autostart_get":
+      return false as T;
+    case "autostart_set":
+      return undefined as T;
     case "scan_start":
     case "scan_cancel":
     case "player_play_context":

@@ -17,6 +17,7 @@
 
   onMount(async () => {
     await prefs.load();
+    ui.activeTab = prefs.values.default_tab;
     const layout = await prefs.getLayout();
     if (layout.bottombarH) ui.bottombarH = layout.bottombarH;
     if (layout.playlistSidebarW) ui.playlistSidebarW = layout.playlistSidebarW;

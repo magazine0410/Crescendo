@@ -11,6 +11,25 @@
   let { open, onclose }: Props = $props();
 
   let keyTest = $state<"idle" | "testing" | "ok" | "bad">("idle");
+  let autostart = $state(false);
+
+  // Reflect the actual on-disk autostart state whenever the dialog opens.
+  $effect(() => {
+    if (open) {
+      call<boolean>("autostart_get")
+        .then((v) => (autostart = v))
+        .catch(() => {});
+    }
+  });
+
+  async function toggleAutostart(enabled: boolean) {
+    autostart = enabled;
+    try {
+      await call("autostart_set", { enabled });
+    } catch {
+      autostart = !enabled; // revert on failure
+    }
+  }
 
   async function browseLibrary() {
     if (!isTauri) return;
@@ -45,6 +64,30 @@
         <span>Settings</span>
         <button class="x" onclick={onclose}>✕</button>
       </header>
+
+      <section>
+        <h3>General</h3>
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={autostart}
+            onchange={(e) => toggleAutostart(e.currentTarget.checked)}
+          />
+          Start when computer starts
+        </label>
+
+        <label for="deftab">Default tab</label>
+        <select
+          id="deftab"
+          value={prefs.values.default_tab}
+          onchange={(e) =>
+            prefs.set("default_tab", e.currentTarget.value as "library" | "playlists")}
+        >
+          <option value="library">Library</option>
+          <option value="playlists">Playlists</option>
+        </select>
+        <p class="hint">Which tab opens when Crescendo starts.</p>
+      </section>
 
       <section>
         <h3>Library</h3>

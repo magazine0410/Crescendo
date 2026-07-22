@@ -78,6 +78,68 @@ pub async fn lastfm_test_key(api_key: String) -> Result<bool, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Path to the freedesktop autostart entry that launches Crescendo on login.
+#[cfg(target_os = "linux")]
+fn autostart_desktop_path() -> Result<std::path::PathBuf, String> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs_home().map(|h| h.join(".config")))
+        .ok_or_else(|| "no config directory".to_string())?;
+    Ok(base.join("autostart").join("crescendo.desktop"))
+}
+
+#[cfg(target_os = "linux")]
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+/// Whether Crescendo is set to launch when the user logs in.
+#[tauri::command]
+pub async fn autostart_get() -> Result<bool, String> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(autostart_desktop_path()?.exists())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(false)
+    }
+}
+
+/// Enable or disable launching Crescendo on login by writing/removing a
+/// freedesktop autostart `.desktop` entry pointing at the current executable.
+#[tauri::command]
+pub async fn autostart_set(enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let path = autostart_desktop_path()?;
+        if enabled {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let exe = exe.to_string_lossy();
+            let entry = format!(
+                "[Desktop Entry]\n\
+                 Type=Application\n\
+                 Name=Crescendo\n\
+                 Exec=\"{exe}\"\n\
+                 Terminal=false\n\
+                 X-GNOME-Autostart-enabled=true\n"
+            );
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&path, entry).map_err(|e| e.to_string())?;
+        } else if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = enabled;
+        Ok(())
+    }
+}
+
 /// Open (or focus) the standalone cover-art window.
 #[tauri::command]
 pub async fn open_cover_window(

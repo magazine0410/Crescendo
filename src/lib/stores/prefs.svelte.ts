@@ -12,6 +12,8 @@ export interface Prefs {
   scan_threads: number;
   show_waveform: boolean;
   library_view: "album_wall" | "track_list";
+  /** Which tab opens on launch. */
+  default_tab: "library" | "playlists";
   track_separators: boolean;
   /** GROUPING filter: show each full (semicolon-joined) tag as its own row
       instead of collapsing multi-theme tags under their primary theme. */
@@ -30,6 +32,7 @@ const DEFAULTS: Prefs = {
   scan_threads: 4,
   show_waveform: false,
   library_view: "album_wall",
+  default_tab: "playlists",
   track_separators: false,
   grouping_split_multi: false,
   custom_browse_tag: "",
@@ -55,6 +58,8 @@ class PrefsStore {
     if (raw.show_waveform) v.show_waveform = raw.show_waveform === "true";
     if (raw.library_view === "track_list" || raw.library_view === "album_wall")
       v.library_view = raw.library_view;
+    if (raw.default_tab === "library" || raw.default_tab === "playlists")
+      v.default_tab = raw.default_tab;
     if (raw.track_separators) v.track_separators = raw.track_separators === "true";
     if (raw.grouping_split_multi)
       v.grouping_split_multi = raw.grouping_split_multi === "true";
