@@ -101,6 +101,21 @@
           />
           <button class="btn" onclick={browseLibrary}>Browse…</button>
         </div>
+
+        {#if library.scanning}
+          {@const scanned = library.scanProgress?.scanned ?? 0}
+          {@const total = library.stats?.tracks ?? 0}
+          {@const pct = total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : null}
+          <div class="scanprogress">
+            <div class="track" class:indeterminate={pct === null}>
+              <div class="fill" style:width={pct !== null ? `${pct}%` : undefined}></div>
+            </div>
+            <div class="pct">
+              {pct !== null ? `${pct}%` : `${scanned.toLocaleString()} files scanned`}
+            </div>
+          </div>
+        {/if}
+
         <div class="scanrow">
           <button class="btn" disabled={library.scanning} onclick={() => library.startScan(false)}>
             Scan for changes
@@ -362,6 +377,36 @@
     display: flex;
     gap: 8px;
     margin: 6px 0;
+  }
+  .scanprogress {
+    margin: 8px 0;
+  }
+  .scanprogress .track {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+  }
+  .scanprogress .fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.2s ease;
+  }
+  /* First-ever scan: no baseline count, so animate an indeterminate sweep. */
+  .scanprogress .track.indeterminate .fill {
+    width: 35%;
+    animation: scan-sweep 1.1s ease-in-out infinite;
+  }
+  @keyframes scan-sweep {
+    0% { margin-left: -35%; }
+    100% { margin-left: 100%; }
+  }
+  .scanprogress .pct {
+    color: var(--txt-faded);
+    font-size: 11px;
+    margin-top: 4px;
+    text-align: center;
   }
   .stats {
     color: var(--txt-faded);
