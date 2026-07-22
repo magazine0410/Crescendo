@@ -106,6 +106,8 @@
       count={library.trackListRowCount}
       itemHeight={ROW_H}
       padBottom={ui.bottombarH}
+      initialScrollTop={library.trackScroll}
+      onScrollChange={(y) => (library.trackScroll = y)}
       onVisibleRange={(f, l) => {
         visFirst = f;
         visLast = l;

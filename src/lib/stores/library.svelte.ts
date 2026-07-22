@@ -56,6 +56,12 @@ class LibraryStore {
   albums = $state<Album[]>([]);
   selectedAlbum = $state<Album | null>(null);
   albumTracks = $state<Track[]>([]);
+  /** Persisted scroll offset (px) of the Album-wall / Track-list viewports, so
+      drilling into an album and coming back restores where you were. Reset to 0
+      only on a genuine filter change (mode / value / query) — not when the view
+      merely remounts after an album, which is what makes restoration work. */
+  wallScroll = $state(0);
+  trackScroll = $state(0);
   stats = $state<LibraryStats | null>(null);
   query = $state<string | null>(null);
 
@@ -112,6 +118,7 @@ class LibraryStore {
     this.selectedAlbum = null;
     this.albumTracks = [];
     this.valueFilter = "";
+    this.resetScroll();
     await this.loadValues();
     await this.loadAlbums();
   }
@@ -130,7 +137,14 @@ class LibraryStore {
       this.selectedAlbum = null;
       this.albumTracks = [];
     }
+    this.resetScroll();
     await this.loadAlbums();
+  }
+
+  /** Forget the saved viewport offsets (see `wallScroll` / `trackScroll`). */
+  resetScroll() {
+    this.wallScroll = 0;
+    this.trackScroll = 0;
   }
 
   async loadValues() {
@@ -150,6 +164,7 @@ class LibraryStore {
     this.selectedValue = v;
     this.selectedAlbum = null;
     this.albumTracks = [];
+    this.resetScroll();
     await this.loadAlbums();
   }
 

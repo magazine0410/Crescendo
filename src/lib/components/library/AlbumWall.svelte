@@ -48,6 +48,8 @@
     cellWidth={CELL_W}
     cellHeight={CELL_H}
     padBottom={ui.bottombarH}
+    initialScrollTop={library.wallScroll}
+    onScrollChange={(y) => (library.wallScroll = y)}
     cell={cellSnippet}
   />
 </div>

@@ -13,13 +13,41 @@
     /** Fires whenever the visible (overscanned) index range changes — used by
         windowed lists to fetch the pages covering [first, last]. */
     onVisibleRange?: (first: number, last: number) => void;
+    /** Restore the viewport to this scroll offset (px) on mount. */
+    initialScrollTop?: number;
+    /** Fires on every scroll with the current offset (px), for persistence. */
+    onScrollChange?: (scrollTop: number) => void;
   }
-  let { count, itemHeight, overscan = 8, padBottom = 0, row, onNearEnd, onVisibleRange }: Props =
-    $props();
+  let {
+    count,
+    itemHeight,
+    overscan = 8,
+    padBottom = 0,
+    row,
+    onNearEnd,
+    onVisibleRange,
+    initialScrollTop = 0,
+    onScrollChange,
+  }: Props = $props();
 
   let viewport: HTMLDivElement | null = $state(null);
   let scrollTop = $state(0);
   let viewportH = $state(0);
+
+  // Restore the saved offset once, as soon as the viewport is mounted. The
+  // spacer height is set from props, so the viewport is scrollable immediately;
+  // and since the content width is unchanged from when the offset was saved, the
+  // target is always within range (never clamped short).
+  let restored = false;
+  $effect(() => {
+    if (viewport && !restored) {
+      restored = true;
+      if (initialScrollTop > 0) {
+        viewport.scrollTop = initialScrollTop;
+        scrollTop = viewport.scrollTop;
+      }
+    }
+  });
 
   const uniform = $derived(typeof itemHeight === "number");
 
@@ -78,6 +106,7 @@
   function onScroll() {
     if (!viewport) return;
     scrollTop = viewport.scrollTop;
+    onScrollChange?.(scrollTop);
     if (onNearEnd && scrollTop + viewportH > totalH - 2000) onNearEnd();
   }
 

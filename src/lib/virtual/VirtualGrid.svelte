@@ -9,8 +9,19 @@
     gap?: number;
     padBottom?: number;
     cell: Snippet<[number]>;
+    initialScrollTop?: number;
+    onScrollChange?: (scrollTop: number) => void;
   }
-  let { count, cellWidth, cellHeight, gap = 14, padBottom = 0, cell }: Props = $props();
+  let {
+    count,
+    cellWidth,
+    cellHeight,
+    gap = 14,
+    padBottom = 0,
+    cell,
+    initialScrollTop = 0,
+    onScrollChange,
+  }: Props = $props();
 
   let containerW = $state(0);
 
@@ -19,7 +30,14 @@
 </script>
 
 <div class="grid-container" bind:clientWidth={containerW}>
-  <VirtualList count={rows} itemHeight={cellHeight + gap} {padBottom} row={gridRow} />
+  <VirtualList
+    count={rows}
+    itemHeight={cellHeight + gap}
+    {padBottom}
+    {initialScrollTop}
+    {onScrollChange}
+    row={gridRow}
+  />
 </div>
 
 {#snippet gridRow(r: number)}
