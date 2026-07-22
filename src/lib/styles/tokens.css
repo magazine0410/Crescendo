@@ -8,6 +8,7 @@
   --bg-popup: #000000;
 
   --txt: #f0f0f0;
+  --txt-semifaded: #888888;      /* italic per-track artist (brighter than faded) */
   --txt-faded: #6e6e6e;
   --txt-superfaded: #3c3c3c;
   --txt-full: #ffffff;

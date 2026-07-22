@@ -6,6 +6,9 @@ export interface Prefs {
   lastfm_api_key: string;
   titlebar_format: string;
   track_detail_format: string;
+  /** Optional smaller second line under track_detail (same %tag% syntax).
+      Blank = single-line rows, unchanged from before. */
+  track_detail_format_2: string;
   scan_threads: number;
   show_waveform: boolean;
   library_view: "album_wall" | "track_list";
@@ -20,6 +23,7 @@ const DEFAULTS: Prefs = {
   lastfm_api_key: "",
   titlebar_format: "%albumartist_display% - %title_display%",
   track_detail_format: "",
+  track_detail_format_2: "",
   scan_threads: 4,
   show_waveform: false,
   library_view: "album_wall",
@@ -42,6 +46,7 @@ class PrefsStore {
     if (raw.lastfm_api_key) v.lastfm_api_key = raw.lastfm_api_key;
     if (raw.titlebar_format) v.titlebar_format = raw.titlebar_format;
     if (raw.track_detail_format) v.track_detail_format = raw.track_detail_format;
+    if (raw.track_detail_format_2) v.track_detail_format_2 = raw.track_detail_format_2;
     if (raw.scan_threads) v.scan_threads = parseInt(raw.scan_threads, 10) || 4;
     if (raw.show_waveform) v.show_waveform = raw.show_waveform === "true";
     if (raw.library_view === "track_list" || raw.library_view === "album_wall")

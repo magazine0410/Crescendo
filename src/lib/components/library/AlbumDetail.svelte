@@ -53,8 +53,10 @@
     <div class="tracks">
       {#each library.albumTracks as t, i (t.id)}
         {@const detail = formatTitle(prefs.values.track_detail_format, t)}
+        {@const detail2 = formatTitle(prefs.values.track_detail_format_2, t)}
         <button
           class="trow"
+          class:tall={!!prefs.values.track_detail_format_2}
           class:playing={player.track?.id === t.id}
           ondblclick={() => player.playContext({ type: "album", id: album.id }, i)}
           oncontextmenu={(e) => trackMenu(e, t.id)}
@@ -64,7 +66,10 @@
           {#if t.artist && t.artist !== album.albumartist}
             <span class="tartist">- {displayArtist(t)}</span>
           {/if}
-          <span class="tdetail" title={detail}>{detail}</span>
+          <div class="tdetails">
+            <span class="tdetail" title={detail}>{detail}</span>
+            {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}
+          </div>
           <span class="dur">{formatTime(t.duration_ms)}</span>
         </button>
       {/each}
@@ -133,10 +138,13 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 26px;
+    min-height: 26px;
     padding: 0 10px;
     text-align: left;
     color: var(--txt);
+  }
+  .trow.tall {
+    min-height: 38px;
   }
   .trow:nth-child(even) {
     background: var(--row-alt);
@@ -163,20 +171,37 @@
     text-overflow: ellipsis;
   }
   .tartist {
-    color: var(--txt-faded);
+    /* brighter than --txt-faded so italic strokes don't read dimmer than the
+       (upright) track details. */
+    color: var(--txt-semifaded);
     font-style: italic;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* italic glyphs slant past their advance width; without this the last
+       character's tail is clipped by overflow:hidden even when it fits. */
+    padding-right: 3px;
   }
-  .tdetail {
+  .tdetails {
     margin-left: auto;
     max-width: 45%;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    line-height: 1.25;
+  }
+  .tdetail,
+  .tdetail2 {
+    max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--txt-faded);
+  }
+  .tdetail2 {
+    font-size: 10px;
   }
   .dur {
     color: var(--txt-faded);

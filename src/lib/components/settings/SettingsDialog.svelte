@@ -152,6 +152,18 @@
           Leave blank to hide. [brackets] render only when every tag inside resolves.
           Long values are truncated with an ellipsis; hover to see the full text.
         </p>
+
+        <label for="rowfmt2">Track detail 2 (shown under the first track detail)</label>
+        <input
+          id="rowfmt2"
+          type="text"
+          value={prefs.values.track_detail_format_2}
+          onchange={(e) => prefs.set("track_detail_format_2", e.currentTarget.value)}
+        />
+        <p class="hint">
+          A smaller second line under the track detail, right-aligned to the duration.
+          Same %tag% placeholders. Leave blank to keep rows single-line.
+        </p>
       </section>
 
       <section>

@@ -73,9 +73,14 @@
     return out;
   });
 
-  function rowHeight(i: number): number {
-    return rows[i]?.type === "header" ? HEADER_H : TRACK_H;
-  }
+  // A second detail line makes track rows taller. Deriving the function (rather
+  // than a plain closure) changes its identity when the pref toggles, so
+  // VirtualList recomputes its row offsets.
+  const trackH = $derived(prefs.values.track_detail_format_2 ? 38 : TRACK_H);
+  const rowHeight = $derived.by(() => {
+    const th = trackH;
+    return (i: number): number => (rows[i]?.type === "header" ? HEADER_H : th);
+  });
 
   async function playAt(index: number) {
     if (playlists.selectedId == null) return;
@@ -141,6 +146,7 @@
     </div>
   {:else}
     {@const detail = formatTitle(prefs.values.track_detail_format, r.track)}
+    {@const detail2 = formatTitle(prefs.values.track_detail_format_2, r.track)}
     <button
       class="trow"
       class:playing={player.track?.id === r.track.id}
@@ -152,7 +158,10 @@
       {#if r.track.artist && r.track.artist !== (r.track.albumartist ?? r.track.artist)}
         <span class="tartist">- {displayArtist(r.track)}</span>
       {/if}
-      <span class="tdetail" title={detail}>{detail}</span>
+      <div class="tdetails">
+        <span class="tdetail" title={detail}>{detail}</span>
+        {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}
+      </div>
       <span class="dur">{formatTime(r.track.duration_ms)}</span>
     </button>
   {/if}
@@ -260,20 +269,37 @@
     text-overflow: ellipsis;
   }
   .tartist {
-    color: var(--txt-faded);
+    /* brighter than --txt-faded so italic strokes don't read dimmer than the
+       (upright) track details. */
+    color: var(--txt-semifaded);
     font-style: italic;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* italic glyphs slant past their advance width; without this the last
+       character's tail is clipped by overflow:hidden even when it fits. */
+    padding-right: 3px;
   }
-  .tdetail {
+  .tdetails {
     margin-left: auto;
     max-width: 45%;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    line-height: 1.25;
+  }
+  .tdetail,
+  .tdetail2 {
+    max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--txt-faded);
+  }
+  .tdetail2 {
+    font-size: 10px;
   }
   .dur {
     color: var(--txt-faded);
