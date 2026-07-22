@@ -36,6 +36,33 @@ struct WriteJob {
     meta: Result<TrackMeta>,
 }
 
+/// Shared progress counters. Both the walker (unchanged, stat-only files) and
+/// the writer (changed/new files) bump these and emit snapshots, so the bar
+/// moves during incremental scans where most files never reach the writer.
+#[derive(Clone, Copy)]
+struct Counters<'a> {
+    scanned: &'a AtomicU64,
+    added: &'a AtomicU64,
+    updated: &'a AtomicU64,
+    errors: &'a AtomicU64,
+}
+
+impl Counters<'_> {
+    /// A progress snapshot. `removed` is only known once the walk finishes, so
+    /// intermediate events report 0 for it (unchanged from the old behavior).
+    fn snapshot(&self, current_path: String, done: bool) -> ScanProgress {
+        ScanProgress {
+            scanned: self.scanned.load(Ordering::Relaxed),
+            added: self.added.load(Ordering::Relaxed),
+            updated: self.updated.load(Ordering::Relaxed),
+            removed: 0,
+            errors: self.errors.load(Ordering::Relaxed),
+            current_path,
+            done,
+        }
+    }
+}
+
 /// Run a scan. `progress` is called from the writer thread every few hundred
 /// files and once at the end with `done = true`.
 pub fn scan(
@@ -61,26 +88,19 @@ pub fn scan(
     }
 
     let scanned = AtomicU64::new(0);
+    let added = AtomicU64::new(0);
+    let updated = AtomicU64::new(0);
+    let errors = AtomicU64::new(0);
+    let counters = Counters { scanned: &scanned, added: &added, updated: &updated, errors: &errors };
     let (job_tx, job_rx) = bounded::<FileJob>(1024);
     let (write_tx, write_rx) = bounded::<WriteJob>(1024);
-
-    let mut result = ScanProgress {
-        scanned: 0,
-        added: 0,
-        updated: 0,
-        removed: 0,
-        errors: 0,
-        current_path: String::new(),
-        done: false,
-    };
 
     let leftover = std::thread::scope(|scope| -> Result<HashMap<String, (i64, i64)>> {
         // Walker
         let walker = scope.spawn({
             let root = opts.root.clone();
             let full = opts.full;
-            let scanned = &scanned;
-            move || walk(root, full, known, job_tx, scanned, cancel)
+            move || walk(root, full, known, job_tx, counters, progress, cancel)
         });
 
         // Tag readers
@@ -101,26 +121,27 @@ pub fn scan(
         drop(write_tx);
 
         // Writer (this thread)
-        write_loop(&conn, write_rx, &scanned, &mut result, progress)?;
+        write_loop(&conn, write_rx, counters, progress)?;
 
         Ok(walker.join().expect("walker thread panicked"))
     })?;
 
     // Anything left in `known` was not seen on disk.
+    let mut removed = 0u64;
     if !cancel.load(Ordering::Relaxed) && !leftover.is_empty() {
         let mut mark = conn.prepare("UPDATE tracks SET missing = 1 WHERE path = ?1")?;
         conn.execute_batch("BEGIN")?;
         for path in leftover.keys() {
             mark.execute([path])?;
-            result.removed += 1;
+            removed += 1;
         }
         conn.execute_batch("COMMIT")?;
     }
 
     albums::rebuild(&conn)?;
 
-    result.scanned = scanned.load(Ordering::Relaxed);
-    result.done = true;
+    let mut result = counters.snapshot(String::new(), true);
+    result.removed = removed;
     progress(result.clone());
     Ok(result)
 }
@@ -130,9 +151,11 @@ fn walk(
     full: bool,
     mut known: HashMap<String, (i64, i64)>,
     job_tx: Sender<FileJob>,
-    scanned: &AtomicU64,
+    counters: Counters,
+    progress: &(dyn Fn(ScanProgress) + Sync),
     cancel: &AtomicBool,
 ) -> HashMap<String, (i64, i64)> {
+    let mut last_emit = 0u64;
     for entry in walkdir::WalkDir::new(&root).follow_links(false).into_iter().flatten() {
         if cancel.load(Ordering::Relaxed) {
             break;
@@ -162,8 +185,15 @@ fn walk(
         if !full {
             if let Some((known_mtime, known_size)) = prior {
                 if known_mtime == mtime && known_size == size {
-                    scanned.fetch_add(1, Ordering::Relaxed);
-                    continue; // unchanged: stat-only pass
+                    // Unchanged: stat-only pass. These files never reach the
+                    // writer, so emit progress here or an incremental scan
+                    // would sit at 0% until it finishes.
+                    let total = counters.scanned.fetch_add(1, Ordering::Relaxed) + 1;
+                    if total - last_emit >= PROGRESS_EVERY {
+                        last_emit = total;
+                        progress(counters.snapshot(path_str.to_string(), false));
+                    }
+                    continue;
                 }
             }
         }
@@ -187,8 +217,7 @@ fn walk(
 fn write_loop(
     conn: &rusqlite::Connection,
     write_rx: Receiver<WriteJob>,
-    scanned: &AtomicU64,
-    result: &mut ScanProgress,
+    counters: Counters,
     progress: &(dyn Fn(ScanProgress) + Sync),
 ) -> Result<()> {
     let mut upsert = conn.prepare(
@@ -223,7 +252,7 @@ fn write_loop(
     let mut last_emit = 0u64;
 
     for job in write_rx.iter() {
-        scanned.fetch_add(1, Ordering::Relaxed);
+        counters.scanned.fetch_add(1, Ordering::Relaxed);
         let file = &job.file;
         // Files with unreadable tags still enter the library under their
         // filename — GStreamer can usually play them regardless.
@@ -231,7 +260,7 @@ fn write_loop(
             Ok(meta) => meta,
             Err(e) => {
                 log::warn!("tag read failed for {} ({e}); using filename only", file.path);
-                result.errors += 1;
+                counters.errors.fetch_add(1, Ordering::Relaxed);
                 tags::fallback_meta(Path::new(&file.path))
             }
         };
@@ -265,9 +294,9 @@ fn write_loop(
             blob,
         ])?;
         if existed {
-            result.updated += 1;
+            counters.updated.fetch_add(1, Ordering::Relaxed);
         } else {
-            result.added += 1;
+            counters.added.fetch_add(1, Ordering::Relaxed);
         }
 
         in_batch += 1;
@@ -275,13 +304,10 @@ fn write_loop(
             conn.execute_batch("COMMIT; BEGIN")?;
             in_batch = 0;
         }
-        let total = scanned.load(Ordering::Relaxed);
+        let total = counters.scanned.load(Ordering::Relaxed);
         if total - last_emit >= PROGRESS_EVERY {
             last_emit = total;
-            let mut p = result.clone();
-            p.scanned = total;
-            p.current_path = file.path.clone();
-            progress(p);
+            progress(counters.snapshot(file.path.clone(), false));
         }
     }
     conn.execute_batch("COMMIT")?;
