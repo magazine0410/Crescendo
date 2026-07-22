@@ -2,7 +2,15 @@
 
 A desktop music player for Linux that replicates the look of the [foobar2000
 **Eole** theme](https://github.com/Ottodix/Eole-foobar-theme) in dark mode. 
-Built with Tauri 2, Svelte 5, and GStreamer. Supports vast libraries; the player is tested with a library containing 100k+ songs.
+Built with Tauri 2, Svelte 5, and GStreamer.
+
+## Features
+
+- sleek dark user interface
+- library view with two main versions: album wall or a track list view
+- powerful searching and filtering capabilities
+- Last.fm support for additional artist details
+- designed for large libraries; the player is tested with a library containing 100k+ songs
 
 ## Stack
 
