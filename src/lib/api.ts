@@ -29,6 +29,7 @@ export interface Track {
   format: string;
   album_id: number | null;
   rating: number | null;
+  play_count: number;
 }
 
 export interface Album {

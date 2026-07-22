@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -39,7 +39,8 @@ pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
               has_embedded_art INTEGER NOT NULL DEFAULT 0,
               album_id     INTEGER,
               search_blob  TEXT NOT NULL DEFAULT '',
-              missing      INTEGER NOT NULL DEFAULT 0
+              missing      INTEGER NOT NULL DEFAULT 0,
+              play_count   INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_tracks_album    ON tracks(album_id, disc_no, track_no);
             CREATE INDEX IF NOT EXISTS idx_tracks_artist   ON tracks(artist COLLATE NOCASE);
@@ -99,6 +100,13 @@ pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
              ALTER TABLE tracks ADD COLUMN artistsort TEXT;
              ALTER TABLE tracks ADD COLUMN albumartistsort TEXT;
              ALTER TABLE albums ADD COLUMN albumartist_sort TEXT;",
+        )?;
+    }
+    if version < 3 && version >= 1 {
+        // v3: per-track play counter (a track counts as played once >50% of it
+        // has been heard). Fresh databases get the column from the CREATE above.
+        conn.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

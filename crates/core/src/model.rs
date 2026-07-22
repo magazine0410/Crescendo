@@ -20,6 +20,8 @@ pub struct Track {
     pub format: String,
     pub album_id: Option<i64>,
     pub rating: Option<i64>,
+    /// Times this track has been played (>50% heard). See `Db::record_play`.
+    pub play_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -34,6 +34,13 @@ class PlaylistsStore {
     return this.list.find((p) => p.id === this.selectedId) ?? null;
   }
 
+  /** Patch a track's play counter in the open playlist so its "Plays: N" line
+      updates live when the player credits a play (a track can appear more than
+      once, so patch every occurrence). */
+  bumpPlayCount(id: number, plays: number) {
+    for (const t of this.tracks) if (t.id === id) t.play_count = plays;
+  }
+
   async create(name: string): Promise<number> {
     const id = await call<number>("playlist_create", { name });
     await this.refresh();

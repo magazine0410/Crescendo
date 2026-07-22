@@ -30,6 +30,10 @@ export async function initEvents() {
     library.scanError = e.payload;
     library.scanning = false;
   });
+  await listen<{ id: number; plays: number }>("play:recorded", (e) => {
+    library.bumpPlayCount(e.payload.id, e.payload.plays);
+    playlists.bumpPlayCount(e.payload.id, e.payload.plays);
+  });
   await listen("library:changed", () => library.refresh());
   await listen("queue:changed", () => queue.refresh());
   await listen<number>("playlist:changed", () => playlists.refresh());

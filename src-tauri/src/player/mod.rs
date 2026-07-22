@@ -61,6 +61,13 @@ pub struct PositionEvent {
     pub duration_ms: u64,
 }
 
+/// Emitted when a track crosses the "played" threshold and its counter is bumped.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayRecorded {
+    pub id: i64,
+    pub plays: i64,
+}
+
 #[derive(Clone)]
 pub struct PlayerHandle {
     tx: Sender<Cmd>,
@@ -119,6 +126,13 @@ struct Engine {
     muted: bool,
     status: Status,
     current_duration_ms: u64,
+    /// The track currently loaded in playbin, tracked so its play can be
+    /// credited when it is replaced, skipped, or ends.
+    current_track_id: Option<i64>,
+    /// Highest position (ms) reached in the current track. Sampled on the tick
+    /// so a gapless handoff (which resets the pipeline position) still knows how
+    /// far the outgoing track got.
+    max_position_ms: u64,
     /// Set inside about-to-finish; consumed on the next stream-start.
     gapless_pending: Arc<Mutex<bool>>,
     /// One-shot "stop after this song": suppresses the gapless handoff so EOS
@@ -176,6 +190,8 @@ fn run_player(
         muted: false,
         status: Status::Stopped,
         current_duration_ms: 0,
+        current_track_id: None,
+        max_position_ms: 0,
         gapless_pending,
         stop_after_current,
     };
@@ -200,6 +216,7 @@ fn run_player(
         // Position tick
         if engine.status == Status::Playing && last_tick.elapsed() >= Duration::from_millis(250) {
             last_tick = Instant::now();
+            engine.max_position_ms = engine.max_position_ms.max(engine.position_ms());
             engine.emit_position();
         }
     }
@@ -359,8 +376,15 @@ impl Engine {
                     std::mem::take(&mut *pending)
                 };
                 if was_gapless {
+                    // about-to-finish only fires near the natural end, so the
+                    // outgoing track is credited here (its max position, sampled
+                    // by the tick, still holds the near-end value). Commit before
+                    // refreshing the duration to the new track.
+                    self.commit_play();
                     self.sync_queue_shared();
                     self.refresh_current_duration();
+                    self.current_track_id = self.queue.lock().expect("queue poisoned").current();
+                    self.max_position_ms = 0;
                     self.publish_state();
                 }
             }
@@ -369,6 +393,9 @@ impl Engine {
     }
 
     fn start_track(&mut self, track_id: i64) {
+        // Credit the outgoing track (still live, so its position is queryable)
+        // before we tear its stream down.
+        self.commit_play();
         let Ok(Some(track)) = self.db.track_by_id(track_id) else {
             log::error!("track {track_id} vanished from the library");
             return;
@@ -382,16 +409,37 @@ impl Engine {
         let _ = self.playbin.set_state(gstreamer::State::Playing);
         self.status = Status::Playing;
         self.current_duration_ms = track.duration_ms.max(0) as u64;
+        self.current_track_id = Some(track_id);
+        self.max_position_ms = 0;
         self.publish_state();
         self.emit_position();
     }
 
     fn stop(&mut self) {
+        self.commit_play();
         let _ = self.playbin.set_state(gstreamer::State::Null);
         self.status = Status::Stopped;
         self.current_duration_ms = 0;
         self.publish_state();
         let _ = self.app.emit("player:position", PositionEvent { ms: 0, duration_ms: 0 });
+    }
+
+    /// Count a play for the current track if more than half of it was heard,
+    /// then clear the per-track progress. Idempotent: a second call before a new
+    /// track starts is a no-op (the id has been taken).
+    fn commit_play(&mut self) {
+        let Some(id) = self.current_track_id.take() else { return };
+        let pos = self.max_position_ms.max(self.position_ms());
+        let dur = self.current_duration_ms;
+        self.max_position_ms = 0;
+        if dur > 0 && pos * 2 > dur {
+            match self.db.record_play(id) {
+                Ok(plays) => {
+                    let _ = self.app.emit("play:recorded", PlayRecorded { id, plays });
+                }
+                Err(e) => log::warn!("record_play failed for track {id}: {e}"),
+            }
+        }
     }
 
     fn apply_volume(&self) {

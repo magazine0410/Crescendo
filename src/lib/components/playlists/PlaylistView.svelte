@@ -5,12 +5,13 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, type Track } from "$lib/api";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import { formatTime, formatTitle, displayTitle, displayArtist, displayName } from "$lib/format";
+  import { formatTime, formatTitle, displayTitle, displayArtist, displayName, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
 
   const HEADER_H = 84;
-  const TRACK_H = 26;
+  // Two-line track rows so the play counter can sit under the title.
+  const TRACK_H = 38;
 
   interface HeaderRow {
     type: "header";
@@ -73,13 +74,11 @@
     return out;
   });
 
-  // A second detail line makes track rows taller. Deriving the function (rather
-  // than a plain closure) changes its identity when the pref toggles, so
-  // VirtualList recomputes its row offsets.
-  const trackH = $derived(prefs.values.track_detail_format_2 ? 38 : TRACK_H);
+  // Track rows are a fixed two-line height; only the header/track split varies,
+  // so the function's identity changes with `rows` and VirtualList recomputes
+  // its row offsets on any content change.
   const rowHeight = $derived.by(() => {
-    const th = trackH;
-    return (i: number): number => (rows[i]?.type === "header" ? HEADER_H : th);
+    return (i: number): number => (rows[i]?.type === "header" ? HEADER_H : TRACK_H);
   });
 
   async function playAt(index: number) {
@@ -154,10 +153,15 @@
       oncontextmenu={(e) => trackMenu(e, r)}
     >
       <span class="no">{r.track.track_no ?? r.index + 1}</span>
-      <span class="ttitle">{displayTitle(r.track)}</span>
-      {#if r.track.artist && r.track.artist !== (r.track.albumartist ?? r.track.artist)}
-        <span class="tartist">- {displayArtist(r.track)}</span>
-      {/if}
+      <div class="tmain">
+        <div class="tline">
+          <span class="ttitle">{displayTitle(r.track)}</span>
+          {#if r.track.artist && r.track.artist !== (r.track.albumartist ?? r.track.artist)}
+            <span class="tartist">- {displayArtist(r.track)}</span>
+          {/if}
+        </div>
+        {#if playsText(r.track)}<span class="tplays">{playsText(r.track)}</span>{/if}
+      </div>
       <div class="tdetails">
         <span class="tdetail" title={detail}>{detail}</span>
         {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}
@@ -262,6 +266,25 @@
   }
   .trow.playing .no {
     color: var(--accent);
+  }
+  /* left column: title line on top, small play counter under it */
+  .tmain {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    line-height: 1.25;
+  }
+  .tline {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+  .tplays {
+    font-size: 10px;
+    color: var(--txt-faded);
   }
   .ttitle {
     white-space: nowrap;

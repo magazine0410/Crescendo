@@ -6,7 +6,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { artUrl } from "$lib/api";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist } from "$lib/format";
+  import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem } from "$lib/menu";
 
@@ -56,16 +56,20 @@
         {@const detail2 = formatTitle(prefs.values.track_detail_format_2, t)}
         <button
           class="trow"
-          class:tall={!!prefs.values.track_detail_format_2}
           class:playing={player.track?.id === t.id}
           ondblclick={() => player.playContext({ type: "album", id: album.id }, i)}
           oncontextmenu={(e) => trackMenu(e, t.id)}
         >
           <span class="no">{t.track_no ?? i + 1}</span>
-          <span class="title">{displayTitle(t)}</span>
-          {#if t.artist && t.artist !== album.albumartist}
-            <span class="tartist">- {displayArtist(t)}</span>
-          {/if}
+          <div class="tmain">
+            <div class="tline">
+              <span class="title">{displayTitle(t)}</span>
+              {#if t.artist && t.artist !== album.albumartist}
+                <span class="tartist">- {displayArtist(t)}</span>
+              {/if}
+            </div>
+            {#if playsText(t)}<span class="tplays">{playsText(t)}</span>{/if}
+          </div>
           <div class="tdetails">
             <span class="tdetail" title={detail}>{detail}</span>
             {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}
@@ -138,13 +142,10 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 26px;
+    min-height: 38px;
     padding: 0 10px;
     text-align: left;
     color: var(--txt);
-  }
-  .trow.tall {
-    min-height: 38px;
   }
   .trow:nth-child(even) {
     background: var(--row-alt);
@@ -164,6 +165,25 @@
   }
   .trow.playing .no {
     color: var(--accent);
+  }
+  /* left column: title line on top, small play counter under it */
+  .tmain {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    line-height: 1.25;
+  }
+  .tline {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+  .tplays {
+    font-size: 10px;
+    color: var(--txt-faded);
   }
   .title {
     white-space: nowrap;

@@ -6,7 +6,8 @@ use rusqlite::{params_from_iter, types::Value, Connection, Row};
 
 pub const TRACK_COLS: &str = "id, path, title, artist, album, albumartist, titlesort, \
                               artistsort, albumartistsort, genre, grouping, \
-                              track_no, disc_no, year, duration_ms, format, album_id, rating";
+                              track_no, disc_no, year, duration_ms, format, album_id, rating, \
+                              play_count";
 
 /// Stable order used everywhere a "whole library" listing appears.
 pub const LIBRARY_SORT: &str = "albumartist COLLATE NOCASE, year, album COLLATE NOCASE, \
@@ -42,6 +43,7 @@ pub fn track_from_row(r: &Row) -> rusqlite::Result<Track> {
         format: r.get(15)?,
         album_id: r.get(16)?,
         rating: r.get(17)?,
+        play_count: r.get(18)?,
     })
 }
 
@@ -192,6 +194,20 @@ impl Db {
         self.with(|conn| {
             let sql = format!("SELECT {TRACK_COLS} FROM tracks WHERE id = ?1");
             Ok(conn.query_row(&sql, [id], track_from_row).ok())
+        })
+    }
+
+    /// Credit one play to a track and return its new total. Called by the
+    /// player once more than half of the track has been heard.
+    pub fn record_play(&self, id: i64) -> Result<i64> {
+        self.with(|conn| {
+            let n = conn.query_row(
+                "UPDATE tracks SET play_count = play_count + 1 WHERE id = ?1 \
+                 RETURNING play_count",
+                [id],
+                |r| r.get::<_, i64>(0),
+            )?;
+            Ok(n)
         })
     }
 

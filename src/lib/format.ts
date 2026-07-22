@@ -44,6 +44,13 @@ export function displayTitle(t: Track): string {
   return romanized(t.title, t.titlesort) ?? fileStem(t.path);
 }
 
+/** "N plays" for a track that has been played, or null when it never has —
+    so callers render nothing (an invisible counter) for zero-play tracks. */
+export function playsText(t: Track): string | null {
+  if (t.play_count <= 0) return null;
+  return t.play_count === 1 ? "1 play" : `${t.play_count} plays`;
+}
+
 export function displayArtist(t: Track): string | null {
   return (
     romanized(t.artist, t.artistsort) ?? romanized(t.albumartist, t.albumartistsort)

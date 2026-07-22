@@ -6,14 +6,15 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { call, type PlayContext } from "$lib/api";
-  import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName } from "$lib/format";
+  import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
 
-  // A second detail line makes every row taller; keeping it a single uniform
-  // height stays on VirtualList's fast (constant-height) path.
-  const ROW_H = $derived(prefs.values.track_detail_format_2 ? 38 : 26);
+  // Rows are two-line so the play counter can sit under the title (and the
+  // optional second detail under the first). Uniform height keeps VirtualList on
+  // its fast constant-height path.
+  const ROW_H = 38;
 
   // Recount + reset whenever the filter (mode / value / query), the library (after
   // a rescan), or the separators toggle changes. reloadTrackView bumps
@@ -135,14 +136,19 @@
         oncontextmenu={(e) => trackMenu(e, cell.trackIndex)}
       >
         <span class="no">{t.track_no ?? cell.trackIndex + 1}</span>
-        <span class="ttitle">{displayTitle(t)}</span>
-        {#if prefs.values.track_separators}
-          {#if t.artist && t.artist !== (t.albumartist ?? t.artist)}
-            <span class="tartist">- {displayArtist(t)}</span>
-          {/if}
-        {:else if t.albumartist ?? t.artist}
-          <span class="tartist">- {displayAlbumartist(t)}</span>
-        {/if}
+        <div class="tmain">
+          <div class="tline">
+            <span class="ttitle">{displayTitle(t)}</span>
+            {#if prefs.values.track_separators}
+              {#if t.artist && t.artist !== (t.albumartist ?? t.artist)}
+                <span class="tartist">- {displayArtist(t)}</span>
+              {/if}
+            {:else if t.albumartist ?? t.artist}
+              <span class="tartist">- {displayAlbumartist(t)}</span>
+            {/if}
+          </div>
+          {#if playsText(t)}<span class="tplays">{playsText(t)}</span>{/if}
+        </div>
         <div class="tdetails">
           <span class="tdetail" title={detail}>{detail}</span>
           {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}
@@ -272,6 +278,25 @@
   }
   .trow.playing .no {
     color: var(--accent);
+  }
+  /* left column: title line on top, small play counter under it */
+  .tmain {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    line-height: 1.25;
+  }
+  .tline {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+  .tplays {
+    font-size: 10px;
+    color: var(--txt-faded);
   }
   .ttitle {
     white-space: nowrap;

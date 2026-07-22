@@ -79,6 +79,9 @@ function build() {
         format: "FLAC",
         album_id: a + 1,
         rating: null,
+        // Sprinkle some non-zero play counts so the "Plays: N" line is visible
+        // in `npm run dev`.
+        play_count: (a + t) % 3 === 0 ? ((a * 5 + t) % 4) + 1 : 0,
       });
     }
     albums.push({
@@ -335,4 +338,5 @@ export const mockNowPlaying: Track = {
   format: "FLAC",
   album_id: 1,
   rating: null,
+  play_count: 3,
 };

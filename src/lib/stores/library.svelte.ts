@@ -186,6 +186,13 @@ class LibraryStore {
     this.albumTracks = a ? await call<Track[]>("album_tracks", { albumId: a.id }) : [];
   }
 
+  /** Patch a track's play counter in the loaded views so the "Plays: N" line
+      updates live when the player credits a play. */
+  bumpPlayCount(id: number, plays: number) {
+    for (const t of this.albumTracks) if (t.id === id) t.play_count = plays;
+    for (const t of this.tracks) if (t && t.id === id) t.play_count = plays;
+  }
+
   /** Flat row count of the Track-list view (tracks, plus separators when on). */
   get trackListRowCount(): number {
     return this.trackModel ? this.trackModel.totalRows : this.trackCount;
