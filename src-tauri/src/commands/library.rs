@@ -146,6 +146,22 @@ pub async fn tracks_range(
 }
 
 #[tauri::command]
+pub async fn track_index(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    mode: BrowseMode,
+    value: Option<String>,
+    collapse: bool,
+    track_id: i64,
+) -> Result<Option<i64>, String> {
+    let filter = filter_for(query.as_deref())?;
+    state
+        .db
+        .track_index(filter.as_ref(), mode, value.as_deref(), collapse, track_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn track_groups(
     state: State<'_, AppState>,
     query: Option<String>,
@@ -169,6 +185,6 @@ pub async fn album_by_id(
 }
 
 #[tauri::command]
-pub async fn search_validate(query: String) -> Result<Option<String>, String> {
-    Ok(crescendo_core::search::validate(&query))
+pub async fn search_classify(query: String) -> Result<crescendo_core::search::QueryKind, String> {
+    Ok(crescendo_core::search::classify(&query))
 }

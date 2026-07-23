@@ -262,8 +262,19 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       }
       return groups as T;
     }
-    case "search_validate":
-      return ((args.query as string).includes('"') ? "mock: unbalanced quote?" : null) as T;
+    case "track_index": {
+      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(libSort);
+      const idx = filtered.findIndex((t) => t.id === (args.trackId as number));
+      return (idx < 0 ? null : idx) as T;
+    }
+    case "search_classify": {
+      const q = (args.query as string).trim();
+      if (!q) return "plain" as T;
+      // crude stand-in: unbalanced quote = invalid, any operator = syntax.
+      const quotes = (q.match(/"/g) ?? []).length;
+      if (quotes % 2 !== 0) return "invalid" as T;
+      return (/[=#&|!/]|"/.test(q) ? "syntax" : "plain") as T;
+    }
     case "playlist_list":
       return playlists as T;
     case "playlist_tracks": {

@@ -79,24 +79,6 @@ fn register_udfs(conn: &Connection) -> Result<()> {
         },
     )?;
 
-    conn.create_scalar_function(
-        "ueq",
-        2,
-        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        |ctx| {
-            let a = ctx.get_raw(0).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
-            let b = ctx.get_raw(1).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
-            Ok(match (a, b) {
-                (Some(a), Some(b)) => a.to_lowercase() == b.to_lowercase(),
-                _ => false,
-            })
-        },
-    )?;
-
     // Cache compiled regexes per connection: queries run the same pattern
     // against every row.
     type RegexCache = std::sync::Mutex<std::collections::HashMap<String, Arc<regex::Regex>>>;

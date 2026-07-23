@@ -5,7 +5,37 @@
   }
   let { open, onclose }: Props = $props();
 
+  // Every tag usable in a search, alphabetical. "Text" tags take = / != / regex
+  // matchers; "Number" tags go inside #( ). Keep in sync with search/sql.rs.
+  const tagRows: [string, string][] = [
+    ["album", "Text — album title."],
+    ["albumartist", "Text — album artist."],
+    ["albumartistsort", "Text — album-artist sort name (romaji)."],
+    ["artist", "Text — track artist."],
+    ["artistsort", "Text — artist sort name (romaji)."],
+    ["bitdepth", "Number — bits per sample."],
+    ["bitrate", "Number — bitrate."],
+    ["dirname", "Text — name of the containing folder."],
+    ["disc", "Number — disc number (alias: discnumber)."],
+    ["filename", "Text — file name."],
+    ["format", "Text — codec / container, e.g. FLAC (alias: codec)."],
+    ["genre", "Text — genre."],
+    ["grouping", "Text — grouping tag."],
+    ["length", "Number — duration in seconds; write times as m:ss inside #( )."],
+    ["path", "Text — full file path."],
+    ["rating", "Number — rating."],
+    ["samplerate", "Number — sample rate in Hz."],
+    ["title", "Text — track title."],
+    ["titlesort", "Text — title sort name (romaji)."],
+    ["track", "Number — track number (alias: tracknumber)."],
+    ["year", "Number — release year (alias: date)."],
+  ];
+
   const sections: { title: string; rows: [string, string][] }[] = [
+    {
+      title: "All searchable tags",
+      rows: tagRows,
+    },
     {
       title: "Free text",
       rows: [
@@ -16,8 +46,8 @@
     {
       title: "Tag searches",
       rows: [
-        ["artist=parker", "Tag contains the value (case-insensitive). Tags: title, artist, album, albumartist, titlesort, artistsort, albumartistsort, genre, grouping, format, dirname, filename, path."],
-        ["artist=\"Charlie Parker\"", "Quoted value matches the whole tag exactly."],
+        ["artist=parker", "Tag contains the value (case-insensitive). See the tag list above."],
+        ["artist=\"Charlie Parker\"", "Quote a value to include spaces; it still matches as a substring (also matches “Charlie Parker Quartet”)."],
         ["artist=\"BoA\"c", "Trailing c makes the match case-sensitive."],
         ["genre!=rock", "Excludes matches (tracks without the tag count as not matching)."],
         ["album=/shadow/", "Regular expression between slashes; add c for case-sensitive."],

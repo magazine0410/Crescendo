@@ -298,6 +298,40 @@ impl Db {
         })
     }
 
+    /// 0-based index of `track_id` within the filtered + LIBRARY_SORT-ordered
+    /// view (same order as `tracks_range`), or `None` when the track isn't in
+    /// that set. Lets the Track-list view scroll to the now-playing track after
+    /// a filter change (e.g. clearing the search).
+    pub fn track_index(
+        &self,
+        filter: Option<&SearchFilter>,
+        mode: BrowseMode,
+        value: Option<&str>,
+        collapse: bool,
+        track_id: i64,
+    ) -> Result<Option<i64>> {
+        let (mut where_sql, mut params) = track_where(filter);
+        if let Some(v) = value {
+            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
+        }
+        self.with(|conn| {
+            let sql = format!(
+                "SELECT rn FROM ( \
+                   SELECT id, ROW_NUMBER() OVER (ORDER BY {LIBRARY_SORT}) - 1 AS rn \
+                   FROM tracks WHERE {where_sql} \
+                 ) WHERE id = ?{}",
+                params.len() + 1
+            );
+            params.push(Value::from(track_id));
+            let mut stmt = conn.prepare(&sql)?;
+            let mut rows = stmt.query(params_from_iter(params.iter()))?;
+            Ok(match rows.next()? {
+                Some(r) => Some(r.get(0)?),
+                None => None,
+            })
+        })
+    }
+
     /// Album runs for the Track-list view: consecutive same-album_id blocks over
     /// the same filtered + LIBRARY_SORT-ordered set as `tracks_range`. Uses the
     /// gaps-and-islands pattern so a re-appearing album_id (e.g. split by a year

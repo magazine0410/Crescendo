@@ -4,7 +4,8 @@
 //! - free text: `nausicaa wind` (terms AND-ed, matched against a
 //!   pre-lowercased blob of title/artist/album/albumartist/genre)
 //! - tag match: `artist=parker`, `genre!=rock`, `artist="Charlie Parker"`,
-//!   `artist="BoA"c` (quoted = exact, `c` = case-sensitive)
+//!   `artist="BoA"c` (quoted = substring match preserving spaces, `c` =
+//!   case-sensitive)
 //! - regex: `album=/shadow/`, `/Boa/c` (case-insensitive unless `c`)
 //! - boolean: `&(a, b)`, `|(a, b)`, `!term`, value lists `genre=|(jazz, soul)`
 //! - numeric: `#(year >= 1990)`, `#(10 <= track < 100)`, `#(length > 2:00)`
@@ -39,7 +40,9 @@ pub enum Node {
 pub enum Matcher {
     /// Unquoted value: case-folded substring match.
     Contains(String),
-    Exact { value: String, case_sensitive: bool },
+    /// Quoted value: substring match that preserves spaces and special chars.
+    /// Case-folded unless `case_sensitive` (the `c` flag) is set.
+    Phrase { value: String, case_sensitive: bool },
     Regex { pattern: String, case_sensitive: bool },
     AnyOf(Vec<Matcher>),
     AllOf(Vec<Matcher>),
@@ -92,4 +95,41 @@ pub fn validate(query: &str) -> Option<String> {
         return None;
     }
     parse(query).err().map(|e| e.to_string())
+}
+
+/// How the search bar should tint a query. Drives the input text color:
+/// plain free text stays white, a valid structured query turns green, an
+/// unparseable one turns red.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueryKind {
+    /// Only bare words — no operators. Render normally.
+    Plain,
+    /// Parses and uses search syntax (tags, numbers, booleans, …).
+    Syntax,
+    /// Fails to parse.
+    Invalid,
+}
+
+/// Classify a query for the search-bar tint.
+pub fn classify(query: &str) -> QueryKind {
+    if query.trim().is_empty() {
+        return QueryKind::Plain;
+    }
+    match parse(query) {
+        Err(_) => QueryKind::Invalid,
+        Ok(node) if uses_syntax(&node) => QueryKind::Syntax,
+        Ok(_) => QueryKind::Plain,
+    }
+}
+
+/// True if the AST is anything more than bare free-text words. A run of plain
+/// words parses to `And([FreeText, …])`, which stays "plain"; a tag, number,
+/// negation, or OR anywhere makes it a structured query.
+fn uses_syntax(node: &Node) -> bool {
+    match node {
+        Node::FreeText(_) => false,
+        Node::Tag { .. } | Node::Numeric { .. } | Node::Not(_) | Node::Or(_) => true,
+        Node::And(items) => items.iter().any(uses_syntax),
+    }
 }

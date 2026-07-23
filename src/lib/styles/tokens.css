@@ -16,6 +16,7 @@
   --accent: #ffaf32;              /* now-playing highlight (orange) */
   --selection: rgba(15, 177, 255, 0.63);
   --search-invalid: #ff5050;
+  --search-valid: #6ac86a;        /* valid structured query (green) */
 
   --row-alt: rgba(0, 0, 0, 0.12);
   --hairline: rgba(255, 255, 255, 0.15);

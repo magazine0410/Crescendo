@@ -3,7 +3,8 @@ export type Tab = "library" | "playlists" | "nowplaying" | "visualizer";
 class UiStore {
   activeTab = $state<Tab>("playlists");
   searchQuery = $state("");
-  searchInvalid = $state(false);
+  /** how to tint the search input: plain free text, valid syntax, or a parse error */
+  searchKind = $state<"plain" | "syntax" | "invalid">("plain");
   searchHelpOpen = $state(false);
   /** left time readout shows remaining (foobar-style "-3:30") vs elapsed */
   timeRemaining = $state(false);

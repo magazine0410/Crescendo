@@ -1,5 +1,6 @@
 <script lang="ts">
   import { library } from "$lib/stores/library.svelte";
+  import { player } from "$lib/stores/player.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import ModeSelector from "./ModeSelector.svelte";
@@ -14,7 +15,21 @@
 
   $effect(() => {
     const q = ui.searchQuery;
-    const t = setTimeout(() => library.setQuery(q), 200);
+    const t = setTimeout(() => {
+      // Clearing an active search while a track plays in the Track-list view:
+      // scroll to the now-playing song's spot in the full library instead of
+      // snapping to the top. TrackList consumes this after it reloads.
+      const clearing = !q.trim() && library.query != null;
+      if (
+        clearing &&
+        prefs.values.library_view === "track_list" &&
+        !library.selectedAlbum &&
+        player.track
+      ) {
+        library.scrollToTrackId = player.track.id;
+      }
+      library.setQuery(q);
+    }, 200);
     return () => clearTimeout(t);
   });
 

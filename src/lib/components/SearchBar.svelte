@@ -9,27 +9,27 @@
     inputEl?.focus();
   }
 
-  // Validate the query (debounced) so the input can tint red like Eole's
-  // keyboard-search does on a miss.
+  // Classify the query (debounced) to tint the input: plain free text stays
+  // white, a valid structured query turns green, an unparseable one turns red
+  // like Eole's keyboard-search does on a miss.
   $effect(() => {
     const q = ui.searchQuery;
     if (!q.trim()) {
-      ui.searchInvalid = false;
+      ui.searchKind = "plain";
       return;
     }
     const t = setTimeout(async () => {
       try {
-        const err = await call<string | null>("search_validate", { query: q });
-        ui.searchInvalid = err != null;
+        ui.searchKind = await call<"plain" | "syntax" | "invalid">("search_classify", { query: q });
       } catch {
-        ui.searchInvalid = false;
+        ui.searchKind = "plain";
       }
     }, 200);
     return () => clearTimeout(t);
   });
 </script>
 
-<div class="search" class:invalid={ui.searchInvalid}>
+<div class="search" class:invalid={ui.searchKind === "invalid"} class:syntax={ui.searchKind === "syntax"}>
   <span class="glass"><Icon name="search_icon_white" size={13} /></span>
   <input
     bind:this={inputEl}
@@ -75,6 +75,9 @@
   }
   .invalid input {
     color: var(--search-invalid);
+  }
+  .syntax input {
+    color: var(--search-valid);
   }
   .clear {
     color: var(--txt-faded);

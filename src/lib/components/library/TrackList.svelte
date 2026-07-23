@@ -10,6 +10,9 @@
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
+  import { tick, untrack } from "svelte";
+
+  let list = $state<VirtualList | null>(null);
 
   // Rows are two-line so the play counter can sit under the title (and the
   // optional second detail under the first). Uniform height keeps VirtualList on
@@ -34,6 +37,26 @@
     library.trackEpoch;
     library.ensureRowRange(visFirst, visLast);
   });
+
+  // After a reload that carries a "scroll to now-playing" intent (set when the
+  // search bar is cleared while a track plays), reveal that track's row. The
+  // intent is read untracked so setting it doesn't fire this early, on the
+  // still-filtered view — only the trackEpoch bump (post-reload) triggers it.
+  $effect(() => {
+    library.trackEpoch;
+    const id = untrack(() => library.scrollToTrackId);
+    if (id == null) return;
+    untrack(() => (library.scrollToTrackId = null));
+    void revealTrack(id);
+  });
+
+  async function revealTrack(id: number) {
+    const idx = await library.indexOfTrack(id);
+    if (idx == null) return;
+    const row = library.rowForTrackIndex(idx);
+    await tick(); // let VirtualList render with the new row count first
+    list?.scrollToIndex(row);
+  }
 
   /** Play order matches the visible track order (both use LIBRARY_SORT), so the
       track index is the start index. A left-panel selection narrows to that value. */
@@ -104,6 +127,7 @@
     <div class="empty">No tracks</div>
   {:else}
     <VirtualList
+      bind:this={list}
       count={library.trackListRowCount}
       itemHeight={ROW_H}
       padBottom={ui.bottombarH}

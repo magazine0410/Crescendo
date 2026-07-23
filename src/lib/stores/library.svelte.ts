@@ -102,6 +102,12 @@ class LibraryStore {
   selection = $state<Set<number>>(new Set());
   selectionAnchor = $state<number | null>(null);
 
+  /** One-shot intent: after the next Track-list reload, scroll the view to this
+      track id (its position in the freshly-loaded view). Set when clearing the
+      search bar while a track plays, so the now-playing song is revealed within
+      the full library instead of snapping to the top. Consumed once. */
+  scrollToTrackId = $state<number | null>(null);
+
   scanning = $state(false);
   scanProgress = $state<ScanProgress | null>(null);
   scanError = $state<string | null>(null);
@@ -261,6 +267,39 @@ class LibraryStore {
     const local = i - m.rowStart[g];
     if (m.hasSep[g] && local === 0) return { sep: m.groups[g], albumId: m.groups[g].album_id };
     return { trackIndex: m.trackStart[g] + (local - (m.hasSep[g] ? 1 : 0)) };
+  }
+
+  /** Inverse of `rowAt` for a track: the flat row index a given (flat) track
+      index maps to, honoring album separators. */
+  rowForTrackIndex(trackIndex: number): number {
+    const m = this.trackModel;
+    if (!m) return trackIndex;
+    const ts = m.trackStart;
+    let lo = 0;
+    let hi = ts.length - 2; // last valid group index
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (ts[mid] <= trackIndex) lo = mid;
+      else hi = mid - 1;
+    }
+    return m.rowStart[lo] + (m.hasSep[lo] ? 1 : 0) + (trackIndex - m.trackStart[lo]);
+  }
+
+  /** 0-based index of a track within the current Track-list view (same filter +
+      order as the loaded rows), or null if it isn't in the view. */
+  async indexOfTrack(id: number): Promise<number | null> {
+    try {
+      return await call<number | null>("track_index", {
+        query: this.query,
+        mode: this.wireMode,
+        value: this.selectedValue,
+        collapse: this.groupingCollapse,
+        trackId: id,
+      });
+    } catch (e) {
+      console.debug("track_index failed:", e);
+      return null;
+    }
   }
 
   private groupIndexAtRow(i: number): number {

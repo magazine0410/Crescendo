@@ -153,7 +153,7 @@ impl Parser {
         match self.peek() {
             Some('"') => {
                 let (value, flags) = self.quoted()?;
-                Ok(Matcher::Exact { value, case_sensitive: flags.contains('c') })
+                Ok(Matcher::Phrase { value, case_sensitive: flags.contains('c') })
             }
             Some('/') => {
                 let (pattern, flags) = self.regex()?;

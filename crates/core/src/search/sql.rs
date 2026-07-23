@@ -141,14 +141,14 @@ impl Compiler {
                 self.sql.push_str(&format!("ucontains({col}, ?)"));
                 self.params.push(Value::from(value.clone()));
             }
-            Matcher::Exact { value, case_sensitive } => {
+            Matcher::Phrase { value, case_sensitive } => {
                 if *case_sensitive {
-                    self.sql.push_str(&format!("{col} = ?"));
-                    self.params.push(Value::from(value.clone()));
+                    // instr() is a binary (case-sensitive) substring search.
+                    self.sql.push_str(&format!("instr({col}, ?) > 0"));
                 } else {
-                    self.sql.push_str(&format!("ueq({col}, ?)"));
-                    self.params.push(Value::from(value.clone()));
+                    self.sql.push_str(&format!("ucontains({col}, ?)"));
                 }
+                self.params.push(Value::from(value.clone()));
             }
             Matcher::Regex { pattern, case_sensitive } => {
                 let pattern = if *case_sensitive {

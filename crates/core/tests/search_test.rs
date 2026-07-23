@@ -78,9 +78,10 @@ fn tag_contains_and_exact() {
     assert_eq!(count(&db, "artist=charlie"), 1);
     assert_eq!(count(&db, "artist=CHARLIE"), 1);
     assert_eq!(count(&db, "artist=\"Charlie Parker\""), 1);
-    assert_eq!(count(&db, "artist=\"charlie parker\""), 1); // exact, case-folded
-    assert_eq!(count(&db, "artist=\"charlie parker\"c"), 0); // case-sensitive
-    assert_eq!(count(&db, "artist=\"Charlie\""), 0); // exact ≠ substring
+    assert_eq!(count(&db, "artist=\"charlie parker\""), 1); // substring, case-folded
+    assert_eq!(count(&db, "artist=\"Charlie Parker\"c"), 1); // case-sensitive, exact case
+    assert_eq!(count(&db, "artist=\"charlie parker\"c"), 0); // case-sensitive miss
+    assert_eq!(count(&db, "artist=\"Charlie\""), 1); // quoted value is a substring match
 }
 
 #[test]
@@ -130,6 +131,46 @@ fn sort_tags_are_searchable() {
 fn unknown_tag_matches_nothing() {
     let (_d, db) = test_db();
     assert_eq!(count(&db, "bogus=parker"), 0);
+}
+
+#[test]
+fn track_index_locates_row_in_view() {
+    use crescendo_core::model::BrowseMode;
+    let (_d, db) = test_db();
+    let id_of = |title: &str| -> i64 {
+        db.with(|c| Ok(c.query_row("SELECT id FROM tracks WHERE title = ?1", [title], |r| r.get(0))?))
+            .unwrap()
+    };
+    let index_of = |title: &str| {
+        db.track_index(None, BrowseMode::Artist, None, false, id_of(title)).unwrap()
+    };
+    // Full library, LIBRARY_SORT by albumartist: Charlie Parker, Joe Hisaishi,
+    // Maroon 5, ZUN.
+    assert_eq!(index_of("Now's The Time"), Some(0));
+    assert_eq!(index_of("Bird Man"), Some(1));
+    assert_eq!(index_of("Misery"), Some(2));
+    assert_eq!(index_of("ネイティブフェイス"), Some(3));
+
+    // A track outside the filtered view has no index.
+    let filter = search::compile("artist=zun").unwrap();
+    let charlie = id_of("Now's The Time");
+    let zun = id_of("ネイティブフェイス");
+    assert_eq!(db.track_index(Some(&filter), BrowseMode::Artist, None, false, charlie).unwrap(), None);
+    assert_eq!(db.track_index(Some(&filter), BrowseMode::Artist, None, false, zun).unwrap(), Some(0));
+}
+
+#[test]
+fn classify_tints_queries() {
+    use search::QueryKind;
+    assert_eq!(search::classify(""), QueryKind::Plain);
+    assert_eq!(search::classify("nausicaa wind"), QueryKind::Plain); // free text only
+    assert_eq!(search::classify("\"exact phrase\""), QueryKind::Plain); // quoted free text
+    assert_eq!(search::classify("#(year >= 2010)"), QueryKind::Syntax);
+    assert_eq!(search::classify("artist=parker"), QueryKind::Syntax);
+    assert_eq!(search::classify("!ambient"), QueryKind::Syntax);
+    assert_eq!(search::classify("|(a, b)"), QueryKind::Syntax);
+    assert_eq!(search::classify("#(year <)"), QueryKind::Invalid);
+    assert_eq!(search::classify("artist=\"oops"), QueryKind::Invalid);
 }
 
 #[test]
