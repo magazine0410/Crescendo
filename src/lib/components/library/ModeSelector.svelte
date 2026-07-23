@@ -148,7 +148,7 @@
     position: relative;
     display: flex;
     align-items: center;
-    height: 30px;
+    height: var(--header-h);
     border-bottom: 1px solid var(--hairline);
     flex: none;
     padding: 0 4px;

@@ -118,7 +118,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 12px;
+    height: var(--header-h);
+    padding: 0 12px;
     color: var(--txt-faded);
     border-bottom: 1px solid var(--hairline);
     flex: none;

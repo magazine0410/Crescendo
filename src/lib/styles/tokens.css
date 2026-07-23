@@ -31,5 +31,7 @@
   /* layout */
   --topbar-h: 42px;
   --bottombar-h: 76px;
+  --header-h: 36px;   /* shared height of the per-panel column headers so their
+                         bottom hairlines line up across the three columns */
   --font-base: 12px;
 }

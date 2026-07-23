@@ -181,9 +181,10 @@
   }
   .viewheader {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
-    padding: 10px 16px;
+    height: var(--header-h);
+    padding: 0 16px;
     border-bottom: 1px solid var(--hairline);
     flex: none;
   }
