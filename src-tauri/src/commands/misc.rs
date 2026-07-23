@@ -106,21 +106,50 @@ pub async fn autostart_get() -> Result<bool, String> {
     }
 }
 
+/// First match for `cmd` on `$PATH`, if any.
+#[cfg(target_os = "linux")]
+fn find_on_path(cmd: &str) -> Option<std::path::PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths).map(|d| d.join(cmd)).find(|p| p.is_file())
+}
+
+/// The command the autostart entry should launch (already shell-quoted).
+///
+/// A debug build (`npm run tauri dev`) loads the Vite dev-server URL rather than
+/// bundled assets, so it can't start on its own at login — it would just show
+/// "Could not connect to localhost". Enabling autostart from such a build should
+/// still boot the *installed* release app, so point the entry at `crescendo` on
+/// PATH instead of the current (dev) executable. A release build loads its
+/// bundled assets and works wherever it lives, so use its own path directly.
+#[cfg(target_os = "linux")]
+fn autostart_exec() -> Result<String, String> {
+    if cfg!(debug_assertions) {
+        if let Some(installed) = find_on_path("crescendo") {
+            return Ok(format!("\"{}\"", installed.display()));
+        }
+        return Err("Autostart needs the installed Crescendo app, but no `crescendo` \
+                    was found on PATH. Install the .deb/.rpm and enable this from the \
+                    installed app rather than from `tauri dev`."
+            .into());
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Ok(format!("\"{}\"", exe.display()))
+}
+
 /// Enable or disable launching Crescendo on login by writing/removing a
-/// freedesktop autostart `.desktop` entry pointing at the current executable.
+/// freedesktop autostart `.desktop` entry.
 #[tauri::command]
 pub async fn autostart_set(enabled: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         let path = autostart_desktop_path()?;
         if enabled {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let exe = exe.to_string_lossy();
+            let exec = autostart_exec()?;
             let entry = format!(
                 "[Desktop Entry]\n\
                  Type=Application\n\
                  Name=Crescendo\n\
-                 Exec=\"{exe}\"\n\
+                 Exec={exec}\n\
                  Terminal=false\n\
                  X-GNOME-Autostart-enabled=true\n"
             );
