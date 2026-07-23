@@ -28,6 +28,9 @@ pub enum Cmd {
     SetShuffle(bool),
     CycleRepeat,
     SetStopAfterCurrent(bool),
+    /// Toggle spectrum-analysis messages on the audio-filter; the frontend
+    /// enables this only while the Visualizer tab is visible.
+    SetSpectrumEnabled(bool),
     QueueAdd(Vec<i64>),
     QueueRemove(Vec<usize>),
     QueueClear,
@@ -59,6 +62,15 @@ pub struct PlayerState {
 pub struct PositionEvent {
     pub ms: u64,
     pub duration_ms: u64,
+}
+
+/// Spectrum-analyser frame. `bands` are per-band magnitudes (dB), low frequency
+/// first; `rate` is the audio sample rate the FFT ran at, so the frontend can
+/// label bars in Hz correctly regardless of the file's rate.
+#[derive(Debug, Clone, Serialize)]
+pub struct SpectrumEvent {
+    pub bands: Vec<f32>,
+    pub rate: u32,
 }
 
 /// Emitted when a track crosses the "played" threshold and its counter is bumped.
@@ -116,6 +128,9 @@ pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
 
 struct Engine {
     playbin: gstreamer::Element,
+    /// `spectrum` element spliced into playbin's audio path as its audio-filter;
+    /// posts per-band magnitudes on the bus when `post-messages` is on.
+    spectrum: gstreamer::Element,
     app: AppHandle,
     db: Arc<Db>,
     queue: Arc<Mutex<PlayQueue>>,
@@ -149,6 +164,21 @@ fn run_player(
     queue_shared: Arc<Mutex<Vec<i64>>>,
 ) -> anyhow::Result<()> {
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
+
+    // Spectrum analyser spliced into the audio path as a passthrough
+    // audio-filter. It starts silent (post-messages off) and the frontend
+    // turns it on only while the Visualizer tab is visible, so the FFT costs
+    // nothing the rest of the time. `bands` is the FFT resolution (log-binned
+    // into display bars on the frontend); `interval` sets the message rate.
+    let spectrum = gstreamer::ElementFactory::make("spectrum")
+        .property("bands", 512u32)
+        .property("interval", 33_000_000u64) // ns -> ~30 messages/sec
+        .property("threshold", -80i32) // dB noise floor
+        .property("post-messages", false)
+        .property("multi-channel", false) // single magnitude array (channels averaged)
+        .build()?;
+    playbin.set_property("audio-filter", &spectrum);
+
     let queue = Arc::new(Mutex::new(PlayQueue::default()));
     let gapless_pending = Arc::new(Mutex::new(false));
     let stop_after_current = Arc::new(AtomicBool::new(false));
@@ -181,6 +211,7 @@ fn run_player(
 
     let mut engine = Engine {
         playbin,
+        spectrum,
         app,
         db,
         queue,
@@ -209,9 +240,15 @@ fn run_player(
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
-        // Bus messages (blocks up to 50 ms — this is the loop's pacing)
+        // Bus messages (blocks up to 50 ms — this is the loop's pacing).
+        // `timed_pop` returns as soon as a message is available, so after the
+        // first one drain the rest immediately: the spectrum element posts
+        // ~30/s and we don't want its messages to back up behind the timeout.
         if let Some(msg) = bus.timed_pop(gstreamer::ClockTime::from_mseconds(50)) {
             engine.handle_bus(&msg);
+            while let Some(msg) = bus.pop() {
+                engine.handle_bus(&msg);
+            }
         }
         // Position tick
         if engine.status == Status::Playing && last_tick.elapsed() >= Duration::from_millis(250) {
@@ -316,6 +353,9 @@ impl Engine {
                 self.stop_after_current.store(on, Ordering::SeqCst);
                 self.publish_state();
             }
+            Cmd::SetSpectrumEnabled(on) => {
+                self.spectrum.set_property("post-messages", on);
+            }
             Cmd::QueueAdd(ids) => {
                 self.queue.lock().expect("queue poisoned").queue_add(&ids);
                 self.sync_queue_shared();
@@ -365,6 +405,31 @@ impl Engine {
                 match id {
                     Some(id) => self.start_track(id),
                     None => self.stop(),
+                }
+            }
+            MessageView::Element(el) => {
+                // Spectrum analyser output: one magnitude value (dB) per band,
+                // low frequency first. Forward the raw array; the frontend
+                // log-bins, normalizes and quantizes it into display bars.
+                if let Some(s) = el.structure() {
+                    if s.has_name("spectrum") {
+                        if let Ok(list) = s.get::<gstreamer::List>("magnitude") {
+                            let bands: Vec<f32> =
+                                list.iter().filter_map(|v| v.get::<f32>().ok()).collect();
+                            // Sample rate of the audio the FFT actually ran at,
+                            // read from the analyser's negotiated input caps.
+                            let rate = self
+                                .spectrum
+                                .static_pad("sink")
+                                .and_then(|p| p.current_caps())
+                                .and_then(|c| {
+                                    c.structure(0).and_then(|st| st.get::<i32>("rate").ok())
+                                })
+                                .unwrap_or(44_100)
+                                .max(1) as u32;
+                            let _ = self.app.emit("player:spectrum", SpectrumEvent { bands, rate });
+                        }
+                    }
                 }
             }
             MessageView::StreamStart(_) => {

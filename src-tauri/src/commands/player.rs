@@ -84,6 +84,15 @@ pub async fn player_set_stop_after_current(
 }
 
 #[tauri::command]
+pub async fn player_set_spectrum_enabled(
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<(), String> {
+    state.player.send(Cmd::SetSpectrumEnabled(on));
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn player_get_state(state: State<'_, AppState>) -> Result<PlayerState, String> {
     Ok(state.player.state())
 }

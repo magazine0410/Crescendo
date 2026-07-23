@@ -21,6 +21,8 @@ export interface Prefs {
   /** Raw text of the user-defined "custom" left-panel filter, e.g. `%year%`.
       Parsed to a single tag in LibraryStore; blank = unset (tab reads "CUSTOM"). */
   custom_browse_tag: string;
+  /** Bar color for the Visualizer tab, `#rrggbb`. Defaults to the theme accent. */
+  visualizer_color: string;
 }
 
 const DEFAULTS: Prefs = {
@@ -36,6 +38,7 @@ const DEFAULTS: Prefs = {
   track_separators: false,
   grouping_split_multi: false,
   custom_browse_tag: "",
+  visualizer_color: "#ffaf32", // == --accent (theme orange)
 };
 
 class PrefsStore {
@@ -64,6 +67,7 @@ class PrefsStore {
     if (raw.grouping_split_multi)
       v.grouping_split_multi = raw.grouping_split_multi === "true";
     if (raw.custom_browse_tag) v.custom_browse_tag = raw.custom_browse_tag;
+    if (raw.visualizer_color) v.visualizer_color = raw.visualizer_color;
     this.values = v;
     this.loaded = true;
   }

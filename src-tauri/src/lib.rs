@@ -72,6 +72,7 @@ pub fn run() {
             commands::player::player_set_shuffle,
             commands::player::player_cycle_repeat,
             commands::player::player_set_stop_after_current,
+            commands::player::player_set_spectrum_enabled,
             commands::player::player_get_state,
             commands::player::queue_add,
             commands::player::queue_remove,

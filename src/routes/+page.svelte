@@ -8,6 +8,7 @@
   import LibraryTab from "$lib/components/library/LibraryTab.svelte";
   import PlaylistsTab from "$lib/components/playlists/PlaylistsTab.svelte";
   import NowPlayingTab from "$lib/components/nowplaying/NowPlayingTab.svelte";
+  import VisualizerTab from "$lib/components/visualizer/VisualizerTab.svelte";
   import ContextMenu from "$lib/components/common/ContextMenu.svelte";
   import SettingsDialog from "$lib/components/settings/SettingsDialog.svelte";
   import SetFilterDialog from "$lib/components/library/SetFilterDialog.svelte";
@@ -71,8 +72,10 @@
       <LibraryTab />
     {:else if ui.activeTab === "playlists"}
       <PlaylistsTab />
-    {:else}
+    {:else if ui.activeTab === "nowplaying"}
       <NowPlayingTab />
+    {:else}
+      <VisualizerTab />
     {/if}
   </main>
   <BottomBar />

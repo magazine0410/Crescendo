@@ -1,4 +1,4 @@
-export type Tab = "library" | "playlists" | "nowplaying";
+export type Tab = "library" | "playlists" | "nowplaying" | "visualizer";
 
 class UiStore {
   activeTab = $state<Tab>("playlists");

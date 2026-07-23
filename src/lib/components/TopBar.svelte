@@ -7,6 +7,7 @@
     { id: "library", label: "Library", icon: "library_icon" },
     { id: "playlists", label: "Playlists", icon: "playlist_icon" },
     { id: "nowplaying", label: "Now playing", icon: "nowplaying_icon" },
+    { id: "visualizer", label: "Visualizer", icon: "visualizer_icon" },
   ];
 
   interface Props {

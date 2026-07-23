@@ -246,6 +246,13 @@
         {#if keyTest === "bad"}<p class="bad">Key rejected by Last.fm.</p>{/if}
         <p class="hint">Without a key, Now Playing falls back to local tags.</p>
       </section>
+
+      <section>
+        <h3>Visualizer</h3>
+        <p class="hint">
+          Change the bar color from the swatch in the Visualizer tab. More options coming here later.
+        </p>
+      </section>
     </div>
   </div>
 {/if}

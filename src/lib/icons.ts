@@ -69,6 +69,7 @@ export const iconMap: Record<string, string> = {
   "filters_increase": "arrow-up-to-line",
   "filters_decrease": "arrow-down-to-line",
   "value_filter": "filter",
+  "visualizer_icon": "audio-lines",
 };
 
 /** Lucide icon name -> inner SVG markup (paths only; 24x24 viewBox). */
@@ -82,6 +83,7 @@ export const lucideIcons: Record<string, string> = {
   "arrow-up-to-line": "<path d=\"M5 3h14\" /> <path d=\"m18 13-6-6-6 6\" /> <path d=\"M12 7v14\" />",
   "cable": "<path d=\"M17 19a1 1 0 0 1-1-1v-2a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a1 1 0 0 1-1 1z\" /> <path d=\"M17 21v-2\" /> <path d=\"M19 14V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V10\" /> <path d=\"M21 21v-2\" /> <path d=\"M3 5V3\" /> <path d=\"M4 10a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2a2 2 0 0 1-2 2z\" /> <path d=\"M7 5V3\" />",
   "calendar": "<path d=\"M8 2v4\" /> <path d=\"M16 2v4\" /> <rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\" /> <path d=\"M3 10h18\" />",
+  "audio-lines": "<path d=\"M2 10v3\" /> <path d=\"M6 6v11\" /> <path d=\"M10 3v18\" /> <path d=\"M14 8v7\" /> <path d=\"M18 5v13\" /> <path d=\"M22 10v3\" />",
   "chart-no-axes-column": "<path d=\"M5 21v-6\" /> <path d=\"M12 21V3\" /> <path d=\"M19 21V9\" />",
   "chevron-up": "<path d=\"m18 15-6-6-6 6\" />",
   "circle-pause": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <line x1=\"10\" x2=\"10\" y1=\"15\" y2=\"9\" /> <line x1=\"14\" x2=\"14\" y1=\"15\" y2=\"9\" />",

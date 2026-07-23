@@ -327,6 +327,8 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return {} as T;
     case "prefs_set":
       return undefined as T;
+    case "player_set_spectrum_enabled":
+      return undefined as T;
     case "waveform_get": {
       // Synthetic loudness envelope so the waveform is visible in `npm run dev`.
       const n = 500;
