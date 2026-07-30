@@ -72,7 +72,8 @@
         {library.mode === "genre" ? "genres"
         : library.mode === "artist" ? "artists"
         : library.mode === "album" ? "albums"
-        : library.mode === "grouping" ? "groups" : "values"})</span>
+        : library.mode === "albumartist" ? "album artists"
+        : library.isGroupingMode ? "groups" : "values"})</span>
     </button>
   {:else}
     {@const [value, n, sort] = library.filteredValues[i - 1]}

@@ -74,6 +74,7 @@ pub enum BrowseMode {
     Genre,
     Artist,
     Album,
+    Albumartist,
     Grouping,
     /// User-defined left-panel filter: browse a single tag the user typed
     /// (e.g. `year`). Serializes as `{"custom": "year"}`. Only tags that map to
@@ -91,6 +92,7 @@ impl BrowseMode {
             BrowseMode::Genre => Some("genre"),
             BrowseMode::Artist => Some("artist"),
             BrowseMode::Album => Some("album"),
+            BrowseMode::Albumartist => Some("albumartist"),
             BrowseMode::Grouping => Some("grouping"),
             BrowseMode::Custom(tag) => crate::search::browse_column(tag),
         }

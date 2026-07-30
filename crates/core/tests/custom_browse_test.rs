@@ -3,29 +3,33 @@ use crescendo_core::model::{BrowseMode, PlayContext};
 use std::collections::HashMap;
 
 /// A tiny library exercising the custom left-panel filter: an INTEGER column
-/// (`year`, incl. a NULL) and a CJK-tagged TEXT column (`genre`).
+/// (`year`, incl. a NULL), a CJK-tagged TEXT column (`genre`), and album
+/// artists with a romanized sort name.
 fn make_db() -> (tempfile::TempDir, Db) {
-    // (year, genre)
-    let rows: [(Option<i64>, Option<&str>); 4] = [
-        (Some(1999), Some("ジャズ")),
-        (Some(1999), Some("ジャズ")),
-        (Some(2000), Some("Rock")),
-        (None, None),
+    // (year, genre, albumartist, albumartistsort)
+    let rows: [(Option<i64>, Option<&str>, Option<&str>, Option<&str>); 4] = [
+        (Some(1999), Some("ジャズ"), Some("上海アリス幻樂団"), Some("Shanghai Alice")),
+        (Some(1999), Some("ジャズ"), Some("上海アリス幻樂団"), Some("Shanghai Alice")),
+        (Some(2000), Some("Rock"), Some("Zulu"), None),
+        (None, None, None, None),
     ];
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("t.db")).unwrap();
     db.with(|conn| {
         let mut ins = conn.prepare(
-            "INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms, year, genre)
-             VALUES (?1, ?2, ?3, 0, 0, 'FLAC', 180000, ?4, ?5)",
+            "INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms, year, genre,
+                                albumartist, albumartistsort)
+             VALUES (?1, ?2, ?3, 0, 0, 'FLAC', 180000, ?4, ?5, ?6, ?7)",
         )?;
-        for (i, (year, genre)) in rows.iter().enumerate() {
+        for (i, (year, genre, albumartist, albumartistsort)) in rows.iter().enumerate() {
             ins.execute(rusqlite::params![
                 format!("/m/{i}.flac"),
                 "/m",
                 format!("{i}.flac"),
                 *year,
                 *genre,
+                *albumartist,
+                *albumartistsort,
             ])?;
         }
         Ok(())
@@ -40,6 +44,21 @@ fn counts(vals: &[(String, i64, String)]) -> HashMap<String, i64> {
 
 fn custom(tag: &str) -> BrowseMode {
     BrowseMode::Custom(tag.to_string())
+}
+
+#[test]
+fn fixed_albumartist_uses_romanized_sort_values() {
+    let (_d, db) = make_db();
+
+    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    assert_eq!(
+        vals,
+        vec![
+            ("".into(), 1, "".into()),
+            ("上海アリス幻樂団".into(), 2, "Shanghai Alice".into()),
+            ("Zulu".into(), 1, "".into()),
+        ],
+    );
 }
 
 #[test]

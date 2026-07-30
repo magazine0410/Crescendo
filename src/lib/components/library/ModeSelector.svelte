@@ -9,7 +9,7 @@
     { id: "genre", label: "GENRE" },
     { id: "artist", label: "ARTIST" },
     { id: "album", label: "ALBUM" },
-    { id: "grouping", label: "GROUPING" },
+    { id: "albumartist", label: "ALBUM ARTIST" },
     { id: "custom", label: "CUSTOM" },
   ];
 
@@ -69,12 +69,13 @@
   const hiddenModes = $derived(modes.slice(visibleCount));
   const hiddenActive = $derived(hiddenModes.some((m) => m.id === library.mode));
 
-  /** Right-click menus: GROUPING toggles multi-theme collapse; CUSTOM sets/clears
-      the browsed tag. Other tabs have no menu. */
+  /** Right-click menus: a CUSTOM tab set to GROUPING keeps its multi-theme
+      collapse toggle alongside the normal custom-filter actions. */
   function tabMenu(e: MouseEvent, id: BrowseMode) {
-    if (id === "grouping") {
-      openContextMenu(e, [
-        {
+    if (id === "custom") {
+      const items: MenuItem[] = [];
+      if (library.isGroupingMode) {
+        items.push({
           label: "Show multi-tagged titles separately",
           checked: prefs.values.grouping_split_multi,
           action: async () => {
@@ -84,17 +85,17 @@
             library.selectValue(null);
             await library.loadValues();
           },
-        },
-      ]);
-    } else if (id === "custom") {
-      openContextMenu(e, [
+        });
+      }
+      items.push(
         { label: "Set filter…", action: () => openSetFilter() },
         {
           label: "Clear filter",
           disabled: library.customTag.trim() === "",
           action: () => library.setCustomTag(""),
         },
-      ]);
+      );
+      openContextMenu(e, items);
     }
   }
 

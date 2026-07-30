@@ -122,9 +122,15 @@ export interface AlbumInfo {
 
 /** The left-panel filter category. `custom` is a user-defined single-tag filter
     (see LibraryStore.customTag); it is the only mode that carries extra data. */
-export type BrowseMode = "genre" | "artist" | "album" | "grouping" | "custom";
+export type BrowseMode =
+  | "genre"
+  | "artist"
+  | "album"
+  | "albumartist"
+  | "grouping"
+  | "custom";
 
-/** Wire form of the backend `BrowseMode` enum. The four fixed modes serialize as
+/** Wire form of the backend `BrowseMode` enum. The fixed modes serialize as
     their lowercase name; `custom` serializes as `{ custom: "year" }` (serde
     externally-tagged newtype variant). Never send the bare string "custom" — the
     Rust enum has no such unit variant and deserialization would fail. Build this
@@ -133,6 +139,7 @@ export type WireBrowseMode =
   | "genre"
   | "artist"
   | "album"
+  | "albumartist"
   | "grouping"
   | { custom: string };
 

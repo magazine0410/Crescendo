@@ -133,7 +133,7 @@
 <style>
   .seek {
     position: relative;
-    height: 14px;
+    height: var(--transport-seek-height, 14px);
     display: flex;
     align-items: center;
     flex: 1;

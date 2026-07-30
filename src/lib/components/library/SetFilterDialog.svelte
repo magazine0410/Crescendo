@@ -13,11 +13,11 @@
   /** Tags offered in the dropdown — each resolves through the backend's
       browse_column whitelist, so every pick is guaranteed to work. Kept
       alphabetical; %year% and %date% both group by release year. genre / artist /
-      album / grouping are deliberately omitted (they're the four built-in tabs)
+      album / albumartist are deliberately omitted (they're the four built-in tabs)
       but still work if typed in manually. */
   const TAGS = [
-    "albumartist", "bitdepth", "bitrate", "codec", "date",
-    "disc", "rating", "samplerate", "track", "year",
+    "bitdepth", "bitrate", "codec", "date", "disc",
+    "grouping", "rating", "samplerate", "track", "year",
   ];
 
   let value = $state("");

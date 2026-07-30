@@ -82,7 +82,7 @@ fn push_value_clause(
     value: &str,
     collapse: bool,
 ) {
-    let lhs = if collapse && matches!(mode, BrowseMode::Grouping) {
+    let lhs = if collapse && mode.column() == Some("grouping") {
         Some(GROUPING_FIRST_SEG.to_string())
     } else {
         mode.column().map(col_expr)
@@ -128,8 +128,9 @@ impl Db {
     }
 
     /// Distinct values for the Library tab's left column, with track counts
-    /// and (for artist mode) the romanized sort value used for ordering and
-    /// display. NULL values group under "" (rendered as "?" by the UI).
+    /// and (for artist/album-artist modes) the romanized sort value used for
+    /// ordering and display. NULL values group under "" (rendered as "?" by
+    /// the UI).
     pub fn browse_values(
         &self,
         mode: BrowseMode,
@@ -150,8 +151,14 @@ impl Db {
                  ORDER BY COALESCE(NULLIF(COALESCE(MAX(artistsort), ''), ''), \
                                    COALESCE({col}, '')) COLLATE NOCASE"
             ),
+            BrowseMode::Albumartist => format!(
+                "SELECT COALESCE({col}, ''), COUNT(*), COALESCE(MAX(albumartistsort), '') \
+                 FROM tracks WHERE {where_sql} GROUP BY COALESCE({col}, '') \
+                 ORDER BY COALESCE(NULLIF(COALESCE(MAX(albumartistsort), ''), ''), \
+                                   COALESCE({col}, '')) COLLATE NOCASE"
+            ),
             // Collapse multi-theme grouping tags under their primary theme.
-            BrowseMode::Grouping if collapse => format!(
+            _ if col == "grouping" && collapse => format!(
                 "SELECT {GROUPING_FIRST_SEG}, COUNT(*), '' FROM tracks WHERE {where_sql} \
                  GROUP BY {GROUPING_FIRST_SEG} ORDER BY 1 COLLATE NOCASE"
             ),

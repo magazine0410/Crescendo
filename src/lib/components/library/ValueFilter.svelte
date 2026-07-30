@@ -6,7 +6,8 @@
     library.mode === "genre" ? "genres"
     : library.mode === "artist" ? "artists"
     : library.mode === "album" ? "albums"
-    : library.mode === "grouping" ? "groups" : "values",
+    : library.mode === "albumartist" ? "album artists"
+    : library.isGroupingMode ? "groups" : "values",
   );
 </script>
 

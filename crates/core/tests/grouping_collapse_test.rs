@@ -2,6 +2,10 @@ use crescendo_core::db::Db;
 use crescendo_core::model::BrowseMode;
 use std::collections::HashMap;
 
+fn grouping() -> BrowseMode {
+    BrowseMode::Custom("grouping".into())
+}
+
 /// A tiny library keyed on `grouping` tags: three variants sharing the primary
 /// theme `"Old Adam" Bar` (one plain, two semicolon-joined — one with a space
 /// before the `;` to exercise the TRIM), plus `Other` and an untagged (NULL)
@@ -45,7 +49,7 @@ fn browse_values_collapses_multi_theme_to_primary() {
 
     // Collapsed: the three `"Old Adam" Bar…` variants fold into one umbrella
     // whose count sums them; Other and the NULL ("") bucket stand alone.
-    let collapsed = db.browse_values(BrowseMode::Grouping, None, true).unwrap();
+    let collapsed = db.browse_values(grouping(), None, true).unwrap();
     assert_eq!(collapsed.len(), 3);
     let c = value_counts(&collapsed);
     assert_eq!(c.get("\"Old Adam\" Bar"), Some(&3));
@@ -58,7 +62,7 @@ fn browse_values_uncollapsed_keeps_full_strings() {
     let (_d, db) = make_db();
 
     // Uncollapsed: each distinct full tag is its own row (today's behavior).
-    let full = db.browse_values(BrowseMode::Grouping, None, false).unwrap();
+    let full = db.browse_values(grouping(), None, false).unwrap();
     assert_eq!(full.len(), 5);
     let c = value_counts(&full);
     assert_eq!(c.get("\"Old Adam\" Bar"), Some(&1));
@@ -73,17 +77,17 @@ fn selecting_umbrella_matches_every_variant() {
     // Collapsed selection matches all three variants; uncollapsed matches only
     // the byte-exact tag.
     assert_eq!(
-        db.track_count(None, BrowseMode::Grouping, Some(umbrella), true).unwrap(),
+        db.track_count(None, grouping(), Some(umbrella), true).unwrap(),
         3
     );
     assert_eq!(
-        db.track_count(None, BrowseMode::Grouping, Some(umbrella), false).unwrap(),
+        db.track_count(None, grouping(), Some(umbrella), false).unwrap(),
         1
     );
 
     // tracks_range (the windowed list + play-queue order) agrees with the count.
     let rows = db
-        .tracks_range(None, BrowseMode::Grouping, Some(umbrella), true, 0, 100)
+        .tracks_range(None, grouping(), Some(umbrella), true, 0, 100)
         .unwrap();
     assert_eq!(rows.len(), 3);
 }

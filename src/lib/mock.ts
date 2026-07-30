@@ -115,6 +115,7 @@ function browseCol(t: Track, mode: string): string {
     mode === "genre" ? t.genre
     : mode === "artist" ? t.artist
     : mode === "album" ? t.album
+    : mode === "albumartist" ? t.albumartist
     : t.grouping;
   return v ?? "";
 }
@@ -155,7 +156,8 @@ function firstSeg(v: string): string {
 function browseKey(t: Track, mode: WireMode, collapse: boolean): string {
   if (typeof mode === "object") {
     const f = customField(mode.custom);
-    return f ? f(t) : "";
+    const v = f ? f(t) : "";
+    return mode.custom.trim().toLowerCase() === "grouping" && collapse ? firstSeg(v) : v;
   }
   const v = browseCol(t, mode);
   return mode === "grouping" && collapse ? firstSeg(v) : v;
@@ -206,6 +208,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         const v = browseKey(t, mode, collapse);
         counts.set(v, (counts.get(v) ?? 0) + 1);
         if (mode === "artist" && t.artistsort) sorts.set(v, t.artistsort);
+        if (mode === "albumartist" && t.albumartistsort) sorts.set(v, t.albumartistsort);
       }
       return [...counts.entries()]
         .map(([v, n]): [string, number, string] => [v, n, sorts.get(v) ?? ""])

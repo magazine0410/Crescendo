@@ -15,7 +15,7 @@ export interface Prefs {
   /** Which tab opens on launch. */
   default_tab: "library" | "playlists";
   track_separators: boolean;
-  /** GROUPING filter: show each full (semicolon-joined) tag as its own row
+  /** Custom GROUPING filter: show each full (semicolon-joined) tag as its own row
       instead of collapsing multi-theme tags under their primary theme. */
   grouping_split_multi: boolean;
   /** Raw text of the user-defined "custom" left-panel filter, e.g. `%year%`.
@@ -66,7 +66,17 @@ class PrefsStore {
     if (raw.track_separators) v.track_separators = raw.track_separators === "true";
     if (raw.grouping_split_multi)
       v.grouping_split_multi = raw.grouping_split_multi === "true";
-    if (raw.custom_browse_tag) v.custom_browse_tag = raw.custom_browse_tag;
+    if (raw.custom_browse_tag) {
+      // ALBUM ARTIST became a fixed tab; migrate that former custom choice to
+      // GROUPING so existing five-tab layouts become the intended direct swap.
+      const custom = raw.custom_browse_tag.trim().toLowerCase();
+      if (custom === "albumartist" || custom === "%albumartist%") {
+        v.custom_browse_tag = "%grouping%";
+        await call("prefs_set", { key: "custom_browse_tag", value: "%grouping%" });
+      } else {
+        v.custom_browse_tag = raw.custom_browse_tag;
+      }
+    }
     if (raw.visualizer_color) v.visualizer_color = raw.visualizer_color;
     this.values = v;
     this.loaded = true;

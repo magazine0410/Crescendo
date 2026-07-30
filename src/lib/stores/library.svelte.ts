@@ -112,10 +112,18 @@ class LibraryStore {
   scanProgress = $state<ScanProgress | null>(null);
   scanError = $state<string | null>(null);
 
-  /** Whether the GROUPING view is collapsed to primary themes right now.
-      Only grouping mode collapses; other modes always match exactly. */
+  /** Whether the active fixed/custom filter browses the grouping tag. */
+  get isGroupingMode(): boolean {
+    return (
+      this.mode === "grouping" ||
+      (this.mode === "custom" && this.customTagName === "grouping")
+    );
+  }
+
+  /** Whether the GROUPING custom view is collapsed to primary themes right now.
+      Other modes always match exactly. */
   get groupingCollapse(): boolean {
-    return this.mode === "grouping" && !prefs.values.grouping_split_multi;
+    return this.isGroupingMode && !prefs.values.grouping_split_multi;
   }
 
   /** Raw text of the custom filter (persisted centrally in prefs). */

@@ -15,6 +15,12 @@
     player.repeat === "off" ? "repeat" : player.repeat === "all" ? "repeat_all" : "repeat_track",
   );
 
+  // Keep the default 76px bar at a 17.5px seek area, then scale with the bar
+  // while retaining practical bounds at its minimum and maximum heights.
+  const seekHeight = $derived(
+    Math.min(37.5, Math.max(15, (ui.bottombarH / 76) * 17.5)),
+  );
+
   /* drag the top edge to resize the bar */
   let resizing = false;
   function onGripDown(e: PointerEvent) {
@@ -33,7 +39,11 @@
   }
 </script>
 
-<footer class="bottombar" style:height={`${ui.bottombarH}px`}>
+<footer
+  class="bottombar"
+  style:height={`${ui.bottombarH}px`}
+  style:--transport-seek-height={`${seekHeight}px`}
+>
   <div
     class="grip"
     role="separator"
@@ -128,6 +138,7 @@
     text-overflow: ellipsis;
     font-weight: 350;
     color: var(--txt);
+    transform: translateY(-2px);
   }
   .title.placeholder {
     color: var(--txt-faded);
