@@ -1,6 +1,6 @@
 [package]
 name = "crescendo"
-version = "0.1.7"
+version = "0.1.8"
 description = "A foobar2000 Eole-style music player"
 authors = ["magazine"]
 edition = "2021"
