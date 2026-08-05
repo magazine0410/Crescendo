@@ -123,7 +123,6 @@
     <VirtualList
       count={rows.length}
       itemHeight={rowHeight}
-      padBottom={ui.bottombarH}
       row={rowSnippet}
     />
   {/if}
@@ -178,6 +177,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    padding-bottom: var(--bottombar-h);
   }
   .viewheader {
     display: flex;

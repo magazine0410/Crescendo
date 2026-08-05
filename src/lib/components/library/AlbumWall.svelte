@@ -3,7 +3,6 @@
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
-  import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, call, type Album, type Track } from "$lib/api";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem } from "$lib/menu";
@@ -47,7 +46,6 @@
     count={library.albums.length}
     cellWidth={CELL_W}
     cellHeight={CELL_H}
-    padBottom={ui.bottombarH}
     initialScrollTop={library.wallScroll}
     onScrollChange={(y) => (library.wallScroll = y)}
     cell={cellSnippet}
@@ -79,6 +77,7 @@
     height: 100%;
     min-width: 0;
     flex: 1;
+    padding-bottom: var(--bottombar-h);
   }
   .cell {
     display: flex;

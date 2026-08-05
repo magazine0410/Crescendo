@@ -3,7 +3,6 @@
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
-  import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { call, type PlayContext } from "$lib/api";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
@@ -130,7 +129,6 @@
       bind:this={list}
       count={library.trackListRowCount}
       itemHeight={ROW_H}
-      padBottom={ui.bottombarH}
       initialScrollTop={library.trackScroll}
       onScrollChange={(y) => (library.trackScroll = y)}
       onVisibleRange={(f, l) => {
@@ -204,6 +202,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    padding-bottom: var(--bottombar-h);
   }
   .viewheader {
     display: flex;
@@ -290,6 +289,14 @@
   .trow.selected,
   .trow.selected:hover {
     background: var(--selection);
+  }
+  .trow.selected .no,
+  .trow.selected .tartist,
+  .trow.selected .tplays,
+  .trow.selected .tdetail,
+  .trow.selected .tdetail2,
+  .trow.selected .dur {
+    color: var(--txt-superfaded);
   }
   .trow.playing {
     color: var(--accent);
