@@ -40,6 +40,39 @@ fn add_tracks_skips_existing_members() {
 }
 
 #[test]
+fn set_order_rewrites_the_sidebar_order() {
+    let (_d, db) = test_db();
+    let a = db.playlist_create("A").unwrap();
+    let b = db.playlist_create("B").unwrap();
+    let c = db.playlist_create("C").unwrap();
+    let listed = |db: &Db| -> Vec<i64> { db.playlist_list().unwrap().iter().map(|p| p.id).collect() };
+    assert_eq!(listed(&db), vec![a, b, c], "created order to begin with");
+
+    db.playlists_set_order(&[c, a, b]).unwrap();
+    assert_eq!(listed(&db), vec![c, a, b]);
+
+    // A playlist made afterwards goes to the end, not into the middle.
+    let d = db.playlist_create("D").unwrap();
+    assert_eq!(listed(&db), vec![c, a, b, d]);
+}
+
+#[test]
+fn set_order_leaves_unlisted_playlists_in_the_list() {
+    let (_d, db) = test_db();
+    let a = db.playlist_create("A").unwrap();
+    let b = db.playlist_create("B").unwrap();
+    let c = db.playlist_create("C").unwrap();
+
+    // A stale list that predates C must not drop it.
+    db.playlists_set_order(&[b, a]).unwrap();
+    let mut got: Vec<i64> = db.playlist_list().unwrap().iter().map(|p| p.id).collect();
+    got.sort();
+    let mut want = vec![a, b, c];
+    want.sort();
+    assert_eq!(got, want);
+}
+
+#[test]
 fn ids_with_track_reports_membership() {
     let (_d, db) = test_db();
     let a = db.playlist_create("A").unwrap();

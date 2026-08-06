@@ -45,6 +45,14 @@ pub async fn playlist_delete(
     Ok(())
 }
 
+/// Persist the sidebar order of the playlists. Deliberately emits no
+/// `playlist:changed`: the caller already shows the new order, and a refetch
+/// would only make the sidebar rebuild what it just drew.
+#[tauri::command]
+pub async fn playlists_set_order(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
+    state.db.playlists_set_order(&ids).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn playlist_tracks(state: State<'_, AppState>, id: i64) -> Result<Vec<Track>, String> {
     state.db.playlist_tracks(id).map_err(|e| e.to_string())

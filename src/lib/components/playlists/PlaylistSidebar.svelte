@@ -1,5 +1,6 @@
 <script lang="ts">
   import { playlists } from "$lib/stores/playlists.svelte";
+  import { prefs } from "$lib/stores/prefs.svelte";
   import { isTauri } from "$lib/api";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import Icon from "../common/Icon.svelte";
@@ -57,13 +58,59 @@
       { label: "Delete playlist", action: () => playlists.remove(id) },
     ]);
   }
+
+  /** The header icon's menu. Check marks show only while the sort is locked,
+      because that is when an order is actually being held; unlocked, the two
+      sort entries are one-off actions. Locking needs a sort to hold, so it
+      stays disabled until one has been picked. */
+  function sortMenu(e: MouseEvent) {
+    const key = prefs.values.playlist_sort;
+    const locked = prefs.values.playlist_sort_locked;
+    openContextMenu(e, [
+      {
+        label: "Sort A → Z",
+        checked: locked && key === "name",
+        action: () => playlists.applySort("name"),
+      },
+      {
+        label: "Sort by track count",
+        checked: locked && key === "count",
+        action: () => playlists.applySort("count"),
+      },
+      { separator: true, label: "" },
+      {
+        label: "Lock sorting",
+        checked: locked,
+        disabled: key === "manual",
+        action: () => playlists.setSortLocked(!locked),
+      },
+    ]);
+  }
 </script>
 
 <aside class="sidebar">
-  <div class="header">
-    <Icon name="playlist_icon" size={14} />
-    <span>Playlists…</span>
-    <span class="count">{playlists.list.length}</span>
+  <div class="header" class:active={playlists.filter.length > 0}>
+    <button
+      class="sortbtn"
+      class:locked={prefs.values.playlist_sort_locked}
+      title="Sort playlists"
+      aria-label="Sort playlists"
+      onclick={sortMenu}
+      oncontextmenu={sortMenu}
+    >
+      <Icon name="playlist_icon" size={14} />
+    </button>
+    <input
+      bind:value={playlists.filter}
+      type="text"
+      placeholder="Playlists…"
+      spellcheck="false"
+      autocomplete="off"
+    />
+    {#if playlists.filter}
+      <button class="clear" onclick={() => (playlists.filter = "")} title="Clear filter">✕</button>
+    {/if}
+    <span class="count">{playlists.visible.length}</span>
   </div>
   <button class="create" onclick={createPlaylist}>
     <span class="plus">+</span> Create Playlist
@@ -84,7 +131,10 @@
     </div>
   {/if}
   <div class="items">
-    {#each playlists.list as p (p.id)}
+    {#if playlists.visible.length === 0 && playlists.filter}
+      <div class="nomatch">No playlist matches “{playlists.filter}”</div>
+    {/if}
+    {#each playlists.visible as p (p.id)}
       {#if renamingId === p.id}
         <input
           class="rename"
@@ -132,9 +182,46 @@
     border-bottom: 1px solid var(--hairline);
     flex: none;
   }
+  /* Typing in the header filters the list, like the library's value filter. */
+  .header:focus-within,
+  .header.active {
+    background: rgba(0, 0, 0, 0.25);
+  }
+  .header input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--txt);
+  }
+  .header input::placeholder {
+    color: var(--txt-faded);
+  }
+  .sortbtn {
+    display: flex;
+    flex: none;
+    color: var(--txt-faded);
+  }
+  .sortbtn:hover,
+  .sortbtn.locked {
+    color: var(--txt);
+  }
+  .header .clear {
+    flex: none;
+    color: var(--txt-faded);
+    font-size: 10px;
+    padding: 2px 4px;
+  }
+  .header .clear:hover {
+    color: var(--txt);
+  }
   .header .count {
     margin-left: auto;
     font-size: 10px;
+  }
+  .nomatch {
+    padding: 8px 12px;
+    color: var(--txt-faded);
+    font-size: 11px;
   }
   .create {
     display: flex;

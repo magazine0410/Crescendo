@@ -335,6 +335,13 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       playlistTracks.set(id, []);
       return id as T;
     }
+    case "playlists_set_order": {
+      const ids = args.ids as number[];
+      const rank = new Map(ids.map((id, i) => [id, i]));
+      // Unlisted playlists keep their place at the end, as in the backend.
+      playlists.sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+      return undefined as T;
+    }
     case "playlist_rename": {
       const p = playlists.find((p) => p.id === args.id);
       if (p) p.name = args.name as string;

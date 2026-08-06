@@ -47,6 +47,21 @@ impl Db {
         })
     }
 
+    /// Store the order of the playlists themselves (the sidebar order), by
+    /// writing `position` in the order the ids are given. Ids that are not
+    /// listed keep their old position, so a stale list cannot lose a playlist.
+    pub fn playlists_set_order(&self, ids: &[i64]) -> Result<()> {
+        self.with(|conn| {
+            let mut upd = conn.prepare("UPDATE playlists SET position = ?2 WHERE id = ?1")?;
+            conn.execute_batch("BEGIN")?;
+            for (i, id) in ids.iter().enumerate() {
+                upd.execute(rusqlite::params![id, i as i64])?;
+            }
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        })
+    }
+
     pub fn playlist_rename(&self, id: i64, name: &str) -> Result<()> {
         self.with(|conn| {
             conn.execute("UPDATE playlists SET name = ?2 WHERE id = ?1",

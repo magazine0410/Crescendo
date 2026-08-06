@@ -5,6 +5,19 @@ import {
   type PlaylistInfo,
   type Track,
 } from "../api";
+import { prefs, type PlaylistSort } from "./prefs.svelte";
+
+/** Sidebar order. Names go through localeCompare — playlists carry no sort
+    tags, and this library is heavily non-ASCII. Track counts go largest
+    first, with the name breaking ties. */
+function comparePlaylists(key: Exclude<PlaylistSort, "manual">) {
+  return (a: PlaylistInfo, b: PlaylistInfo) => {
+    if (key === "count" && a.track_count !== b.track_count) {
+      return b.track_count - a.track_count;
+    }
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  };
+}
 
 class PlaylistsStore {
   list = $state<PlaylistInfo[]>([]);
@@ -15,6 +28,18 @@ class PlaylistsStore {
   dropTargetId = $state<number | null>(null);
   /** Outcome of the last drop, shown in the sidebar until dismissed. */
   dropReport = $state<string | null>(null);
+  /** Sidebar filter text; matches playlist names, case-insensitive. */
+  filter = $state("");
+
+  /** What the sidebar draws: names narrowed by `filter`, in the locked sort
+      order when one is active, otherwise in the stored order. */
+  visible = $derived.by(() => {
+    const f = this.filter.trim().toLowerCase();
+    const rows = f ? this.list.filter((p) => p.name.toLowerCase().includes(f)) : [...this.list];
+    const key = prefs.values.playlist_sort;
+    if (prefs.values.playlist_sort_locked && key !== "manual") rows.sort(comparePlaylists(key));
+    return rows;
+  });
 
   async init() {
     await this.refresh();
@@ -49,6 +74,29 @@ class PlaylistsStore {
       once, so patch every occurrence). */
   bumpPlayCount(id: number, plays: number) {
     for (const t of this.tracks) if (t.id === id) t.play_count = plays;
+  }
+
+  /** Sort the sidebar now and remember the choice. The order is written to
+      the database as well, so it holds after a restart even when the sort is
+      not locked. */
+  async applySort(key: Exclude<PlaylistSort, "manual">) {
+    await this.persistOrder([...this.list].sort(comparePlaylists(key)));
+    await prefs.set("playlist_sort", key);
+  }
+
+  /** Locked, new playlists sort into place instead of landing at the end.
+      Unlocking freezes the order that is on screen, so nothing jumps. */
+  async setSortLocked(locked: boolean) {
+    const key = prefs.values.playlist_sort;
+    if (!locked && key !== "manual") {
+      await this.persistOrder([...this.list].sort(comparePlaylists(key)));
+    }
+    await prefs.set("playlist_sort_locked", locked);
+  }
+
+  private async persistOrder(ordered: PlaylistInfo[]) {
+    this.list = ordered;
+    await call("playlists_set_order", { ids: ordered.map((p) => p.id) });
   }
 
   async create(name: string): Promise<number> {

@@ -1,5 +1,8 @@
 import { isTauri, call } from "../api";
 
+/** Sidebar order of the playlist list. "manual" = the stored order. */
+export type PlaylistSort = "manual" | "name" | "count";
+
 /** Keys mirrored into the backend `prefs` table. */
 export interface Prefs {
   library_path: string;
@@ -26,6 +29,11 @@ export interface Prefs {
   /** Track-list sort, encoded `key:secondary:asc|desc` (see library store's
       parseTrackSort). Blank = default LIBRARY_SORT order. */
   track_sort: string;
+  /** Last sort applied to the playlist sidebar. */
+  playlist_sort: PlaylistSort;
+  /** Keep `playlist_sort` applied, so playlists made later sort into place
+      instead of landing at the end. */
+  playlist_sort_locked: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -43,6 +51,8 @@ const DEFAULTS: Prefs = {
   custom_browse_tag: "",
   visualizer_color: "#ffaf32", // == --accent (theme orange)
   track_sort: "",
+  playlist_sort: "manual",
+  playlist_sort_locked: false,
 };
 
 class PrefsStore {
@@ -83,6 +93,9 @@ class PrefsStore {
     }
     if (raw.visualizer_color) v.visualizer_color = raw.visualizer_color;
     if (raw.track_sort) v.track_sort = raw.track_sort;
+    if (raw.playlist_sort === "name" || raw.playlist_sort === "count")
+      v.playlist_sort = raw.playlist_sort;
+    if (raw.playlist_sort_locked) v.playlist_sort_locked = raw.playlist_sort_locked === "true";
     this.values = v;
     this.loaded = true;
   }
