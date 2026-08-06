@@ -107,7 +107,12 @@
   const info = $derived(playlists.selected());
 </script>
 
-<section class="view">
+<section
+  class="view"
+  class:droptarget={playlists.selectedId != null &&
+    playlists.dropTargetId === playlists.selectedId}
+  data-drop-playlist={playlists.selectedId}
+>
   <header class="viewheader">
     <span class="title">
       Playlist : {info?.name ?? "—"}
@@ -178,6 +183,10 @@
     flex-direction: column;
     min-height: 0;
     padding-bottom: var(--bottombar-h);
+  }
+  /* Drag from the file manager is hovering the open playlist. */
+  .view.droptarget {
+    box-shadow: inset 0 0 0 1px var(--selection);
   }
   .viewheader {
     display: flex;

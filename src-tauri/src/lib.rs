@@ -88,6 +88,7 @@ pub fn run() {
             commands::playlists::playlist_add_tracks,
             commands::playlists::playlist_remove_tracks,
             commands::playlists::playlist_reorder,
+            commands::playlists::playlist_add_paths,
             commands::playlists::playlist_import_m3u,
             commands::misc::prefs_get_all,
             commands::misc::prefs_set,

@@ -1,5 +1,6 @@
 use crate::state::AppState;
 use crescendo_core::db::playlists::PlaylistInfo;
+use crescendo_core::import::DropImportResult;
 use crescendo_core::m3u::M3uImportResult;
 use crescendo_core::model::Track;
 use std::path::PathBuf;
@@ -92,6 +93,31 @@ pub async fn playlist_reorder(
     state.db.playlist_reorder(id, &from, to).map_err(|e| e.to_string())?;
     let _ = app.emit("playlist:changed", id);
     Ok(())
+}
+
+/// Append dropped files and folders to a playlist. Tag reading can take a
+/// moment on a folder off an HDD, so it runs off the command thread.
+#[tauri::command]
+pub async fn playlist_add_paths(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    paths: Vec<String>,
+) -> Result<DropImportResult, String> {
+    let db = state.db.clone();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crescendo_core::import::add_paths_to_playlist(&db, id, &paths).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let _ = app.emit("playlist:changed", id);
+    // Only a drop that pulled new files into the library moves the counts.
+    if result.imported > 0 {
+        let _ = app.emit("library:changed", ());
+    }
+    Ok(result)
 }
 
 #[tauri::command]

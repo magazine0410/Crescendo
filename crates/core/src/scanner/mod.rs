@@ -1,4 +1,4 @@
-mod albums;
+pub(crate) mod albums;
 pub mod tags;
 
 use crate::db::Db;
@@ -11,9 +11,83 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 use tags::TrackMeta;
 
-const AUDIO_EXTS: &[&str] = &["flac", "mp3", "wav", "opus", "ogg", "m4a", "aac", "aiff"];
+pub const AUDIO_EXTS: &[&str] = &["flac", "mp3", "wav", "opus", "ogg", "m4a", "aac", "aiff"];
 const BATCH_SIZE: usize = 1000;
 const PROGRESS_EVERY: u64 = 500;
+
+/// true if the extension is one the scanner indexes. Case-insensitive.
+pub fn is_audio_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| AUDIO_EXTS.contains(&ext.to_lowercase().as_str()))
+}
+
+/// Upsert statement for one `tracks` row, keyed on `path`. Shared with
+/// `crate::import`, which adds dropped files one at a time.
+pub(crate) const UPSERT_TRACK: &str = r#"
+    INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms,
+                       bitrate, sample_rate, bit_depth, title, artist, album,
+                       albumartist, titlesort, artistsort, albumartistsort,
+                       genre, grouping, track_no, disc_no, year,
+                       date, has_embedded_art, search_blob, missing)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, 0)
+    ON CONFLICT(path) DO UPDATE SET
+        dir = excluded.dir, filename = excluded.filename,
+        mtime = excluded.mtime, size = excluded.size,
+        format = excluded.format, duration_ms = excluded.duration_ms,
+        bitrate = excluded.bitrate, sample_rate = excluded.sample_rate,
+        bit_depth = excluded.bit_depth, title = excluded.title,
+        artist = excluded.artist, album = excluded.album,
+        albumartist = excluded.albumartist,
+        titlesort = excluded.titlesort, artistsort = excluded.artistsort,
+        albumartistsort = excluded.albumartistsort, genre = excluded.genre,
+        grouping = excluded.grouping, track_no = excluded.track_no,
+        disc_no = excluded.disc_no, year = excluded.year,
+        date = excluded.date, has_embedded_art = excluded.has_embedded_art,
+        search_blob = excluded.search_blob, missing = 0
+"#;
+
+/// Bind one file onto a statement prepared from [`UPSERT_TRACK`]. Callers
+/// prepare once and loop, so a batch pays for the parse only once.
+pub(crate) fn upsert_row(
+    stmt: &mut rusqlite::Statement<'_>,
+    path: &str,
+    dir: &str,
+    filename: &str,
+    mtime: i64,
+    size: i64,
+    meta: &TrackMeta,
+) -> rusqlite::Result<()> {
+    stmt.execute(rusqlite::params![
+        path,
+        dir,
+        filename,
+        mtime,
+        size,
+        meta.format,
+        meta.duration_ms,
+        meta.bitrate,
+        meta.sample_rate,
+        meta.bit_depth,
+        meta.title,
+        meta.artist,
+        meta.album,
+        meta.albumartist,
+        meta.titlesort,
+        meta.artistsort,
+        meta.albumartistsort,
+        meta.genre,
+        meta.grouping,
+        meta.track_no,
+        meta.disc_no,
+        meta.year,
+        meta.date,
+        meta.has_embedded_art,
+        tags::search_blob(meta),
+    ])?;
+    Ok(())
+}
 
 pub struct ScanOptions {
     pub root: PathBuf,
@@ -164,8 +238,7 @@ fn walk(
             continue;
         }
         let path = entry.path();
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else { continue };
-        if !AUDIO_EXTS.contains(&ext.to_lowercase().as_str()) {
+        if !is_audio_file(path) {
             continue;
         }
         let Some(path_str) = path.to_str() else {
@@ -220,31 +293,7 @@ fn write_loop(
     counters: Counters,
     progress: &(dyn Fn(ScanProgress) + Sync),
 ) -> Result<()> {
-    let mut upsert = conn.prepare(
-        r#"
-        INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms,
-                           bitrate, sample_rate, bit_depth, title, artist, album,
-                           albumartist, titlesort, artistsort, albumartistsort,
-                           genre, grouping, track_no, disc_no, year,
-                           date, has_embedded_art, search_blob, missing)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, 0)
-        ON CONFLICT(path) DO UPDATE SET
-            dir = excluded.dir, filename = excluded.filename,
-            mtime = excluded.mtime, size = excluded.size,
-            format = excluded.format, duration_ms = excluded.duration_ms,
-            bitrate = excluded.bitrate, sample_rate = excluded.sample_rate,
-            bit_depth = excluded.bit_depth, title = excluded.title,
-            artist = excluded.artist, album = excluded.album,
-            albumartist = excluded.albumartist,
-            titlesort = excluded.titlesort, artistsort = excluded.artistsort,
-            albumartistsort = excluded.albumartistsort, genre = excluded.genre,
-            grouping = excluded.grouping, track_no = excluded.track_no,
-            disc_no = excluded.disc_no, year = excluded.year,
-            date = excluded.date, has_embedded_art = excluded.has_embedded_art,
-            search_blob = excluded.search_blob, missing = 0
-        "#,
-    )?;
+    let mut upsert = conn.prepare(UPSERT_TRACK)?;
 
     let mut in_batch = 0usize;
     let mut existed_check = conn.prepare("SELECT 1 FROM tracks WHERE path = ?1")?;
@@ -265,34 +314,15 @@ fn write_loop(
             }
         };
         let existed = existed_check.exists([&file.path])?;
-        let blob = tags::search_blob(&meta);
-        upsert.execute(rusqlite::params![
-            file.path,
-            file.dir,
-            file.filename,
+        upsert_row(
+            &mut upsert,
+            &file.path,
+            &file.dir,
+            &file.filename,
             file.mtime,
             file.size,
-            meta.format,
-            meta.duration_ms,
-            meta.bitrate,
-            meta.sample_rate,
-            meta.bit_depth,
-            meta.title,
-            meta.artist,
-            meta.album,
-            meta.albumartist,
-            meta.titlesort,
-            meta.artistsort,
-            meta.albumartistsort,
-            meta.genre,
-            meta.grouping,
-            meta.track_no,
-            meta.disc_no,
-            meta.year,
-            meta.date,
-            meta.has_embedded_art,
-            blob,
-        ])?;
+            &meta,
+        )?;
         if existed {
             counters.updated.fetch_add(1, Ordering::Relaxed);
         } else {

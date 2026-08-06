@@ -363,6 +363,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       }
       return undefined as T;
     }
+    // The browser has no filesystem, so a dropped path can only be reported
+    // back as "not audio" — enough to keep the UI path exercised.
+    case "playlist_add_paths":
+      return { added: 0, duplicates: 0, imported: 0, failed: [] } as T;
     case "track_playlist_ids": {
       const tid = args.trackId as number;
       const out: number[] = [];

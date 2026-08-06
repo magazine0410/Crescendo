@@ -77,6 +77,12 @@
       <button onclick={() => (importReport = null)}>✕</button>
     </div>
   {/if}
+  {#if playlists.dropReport}
+    <div class="report">
+      {playlists.dropReport}
+      <button onclick={() => (playlists.dropReport = null)}>✕</button>
+    </div>
+  {/if}
   <div class="items">
     {#each playlists.list as p (p.id)}
       {#if renamingId === p.id}
@@ -94,6 +100,8 @@
         <button
           class="item"
           class:selected={playlists.selectedId === p.id}
+          class:droptarget={playlists.dropTargetId === p.id}
+          data-drop-playlist={p.id}
           onclick={() => playlists.select(p.id)}
           oncontextmenu={(e) => menu(e, p.id, p.name)}
         >
@@ -173,6 +181,12 @@
   }
   .item.selected {
     background: var(--selection);
+    color: var(--txt-full);
+  }
+  /* Drag from the file manager is hovering this playlist. */
+  .item.droptarget {
+    background: var(--hover-row);
+    box-shadow: inset 0 0 0 1px var(--selection);
     color: var(--txt-full);
   }
   .name {

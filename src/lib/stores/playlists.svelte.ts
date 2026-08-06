@@ -1,10 +1,20 @@
-import { call, type M3uImportResult, type PlaylistInfo, type Track } from "../api";
+import {
+  call,
+  type DropImportResult,
+  type M3uImportResult,
+  type PlaylistInfo,
+  type Track,
+} from "../api";
 
 class PlaylistsStore {
   list = $state<PlaylistInfo[]>([]);
   selectedId = $state<number | null>(null);
   tracks = $state<Track[]>([]);
   lastImport = $state<M3uImportResult | null>(null);
+  /** Playlist the file-manager drag is currently over (highlighted). */
+  dropTargetId = $state<number | null>(null);
+  /** Outcome of the last drop, shown in the sidebar until dismissed. */
+  dropReport = $state<string | null>(null);
 
   async init() {
     await this.refresh();
@@ -65,6 +75,31 @@ class PlaylistsStore {
   async addTracks(id: number, trackIds: number[]) {
     await call("playlist_add_tracks", { id, trackIds });
     await this.refresh();
+  }
+
+  /** Append files/folders dropped from the file manager. Unknown files are
+      read into the library first; tracks the playlist already holds are
+      skipped. Reports the outcome through `dropReport`. */
+  async addPaths(id: number, paths: string[]) {
+    this.dropReport = "Adding dropped files…";
+    try {
+      const r = await call<DropImportResult>("playlist_add_paths", { id, paths });
+      const name = this.list.find((p) => p.id === id)?.name ?? "playlist";
+      const parts: string[] = [];
+      parts.push(r.added === 1 ? "Added 1 track" : `Added ${r.added} tracks`);
+      if (r.imported > 0) parts.push(`${r.imported} new to the library`);
+      if (r.duplicates > 0) parts.push(`${r.duplicates} already in the playlist`);
+      if (r.failed.length > 0) parts.push(`${r.failed.length} unreadable`);
+      this.dropReport =
+        r.added === 0 && r.duplicates === 0 && r.failed.length === 0
+          ? "Nothing to add — no audio files in the drop"
+          : `${parts.join(", ")} → "${name}"`;
+      await this.refresh();
+      return r;
+    } catch (e) {
+      this.dropReport = `Could not add the dropped files: ${e}`;
+      throw e;
+    }
   }
 
   async removeTracks(id: number, positions: number[]) {

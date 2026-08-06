@@ -67,6 +67,14 @@ export interface M3uImportResult {
   missing: string[];
 }
 
+/** Outcome of dropping files/folders onto a playlist. */
+export interface DropImportResult {
+  added: number;
+  duplicates: number;
+  imported: number;
+  failed: string[];
+}
+
 export interface LibraryStats {
   tracks: number;
   albums: number;
