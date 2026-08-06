@@ -482,6 +482,22 @@ impl Db {
                     vec![Value::from(*id)],
                 )
             }),
+            // Playlist by playlist, so the ids line up with the combined view
+            // the user double-clicked in.
+            PlayContext::Playlists { ids } => self.with(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT pt.track_id FROM playlist_tracks pt \
+                     JOIN tracks t ON t.id = pt.track_id AND t.missing = 0 \
+                     WHERE pt.playlist_id = ?1 ORDER BY pt.position",
+                )?;
+                let mut out = Vec::new();
+                for id in ids {
+                    for row in stmt.query_map([id], |r| r.get::<_, i64>(0))? {
+                        out.push(row?);
+                    }
+                }
+                Ok(out)
+            }),
             PlayContext::LibraryView { query, sort } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (where_sql, params) = track_where(filter.as_ref());

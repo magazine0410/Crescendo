@@ -12,6 +12,15 @@ pub struct PlaylistInfo {
     pub total_duration_ms: i64,
 }
 
+/// One playlist's tracks, kept in its own group so a view of several
+/// playlists can head each run and map a row back to the playlist it
+/// belongs to.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlaylistTracks {
+    pub playlist_id: i64,
+    pub tracks: Vec<Track>,
+}
+
 impl Db {
     pub fn playlist_list(&self) -> Result<Vec<PlaylistInfo>> {
         self.with(|conn| {
@@ -88,6 +97,28 @@ impl Db {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([id], track_from_row)?;
             rows.map(|r| Ok(r?)).collect()
+        })
+    }
+
+    /// Tracks of several playlists at once, one group per id and in the order
+    /// the ids are given. Ids that no longer exist come back as empty groups,
+    /// so the caller's grouping never shifts under it.
+    pub fn playlist_tracks_multi(&self, ids: &[i64]) -> Result<Vec<PlaylistTracks>> {
+        self.with(|conn| {
+            let sql = format!(
+                "SELECT {TRACK_COLS} FROM playlist_tracks pt
+                 JOIN tracks ON tracks.id = pt.track_id
+                 WHERE pt.playlist_id = ?1 ORDER BY pt.position"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut out = Vec::with_capacity(ids.len());
+            for id in ids {
+                let tracks = stmt
+                    .query_map([id], track_from_row)?
+                    .collect::<rusqlite::Result<Vec<Track>>>()?;
+                out.push(PlaylistTracks { playlist_id: *id, tracks });
+            }
+            Ok(out)
         })
     }
 

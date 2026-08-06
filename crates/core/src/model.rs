@@ -148,6 +148,10 @@ pub struct TrackSort {
 pub enum PlayContext {
     Album { id: i64 },
     Playlist { id: i64 },
+    /// Several playlists shown as one list (Ctrl/Shift-multi-select in the
+    /// sidebar). Their tracks play back to back, in the order given — the
+    /// same order the view draws them in.
+    Playlists { ids: Vec<i64> },
     LibraryView {
         query: Option<String>,
         #[serde(default)]

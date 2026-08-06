@@ -1,4 +1,5 @@
 use crescendo_core::db::Db;
+use crescendo_core::model::PlayContext;
 
 fn test_db() -> (tempfile::TempDir, Db) {
     let dir = tempfile::tempdir().unwrap();
@@ -70,6 +71,46 @@ fn set_order_leaves_unlisted_playlists_in_the_list() {
     let mut want = vec![a, b, c];
     want.sort();
     assert_eq!(got, want);
+}
+
+/// The combined view of several playlists concatenates them in the order
+/// given, and playback has to resolve to exactly the same list — a row's
+/// index in the view is the index the player is sent.
+#[test]
+fn multi_selection_view_and_playback_agree_on_order() {
+    let (_d, db) = test_db();
+    let a = db.playlist_create("A").unwrap();
+    let b = db.playlist_create("B").unwrap();
+    db.playlist_add_tracks(a, &[3, 1]).unwrap();
+    db.playlist_add_tracks(b, &[5, 2, 4]).unwrap();
+
+    let view: Vec<i64> = db
+        .playlist_tracks_multi(&[b, a])
+        .unwrap()
+        .iter()
+        .flat_map(|g| g.tracks.iter().map(|t| t.id))
+        .collect();
+    assert_eq!(view, vec![5, 2, 4, 3, 1], "playlist order, then position inside each");
+
+    let played = db.resolve_context(&PlayContext::Playlists { ids: vec![b, a] }).unwrap();
+    assert_eq!(played, view, "playback order must match the view row for row");
+}
+
+#[test]
+fn multi_selection_keeps_a_group_per_id() {
+    let (_d, db) = test_db();
+    let a = db.playlist_create("A").unwrap();
+    let empty = db.playlist_create("Empty").unwrap();
+    db.playlist_add_tracks(a, &[1, 2]).unwrap();
+
+    // An empty playlist still gets a group, so the view's grouping cannot
+    // shift onto the wrong playlist.
+    let groups = db.playlist_tracks_multi(&[a, empty, 999]).unwrap();
+    assert_eq!(groups.len(), 3);
+    assert_eq!(groups[0].playlist_id, a);
+    assert_eq!(groups[0].tracks.len(), 2);
+    assert!(groups[1].tracks.is_empty());
+    assert!(groups[2].tracks.is_empty(), "an unknown id is empty, not an error");
 }
 
 #[test]

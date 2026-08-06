@@ -85,6 +85,7 @@ pub fn run() {
             commands::playlists::playlist_delete,
             commands::playlists::playlists_set_order,
             commands::playlists::playlist_tracks,
+            commands::playlists::playlist_tracks_multi,
             commands::playlists::track_playlist_ids,
             commands::playlists::playlist_add_tracks,
             commands::playlists::playlist_remove_tracks,

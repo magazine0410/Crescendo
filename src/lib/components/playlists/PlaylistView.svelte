@@ -12,6 +12,8 @@
   const HEADER_H = 84;
   // Two-line track rows so the play counter can sit under the title.
   const TRACK_H = 38;
+  // Playlist band, drawn only when several playlists are selected at once.
+  const PLAYLIST_H = 30;
 
   interface HeaderRow {
     type: "header";
@@ -23,21 +25,48 @@
     durationMs: number;
     count: number;
   }
+  interface PlaylistRow {
+    type: "playlist";
+    playlistId: number;
+    name: string;
+    durationMs: number;
+    count: number;
+  }
   interface TrackRow {
     type: "track";
     track: Track;
-    /** absolute position in the playlist (play index) */
+    /** Place in the combined list of every selected playlist — the index the
+        player is sent, which `PlayContext` resolves to on the Rust side. */
     index: number;
+    /** Playlist this row came from, and its position inside that playlist.
+        Removal needs these: with several playlists selected they are no
+        longer the same as `index`. */
+    playlistId: number;
+    position: number;
   }
-  type Row = HeaderRow | TrackRow;
+  type Row = PlaylistRow | HeaderRow | TrackRow;
+
+  /** Every selected playlist's tracks, back to back, each row carrying both
+      of its numbers. */
+  const entries = $derived.by(() => {
+    const out: Omit<TrackRow, "type">[] = [];
+    let index = 0;
+    for (const g of playlists.groups) {
+      g.tracks.forEach((track, position) => {
+        out.push({ track, index: index++, playlistId: g.playlist_id, position });
+      });
+    }
+    return out;
+  });
+
+  const multi = $derived(playlists.selectedIds.length > 1);
 
   /** Filter by the active search (plain substring; full query filtering runs
       against the library — playlist views filter client-side). */
   const filtered = $derived.by(() => {
     const q = ui.searchQuery.trim().toLowerCase();
-    const withIndex = playlists.tracks.map((track, index) => ({ track, index }));
-    if (!q) return withIndex;
-    return withIndex.filter(({ track }) =>
+    if (!q) return entries;
+    return entries.filter(({ track }) =>
       [track.title, track.artist, track.album, track.albumartist, track.genre].some((f) =>
         f?.toLowerCase().includes(q),
       ),
@@ -47,9 +76,26 @@
   /** Flatten into album-grouped rows (consecutive same-album runs share a header). */
   const rows = $derived.by(() => {
     const out: Row[] = [];
+    let currentPlaylist: number | null = null;
+    let band: PlaylistRow | null = null;
     let currentKey: string | null = null;
     let header: HeaderRow | null = null;
-    for (const { track, index } of filtered) {
+    for (const { track, index, playlistId, position } of filtered) {
+      if (playlistId !== currentPlaylist) {
+        currentPlaylist = playlistId;
+        currentKey = null;
+        band = null;
+        if (multi) {
+          band = {
+            type: "playlist",
+            playlistId,
+            name: playlists.list.find((p) => p.id === playlistId)?.name ?? "—",
+            durationMs: 0,
+            count: 0,
+          };
+          out.push(band);
+        }
+      }
       const key = `${track.albumartist ?? track.artist ?? ""}${track.album ?? ""}`;
       if (key !== currentKey) {
         currentKey = key;
@@ -69,7 +115,11 @@
         header.durationMs += track.duration_ms;
         header.count += 1;
       }
-      out.push({ type: "track", track, index });
+      if (band) {
+        band.durationMs += track.duration_ms;
+        band.count += 1;
+      }
+      out.push({ type: "track", track, index, playlistId, position });
     }
     return out;
   });
@@ -78,12 +128,21 @@
   // so the function's identity changes with `rows` and VirtualList recomputes
   // its row offsets on any content change.
   const rowHeight = $derived.by(() => {
-    return (i: number): number => (rows[i]?.type === "header" ? HEADER_H : TRACK_H);
+    return (i: number): number => {
+      const t = rows[i]?.type;
+      return t === "header" ? HEADER_H : t === "playlist" ? PLAYLIST_H : TRACK_H;
+    };
   });
 
+  /** One playlist keeps the plain playlist context; several resolve as one
+      concatenated list on the Rust side, in the order shown here. */
   async function playAt(index: number) {
-    if (playlists.selectedId == null) return;
-    await player.playContext({ type: "playlist", id: playlists.selectedId }, index);
+    const ids = playlists.selectedIds;
+    if (ids.length === 0) return;
+    await player.playContext(
+      ids.length === 1 ? { type: "playlist", id: ids[0] } : { type: "playlists", ids },
+      index,
+    );
   }
 
   function trackMenu(e: MouseEvent, r: TrackRow) {
@@ -92,10 +151,10 @@
       { label: "Add to queue", action: () => queue.add([r.track.id]) },
       { separator: true, label: "" },
       {
+        // Removal takes the row's position inside its own playlist, which is
+        // not its index in the combined view.
         label: "Remove from playlist",
-        action: () =>
-          playlists.selectedId != null &&
-          playlists.removeTracks(playlists.selectedId, [r.index]),
+        action: () => playlists.removeTracks(r.playlistId, [r.position]),
       },
     ]);
   }
@@ -115,14 +174,22 @@
 >
   <header class="viewheader">
     <span class="title">
-      Playlist : {info?.name ?? "—"}
+      {#if multi}
+        Playlists : {playlists.selectedIds.length} selected
+      {:else}
+        Playlist : {info?.name ?? "—"}
+      {/if}
       {#if ui.searchQuery.trim()}(Filtered){/if}
     </span>
     <span class="items">{filtered.length} items</span>
   </header>
   {#if rows.length === 0}
     <div class="empty">
-      {info ? "This playlist is empty" : "Select or create a playlist"}
+      {playlists.selectedIds.length === 0
+        ? "Select or create a playlist"
+        : multi
+          ? "These playlists are empty"
+          : "This playlist is empty"}
     </div>
   {:else}
     <VirtualList
@@ -135,7 +202,12 @@
 
 {#snippet rowSnippet(i: number)}
   {@const r = rows[i]}
-  {#if r.type === "header"}
+  {#if r.type === "playlist"}
+    <div class="pband">
+      <span class="pname">{r.name}</span>
+      <span class="pmeta">{r.count} items · {formatTime(r.durationMs)}</span>
+    </div>
+  {:else if r.type === "header"}
     <div class="ah">
       <img class="acover" src={r.albumId != null ? artUrl("album", r.albumId) : "/eole/no_cover.png"} alt="" loading="lazy" onerror={onImgError} />
       <div class="ainfo">
@@ -212,6 +284,30 @@
     align-items: center;
     justify-content: center;
     color: var(--txt-faded);
+  }
+  /* playlist band, shown only with several playlists selected */
+  .pband {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 100%;
+    padding: 0 16px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .pname {
+    font-weight: 600;
+    color: var(--txt-full);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pmeta {
+    margin-left: auto;
+    color: var(--txt-faded);
+    font-size: 10px;
+    flex: none;
   }
   /* album group header */
   .ah {

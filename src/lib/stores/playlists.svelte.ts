@@ -3,6 +3,7 @@ import {
   type DropImportResult,
   type M3uImportResult,
   type PlaylistInfo,
+  type PlaylistTracks,
   type Track,
 } from "../api";
 import { prefs, type PlaylistSort } from "./prefs.svelte";
@@ -21,8 +22,15 @@ function comparePlaylists(key: Exclude<PlaylistSort, "manual">) {
 
 class PlaylistsStore {
   list = $state<PlaylistInfo[]>([]);
-  selectedId = $state<number | null>(null);
-  tracks = $state<Track[]>([]);
+  /** Selected playlists, in sidebar order. Usually one; Ctrl/Shift-click in
+      the sidebar selects several and the view shows them as one list. */
+  selectedIds = $state<number[]>([]);
+  /** Base for Shift-range selects: the last plainly clicked or Ctrl-toggled
+      playlist. Null until something is clicked. */
+  anchorId = $state<number | null>(null);
+  /** Tracks of each selected playlist, one group per playlist, in the same
+      order as `selectedIds`. */
+  groups = $state<PlaylistTracks[]>([]);
   lastImport = $state<M3uImportResult | null>(null);
   /** Playlist the file-manager drag is currently over (highlighted). */
   dropTargetId = $state<number | null>(null);
@@ -41,32 +49,87 @@ class PlaylistsStore {
     return rows;
   });
 
+  /** The tracks of every selected playlist, back to back. This flat order is
+      what a row's play index counts along, and what `PlayContext` resolves to
+      on the Rust side — the two must not drift apart. */
+  tracks = $derived(this.groups.flatMap((g) => g.tracks));
+
+  /** The single selected playlist, or null when several (or none) are. Used
+      where an action only makes sense for one playlist, such as being a
+      drop target for dragged files. */
+  get selectedId(): number | null {
+    return this.selectedIds.length === 1 ? this.selectedIds[0] : null;
+  }
+
+  isSelected(id: number): boolean {
+    return this.selectedIds.includes(id);
+  }
+
   async init() {
     await this.refresh();
-    if (this.selectedId == null && this.list.length > 0) {
+    if (this.selectedIds.length === 0 && this.list.length > 0) {
       await this.select(this.list[0].id);
     }
   }
 
   async refresh() {
     this.list = await call<PlaylistInfo[]>("playlist_list");
-    if (this.selectedId != null) {
-      if (this.list.some((p) => p.id === this.selectedId)) {
-        this.tracks = await call<Track[]>("playlist_tracks", { id: this.selectedId });
-      } else {
-        this.selectedId = null;
-        this.tracks = [];
-      }
-    }
+    // Drop any selection that no longer exists, then reload what is left.
+    const alive = this.selectedIds.filter((id) => this.list.some((p) => p.id === id));
+    await this.applySelection(alive);
   }
 
   async select(id: number) {
-    this.selectedId = id;
-    this.tracks = await call<Track[]>("playlist_tracks", { id });
+    this.anchorId = id;
+    await this.applySelection([id]);
+  }
+
+  /** Ctrl+click: add or remove one playlist from the selection. */
+  async toggle(id: number) {
+    this.anchorId = id;
+    await this.applySelection(
+      this.isSelected(id)
+        ? this.selectedIds.filter((x) => x !== id)
+        : [...this.selectedIds, id],
+    );
+  }
+
+  /** Shift+click: select the visible range between the anchor and this one,
+      replacing the selection. Without a usable anchor — none yet, or it is
+      filtered out of view — acts like a plain click. The anchor stays, so a
+      second Shift+click re-ranges from the same base. */
+  async selectRange(id: number) {
+    const visible = this.visible.map((p) => p.id);
+    const a = this.anchorId === null ? -1 : visible.indexOf(this.anchorId);
+    const b = visible.indexOf(id);
+    if (a < 0 || b < 0) return this.select(id);
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    await this.applySelection(visible.slice(lo, hi + 1));
+  }
+
+  /** Store the selection in sidebar order and load its tracks in one call. */
+  private async applySelection(ids: number[]) {
+    const order = this.visible.map((p) => p.id);
+    this.selectedIds = [...ids].sort((x, y) => order.indexOf(x) - order.indexOf(y));
+    if (this.selectedIds.length === 0) {
+      this.groups = [];
+      return;
+    }
+    this.groups = await call<PlaylistTracks[]>("playlist_tracks_multi", {
+      ids: this.selectedIds,
+    });
   }
 
   selected(): PlaylistInfo | null {
-    return this.list.find((p) => p.id === this.selectedId) ?? null;
+    const id = this.selectedId;
+    return id == null ? null : (this.list.find((p) => p.id === id) ?? null);
+  }
+
+  /** The selected playlists themselves, in view order. */
+  selectedPlaylists(): PlaylistInfo[] {
+    return this.selectedIds
+      .map((id) => this.list.find((p) => p.id === id))
+      .filter((p): p is PlaylistInfo => p !== undefined);
   }
 
   /** Patch a track's play counter in the open playlist so its "Plays: N" line
@@ -113,10 +176,8 @@ class PlaylistsStore {
 
   async remove(id: number) {
     await call("playlist_delete", { id });
-    if (this.selectedId === id) {
-      this.selectedId = null;
-      this.tracks = [];
-    }
+    // refresh() drops it from the selection; the rest of a multi-selection
+    // stays on screen.
     await this.refresh();
   }
 

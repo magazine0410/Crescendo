@@ -149,10 +149,14 @@
       {:else}
         <button
           class="item"
-          class:selected={playlists.selectedId === p.id}
+          class:selected={playlists.isSelected(p.id)}
           class:droptarget={playlists.dropTargetId === p.id}
           data-drop-playlist={p.id}
-          onclick={() => playlists.select(p.id)}
+          onclick={(e) => {
+            if (e.shiftKey) playlists.selectRange(p.id);
+            else if (e.ctrlKey || e.metaKey) playlists.toggle(p.id);
+            else playlists.select(p.id);
+          }}
           oncontextmenu={(e) => menu(e, p.id, p.name)}
         >
           <span class="name">{p.name}</span>

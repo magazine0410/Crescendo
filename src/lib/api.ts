@@ -60,6 +60,12 @@ export interface PlaylistInfo {
   total_duration_ms: number;
 }
 
+/** One playlist's tracks, as returned per selected playlist. */
+export interface PlaylistTracks {
+  playlist_id: number;
+  tracks: Track[];
+}
+
 export interface M3uImportResult {
   playlist_id: number;
   name: string;
@@ -177,6 +183,8 @@ export interface TrackSort {
 export type PlayContext =
   | { type: "album"; id: number }
   | { type: "playlist"; id: number }
+  /** Several playlists shown as one list; they play back to back in order. */
+  | { type: "playlists"; ids: number[] }
   | { type: "library_view"; query: string | null; sort: TrackSort | null }
   | {
       type: "value_tracks";

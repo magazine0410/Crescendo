@@ -335,6 +335,13 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       playlistTracks.set(id, []);
       return id as T;
     }
+    case "playlist_tracks_multi": {
+      const ids = args.ids as number[];
+      return ids.map((id) => ({
+        playlist_id: id,
+        tracks: (playlistTracks.get(id) ?? []).map((t) => tracks[t - 1]).filter(Boolean),
+      })) as T;
+    }
     case "playlists_set_order": {
       const ids = args.ids as number[];
       const rank = new Map(ids.map((id, i) => [id, i]));
@@ -374,6 +381,18 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     // back as "not audio" — enough to keep the UI path exercised.
     case "playlist_add_paths":
       return { added: 0, duplicates: 0, imported: 0, failed: [] } as T;
+    case "playlist_remove_tracks": {
+      const id = args.id as number;
+      const gone = new Set(args.positions as number[]);
+      const ids = (playlistTracks.get(id) ?? []).filter((_, i) => !gone.has(i));
+      playlistTracks.set(id, ids);
+      const p = playlists.find((p) => p.id === id);
+      if (p) {
+        p.track_count = ids.length;
+        p.total_duration_ms = ids.reduce((s, t) => s + (tracks[t - 1]?.duration_ms ?? 0), 0);
+      }
+      return undefined as T;
+    }
     case "track_playlist_ids": {
       const tid = args.trackId as number;
       const out: number[] = [];

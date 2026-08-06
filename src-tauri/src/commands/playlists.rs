@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crescendo_core::db::playlists::PlaylistInfo;
+use crescendo_core::db::playlists::{PlaylistInfo, PlaylistTracks};
 use crescendo_core::import::DropImportResult;
 use crescendo_core::m3u::M3uImportResult;
 use crescendo_core::model::Track;
@@ -56,6 +56,16 @@ pub async fn playlists_set_order(state: State<'_, AppState>, ids: Vec<i64>) -> R
 #[tauri::command]
 pub async fn playlist_tracks(state: State<'_, AppState>, id: i64) -> Result<Vec<Track>, String> {
     state.db.playlist_tracks(id).map_err(|e| e.to_string())
+}
+
+/// Tracks of every selected playlist, grouped per playlist so the view keeps
+/// track of which row belongs where.
+#[tauri::command]
+pub async fn playlist_tracks_multi(
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<Vec<PlaylistTracks>, String> {
+    state.db.playlist_tracks_multi(&ids).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
