@@ -3,6 +3,10 @@ import { isTauri, call } from "../api";
 /** Sidebar order of the playlist list. "manual" = the stored order. */
 export type PlaylistSort = "manual" | "name" | "count";
 
+/** Where collections sit in the playlist sidebar: mixed in with the loose
+    playlists, or gathered below them under a separator. */
+export type CollectionsPlacement = "inline" | "below";
+
 /** Keys mirrored into the backend `prefs` table. */
 export interface Prefs {
   library_path: string;
@@ -34,6 +38,8 @@ export interface Prefs {
   /** Keep `playlist_sort` applied, so playlists made later sort into place
       instead of landing at the end. */
   playlist_sort_locked: boolean;
+  /** Where collections are shown in the playlist sidebar. */
+  collections_placement: CollectionsPlacement;
 }
 
 const DEFAULTS: Prefs = {
@@ -53,6 +59,7 @@ const DEFAULTS: Prefs = {
   track_sort: "",
   playlist_sort: "manual",
   playlist_sort_locked: false,
+  collections_placement: "inline",
 };
 
 class PrefsStore {
@@ -96,6 +103,8 @@ class PrefsStore {
     if (raw.playlist_sort === "name" || raw.playlist_sort === "count")
       v.playlist_sort = raw.playlist_sort;
     if (raw.playlist_sort_locked) v.playlist_sort_locked = raw.playlist_sort_locked === "true";
+    if (raw.collections_placement === "inline" || raw.collections_placement === "below")
+      v.collections_placement = raw.collections_placement;
     this.values = v;
     this.loaded = true;
   }

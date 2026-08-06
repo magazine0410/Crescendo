@@ -147,6 +147,27 @@
       </section>
 
       <section>
+        <h3>Playlists</h3>
+        <label for="collplacement">Collections</label>
+        <select
+          id="collplacement"
+          value={prefs.values.collections_placement}
+          onchange={(e) =>
+            prefs.set(
+              "collections_placement",
+              e.currentTarget.value as "inline" | "below",
+            )}
+        >
+          <option value="inline">Within the playlist list</option>
+          <option value="below">Below the playlists, after a separator</option>
+        </select>
+        <p class="hint">
+          Where grouped playlists appear in the sidebar. Group playlists by
+          right-clicking them and choosing "Set collection…".
+        </p>
+      </section>
+
+      <section>
         <h3>Display</h3>
         <label for="libview">Library view</label>
         <select

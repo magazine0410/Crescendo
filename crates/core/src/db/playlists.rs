@@ -10,6 +10,8 @@ pub struct PlaylistInfo {
     pub name: String,
     pub track_count: i64,
     pub total_duration_ms: i64,
+    /// Collection this playlist belongs to, if any.
+    pub collection_id: Option<i64>,
 }
 
 /// One playlist's tracks, kept in its own group so a view of several
@@ -27,7 +29,8 @@ impl Db {
             let mut stmt = conn.prepare(
                 "SELECT p.id, p.name,
                         COUNT(pt.track_id),
-                        COALESCE(SUM(t.duration_ms), 0)
+                        COALESCE(SUM(t.duration_ms), 0),
+                        p.collection_id
                  FROM playlists p
                  LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
                  LEFT JOIN tracks t ON t.id = pt.track_id
@@ -39,6 +42,7 @@ impl Db {
                     name: r.get(1)?,
                     track_count: r.get(2)?,
                     total_duration_ms: r.get(3)?,
+                    collection_id: r.get(4)?,
                 })
             })?;
             rows.map(|r| Ok(r?)).collect()

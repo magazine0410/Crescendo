@@ -12,6 +12,7 @@
   import ContextMenu from "$lib/components/common/ContextMenu.svelte";
   import SettingsDialog from "$lib/components/settings/SettingsDialog.svelte";
   import SetFilterDialog from "$lib/components/library/SetFilterDialog.svelte";
+  import SetCollectionDialog from "$lib/components/playlists/SetCollectionDialog.svelte";
   import SearchHelp from "$lib/components/SearchHelp.svelte";
 
   let settingsOpen = $state(false);
@@ -82,6 +83,7 @@
   <ContextMenu />
   <SettingsDialog open={settingsOpen} onclose={() => (settingsOpen = false)} />
   <SetFilterDialog />
+  <SetCollectionDialog />
   <SearchHelp open={ui.searchHelpOpen} onclose={() => (ui.searchHelpOpen = false)} />
 </div>
 

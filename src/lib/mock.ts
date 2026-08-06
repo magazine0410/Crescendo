@@ -3,7 +3,7 @@
  * Generates a deterministic fake library big enough to exercise the
  * virtualized lists, and implements the same command surface as src-tauri.
  */
-import type { Album, PlaylistInfo, SortKey, Track, TrackSort } from "./api";
+import type { Album, CollectionInfo, PlaylistInfo, SortKey, Track, TrackSort } from "./api";
 
 const GENRES = ["Jazz", "Soundtrack", "Pop Rock", "Doujin", "Electronic", "Metal", null];
 // [artist, artistsort] — sort tag only where the name is Japanese
@@ -40,9 +40,10 @@ let built = false;
 const tracks: Track[] = [];
 const albums: Album[] = [];
 const playlists: PlaylistInfo[] = [
-  { id: 1, name: "New Playlist", track_count: 27, total_duration_ms: 3_714_000 },
-  { id: 2, name: "Chill", track_count: 14, total_duration_ms: 3_100_000 },
+  { id: 1, name: "New Playlist", track_count: 27, total_duration_ms: 3_714_000, collection_id: null },
+  { id: 2, name: "Chill", track_count: 14, total_duration_ms: 3_100_000, collection_id: null },
 ];
+const collections: Pick<CollectionInfo, "id" | "name" | "collapsed">[] = [];
 const playlistTracks = new Map<number, number[]>();
 const queue: number[] = [];
 
@@ -334,9 +335,52 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       const ids = playlistTracks.get(args.id as number) ?? [];
       return ids.map((id) => tracks[id - 1]).filter(Boolean) as T;
     }
+    case "collection_list":
+      return collections.map((c) => {
+        const members = playlists.filter((p) => p.collection_id === c.id);
+        return {
+          ...c,
+          playlist_count: members.length,
+          // Plain sum: a track in two member playlists counts twice.
+          track_count: members.reduce((s, p) => s + p.track_count, 0),
+          total_duration_ms: members.reduce((s, p) => s + p.total_duration_ms, 0),
+        };
+      }) as T;
+    case "collection_set": {
+      const ids = args.playlistIds as number[];
+      const name = (args.name as string).trim();
+      let target: number | null = null;
+      if (name) {
+        const found = collections.find((c) => c.name.toLowerCase() === name.toLowerCase());
+        target = found ? found.id : Math.max(0, ...collections.map((c) => c.id)) + 1;
+        if (!found) collections.push({ id: target, name, collapsed: false });
+      }
+      for (const p of playlists) if (ids.includes(p.id)) p.collection_id = target;
+      // Drop collections that have no members left, as the backend does.
+      for (let i = collections.length - 1; i >= 0; i--) {
+        if (!playlists.some((p) => p.collection_id === collections[i].id)) collections.splice(i, 1);
+      }
+      return target as T;
+    }
+    case "collection_rename": {
+      const c = collections.find((c) => c.id === args.id);
+      if (c) c.name = (args.name as string).trim();
+      return undefined as T;
+    }
+    case "collection_delete": {
+      const i = collections.findIndex((c) => c.id === args.id);
+      if (i >= 0) collections.splice(i, 1);
+      for (const p of playlists) if (p.collection_id === args.id) p.collection_id = null;
+      return undefined as T;
+    }
+    case "collection_set_collapsed": {
+      const c = collections.find((c) => c.id === args.id);
+      if (c) c.collapsed = args.collapsed as boolean;
+      return undefined as T;
+    }
     case "playlist_create": {
       const id = Math.max(0, ...playlists.map((p) => p.id)) + 1;
-      playlists.push({ id, name: args.name as string, track_count: 0, total_duration_ms: 0 });
+      playlists.push({ id, name: args.name as string, track_count: 0, total_duration_ms: 0, collection_id: null });
       playlistTracks.set(id, []);
       return id as T;
     }

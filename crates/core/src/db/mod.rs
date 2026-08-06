@@ -1,4 +1,5 @@
 mod schema;
+pub mod collections;
 pub mod playlists;
 pub mod prefs;
 pub mod queries;

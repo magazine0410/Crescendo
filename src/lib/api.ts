@@ -61,6 +61,19 @@ export interface PlaylistInfo {
   name: string;
   track_count: number;
   total_duration_ms: number;
+  /** Collection this playlist belongs to, if any. */
+  collection_id: number | null;
+}
+
+/** A named group of playlists in the sidebar. Counts are plain sums of the
+    members, so a track in two of them counts twice. */
+export interface CollectionInfo {
+  id: number;
+  name: string;
+  collapsed: boolean;
+  playlist_count: number;
+  track_count: number;
+  total_duration_ms: number;
 }
 
 /** One playlist's tracks, as returned per selected playlist. */

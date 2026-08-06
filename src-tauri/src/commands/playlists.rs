@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crescendo_core::db::collections::CollectionInfo;
 use crescendo_core::db::playlists::{PlaylistInfo, PlaylistTracks};
 use crescendo_core::import::DropImportResult;
 use crescendo_core::m3u::M3uImportResult;
@@ -148,4 +149,57 @@ pub async fn playlist_import_m3u(
         crescendo_core::m3u::import(&state.db, &PathBuf::from(path)).map_err(|e| e.to_string())?;
     let _ = app.emit("playlist:changed", result.playlist_id);
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn collection_list(state: State<'_, AppState>) -> Result<Vec<CollectionInfo>, String> {
+    state.db.collection_list().map_err(|e| e.to_string())
+}
+
+/// Put playlists into the collection named `name`, creating it when it is new.
+/// A blank name takes them out of whatever collection they were in.
+#[tauri::command]
+pub async fn collection_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    playlist_ids: Vec<i64>,
+    name: String,
+) -> Result<Option<i64>, String> {
+    let id = state.db.collection_set(&playlist_ids, &name).map_err(|e| e.to_string())?;
+    let _ = app.emit("playlist:changed", ());
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn collection_rename(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+) -> Result<(), String> {
+    state.db.collection_rename(id, &name).map_err(|e| e.to_string())?;
+    let _ = app.emit("playlist:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn collection_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    state.db.collection_delete(id).map_err(|e| e.to_string())?;
+    let _ = app.emit("playlist:changed", ());
+    Ok(())
+}
+
+/// Fold or unfold a collection. No event: the sidebar already drew it, and a
+/// refetch would only rebuild the list under the click.
+#[tauri::command]
+pub async fn collection_set_collapsed(
+    state: State<'_, AppState>,
+    id: i64,
+    collapsed: bool,
+) -> Result<(), String> {
+    state.db.collection_set_collapsed(id, collapsed).map_err(|e| e.to_string())
 }

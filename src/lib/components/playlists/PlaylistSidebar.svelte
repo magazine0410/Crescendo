@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { playlists } from "$lib/stores/playlists.svelte";
+  import { playlists, type SidebarRow } from "$lib/stores/playlists.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import { isTauri } from "$lib/api";
-  import { openContextMenu } from "../common/ContextMenu.svelte";
+  import { isTauri, type PlaylistInfo } from "$lib/api";
+  import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
+  import { openSetCollection } from "./SetCollectionDialog.svelte";
   import Icon from "../common/Icon.svelte";
 
   let renamingId = $state<number | null>(null);
+  let renamingCollectionId = $state<number | null>(null);
   let renameValue = $state("");
   let importReport = $state<string | null>(null);
 
@@ -30,6 +32,18 @@
     renamingId = null;
   }
 
+  function startCollectionRename(id: number, current: string) {
+    renamingCollectionId = id;
+    renameValue = current;
+  }
+
+  async function commitCollectionRename() {
+    if (renamingCollectionId != null && renameValue.trim()) {
+      await playlists.renameCollection(renamingCollectionId, renameValue.trim());
+    }
+    renamingCollectionId = null;
+  }
+
   async function importM3u() {
     if (!isTauri) {
       importReport = "Import needs the desktop app";
@@ -52,11 +66,56 @@
     }
   }
 
+  /** Right-clicking inside a multi-selection acts on the whole selection;
+      right-clicking elsewhere acts on the row under the pointer. */
   function menu(e: MouseEvent, id: number, name: string) {
+    const ids =
+      playlists.isSelected(id) && playlists.selectedIds.length > 1 ? playlists.selectedIds : [id];
+    const many = ids.length > 1;
+    const inCollection = ids.some(
+      (i) => playlists.list.find((p) => p.id === i)?.collection_id != null,
+    );
+    const items: MenuItem[] = [
+      { label: "Rename", disabled: many, action: () => startRename(id, name) },
+      {
+        label: many ? `Delete ${ids.length} playlists` : "Delete playlist",
+        action: async () => {
+          for (const i of ids) await playlists.remove(i);
+        },
+      },
+      { separator: true, label: "" },
+      {
+        label: many ? `Set collection… (${ids.length} playlists)` : "Set collection…",
+        action: () => openSetCollection(ids),
+      },
+    ];
+    if (inCollection) {
+      items.push({
+        label: "Remove from collection",
+        action: () => playlists.setCollection(ids, ""),
+      });
+    }
+    openContextMenu(e, items);
+  }
+
+  function collectionMenu(e: MouseEvent, id: number, name: string) {
     openContextMenu(e, [
-      { label: "Rename", action: () => startRename(id, name) },
-      { label: "Delete playlist", action: () => playlists.remove(id) },
+      { label: "Rename collection", action: () => startCollectionRename(id, name) },
+      {
+        // The playlists inside outlive the group that held them.
+        label: "Remove collection (keep playlists)",
+        action: () => playlists.removeCollection(id),
+      },
     ]);
+  }
+
+  /** Stable key per drawn row; collections and playlists share the list. */
+  function rowKey(row: SidebarRow): string {
+    return row.kind === "collection"
+      ? `c${row.collection.id}`
+      : row.kind === "playlist"
+        ? `p${row.playlist.id}`
+        : "sep";
   }
 
   /** The header icon's menu. Check marks show only while the sort is locked,
@@ -110,7 +169,7 @@
     {#if playlists.filter}
       <button class="clear" onclick={() => (playlists.filter = "")} title="Clear filter">✕</button>
     {/if}
-    <span class="count">{playlists.visible.length}</span>
+    <span class="count">{playlists.matching.length}</span>
   </div>
   <button class="create" onclick={createPlaylist}>
     <span class="plus">+</span> Create Playlist
@@ -131,41 +190,82 @@
     </div>
   {/if}
   <div class="items">
-    {#if playlists.visible.length === 0 && playlists.filter}
+    {#if playlists.matching.length === 0 && playlists.filter}
       <div class="nomatch">No playlist matches “{playlists.filter}”</div>
     {/if}
-    {#each playlists.visible as p (p.id)}
-      {#if renamingId === p.id}
-        <input
-          class="rename"
-          bind:value={renameValue}
-          onblur={commitRename}
-          onkeydown={(e) => {
-            if (e.key === "Enter") commitRename();
-            if (e.key === "Escape") renamingId = null;
-          }}
-          {@attach (el) => el.focus()}
-        />
+    {#each playlists.sidebar as row (rowKey(row))}
+      {#if row.kind === "separator"}
+        <div class="csep"></div>
+      {:else if row.kind === "collection"}
+        {#if renamingCollectionId === row.collection.id}
+          <input
+            class="rename"
+            bind:value={renameValue}
+            onblur={commitCollectionRename}
+            onkeydown={(e) => {
+              if (e.key === "Enter") commitCollectionRename();
+              if (e.key === "Escape") renamingCollectionId = null;
+            }}
+            {@attach (el) => el.focus()}
+          />
+        {:else}
+          <button
+            class="citem"
+            title={`${row.collection.playlist_count} playlists`}
+            onclick={() => playlists.toggleCollection(row.collection.id)}
+            oncontextmenu={(e) => collectionMenu(e, row.collection.id, row.collection.name)}
+          >
+            <span class="chev" class:open={row.expanded}>
+              <Icon name="chevron-right" size={12} />
+            </span>
+            <span class="cname">{row.collection.name}</span>
+            <span class="n">{row.collection.track_count}</span>
+          </button>
+        {/if}
+        {#if row.expanded}
+          {#each row.children as p (p.id)}
+            {@render playlistRow(p, true)}
+          {/each}
+        {/if}
       {:else}
-        <button
-          class="item"
-          class:selected={playlists.isSelected(p.id)}
-          class:droptarget={playlists.dropTargetId === p.id}
-          data-drop-playlist={p.id}
-          onclick={(e) => {
-            if (e.shiftKey) playlists.selectRange(p.id);
-            else if (e.ctrlKey || e.metaKey) playlists.toggle(p.id);
-            else playlists.select(p.id);
-          }}
-          oncontextmenu={(e) => menu(e, p.id, p.name)}
-        >
-          <span class="name">{p.name}</span>
-          <span class="n">{p.track_count}</span>
-        </button>
+        {@render playlistRow(row.playlist, false)}
       {/if}
     {/each}
   </div>
 </aside>
+
+{#snippet playlistRow(p: PlaylistInfo, nested: boolean)}
+  {#if renamingId === p.id}
+    <input
+      class="rename"
+      class:nested
+      bind:value={renameValue}
+      onblur={commitRename}
+      onkeydown={(e) => {
+        if (e.key === "Enter") commitRename();
+        if (e.key === "Escape") renamingId = null;
+      }}
+      {@attach (el) => el.focus()}
+    />
+  {:else}
+    <button
+      class="item"
+      class:nested
+      class:selected={playlists.isSelected(p.id)}
+      class:droptarget={playlists.dropTargetId === p.id}
+      data-drop-playlist={p.id}
+      onclick={(e) => {
+        if (e.shiftKey) playlists.selectRange(p.id);
+        else if (e.ctrlKey || e.metaKey) playlists.toggle(p.id);
+        else playlists.select(p.id);
+      }}
+      oncontextmenu={(e) => menu(e, p.id, p.name)}
+    >
+      <span class="name">{p.name}</span>
+      <span class="n">{p.track_count}</span>
+    </button>
+  {/if}
+{/snippet}
 
 <style>
   .sidebar {
@@ -226,6 +326,48 @@
     padding: 8px 12px;
     color: var(--txt-faded);
     font-size: 11px;
+  }
+  /* collection row: a fold-out group of playlists */
+  .citem {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 6px;
+    padding: 7px 12px;
+    color: var(--txt);
+    text-align: left;
+  }
+  .citem:hover {
+    background: var(--hover-row);
+  }
+  .chev {
+    display: flex;
+    flex: none;
+    color: var(--txt-faded);
+    transition: transform 0.12s ease;
+  }
+  .chev.open {
+    transform: rotate(90deg);
+  }
+  .cname {
+    font-weight: 600;
+    color: var(--txt-full);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* a playlist drawn inside a collection */
+  .item.nested {
+    padding-left: 30px;
+  }
+  .rename.nested {
+    margin-left: 30px;
+    width: calc(100% - 42px);
+  }
+  .csep {
+    height: 1px;
+    margin: 6px 12px;
+    background: var(--hairline);
   }
   .create {
     display: flex;

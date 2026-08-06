@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -63,10 +63,17 @@ pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
             );
             CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(albumartist COLLATE NOCASE, year);
 
+            CREATE TABLE IF NOT EXISTS collections (
+              id INTEGER PRIMARY KEY,
+              name TEXT NOT NULL,
+              position INTEGER NOT NULL,
+              collapsed INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS playlists (
               id INTEGER PRIMARY KEY,
               name TEXT NOT NULL,
-              position INTEGER NOT NULL
+              position INTEGER NOT NULL,
+              collection_id INTEGER
             );
             CREATE TABLE IF NOT EXISTS playlist_tracks (
               playlist_id INTEGER NOT NULL,
@@ -107,6 +114,20 @@ pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
         // has been heard). Fresh databases get the column from the CREATE above.
         conn.execute_batch(
             "ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    if version < 4 && version >= 1 {
+        // v4: playlist collections — a named group a playlist can belong to.
+        // Fresh databases get both from the CREATE block above; only existing
+        // ones need the table and the column.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS collections (
+               id INTEGER PRIMARY KEY,
+               name TEXT NOT NULL,
+               position INTEGER NOT NULL,
+               collapsed INTEGER NOT NULL DEFAULT 0
+             );
+             ALTER TABLE playlists ADD COLUMN collection_id INTEGER;",
         )?;
     }
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

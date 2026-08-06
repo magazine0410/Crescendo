@@ -1,5 +1,6 @@
 import {
   call,
+  type CollectionInfo,
   type DropImportResult,
   type M3uImportResult,
   type PlaylistInfo,
@@ -12,13 +13,26 @@ import { prefs, type PlaylistSort } from "./prefs.svelte";
     tags, and this library is heavily non-ASCII. Track counts go largest
     first, with the name breaking ties. */
 function comparePlaylists(key: Exclude<PlaylistSort, "manual">) {
-  return (a: PlaylistInfo, b: PlaylistInfo) => {
-    if (key === "count" && a.track_count !== b.track_count) {
-      return b.track_count - a.track_count;
-    }
-    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
-  };
+  return (a: PlaylistInfo, b: PlaylistInfo) => compareBy(key, a.name, a.track_count, b.name, b.track_count);
 }
+
+function compareBy(
+  key: Exclude<PlaylistSort, "manual">,
+  aName: string,
+  aCount: number,
+  bName: string,
+  bCount: number,
+) {
+  if (key === "count" && aCount !== bCount) return bCount - aCount;
+  return aName.localeCompare(bName, undefined, { numeric: true, sensitivity: "base" });
+}
+
+/** One drawn sidebar row. A collection carries the playlists inside it, which
+    are drawn as their own rows when it is open. */
+export type SidebarRow =
+  | { kind: "collection"; collection: CollectionInfo; children: PlaylistInfo[]; expanded: boolean }
+  | { kind: "playlist"; playlist: PlaylistInfo }
+  | { kind: "separator" };
 
 class PlaylistsStore {
   list = $state<PlaylistInfo[]>([]);
@@ -38,15 +52,76 @@ class PlaylistsStore {
   dropReport = $state<string | null>(null);
   /** Sidebar filter text; matches playlist names, case-insensitive. */
   filter = $state("");
+  /** Named groups of playlists, in their stored order. */
+  collections = $state<CollectionInfo[]>([]);
 
-  /** What the sidebar draws: names narrowed by `filter`, in the locked sort
-      order when one is active, otherwise in the stored order. */
-  visible = $derived.by(() => {
+  /** The sidebar's rows: collections with their members, loose playlists, and
+      the separator between the two when collections sit below. Honors the
+      filter, the locked sort, and where collections are shown. */
+  sidebar = $derived.by((): SidebarRow[] => {
     const f = this.filter.trim().toLowerCase();
-    const rows = f ? this.list.filter((p) => p.name.toLowerCase().includes(f)) : [...this.list];
+    const hit = (name: string) => !f || name.toLowerCase().includes(f);
     const key = prefs.values.playlist_sort;
-    if (prefs.values.playlist_sort_locked && key !== "manual") rows.sort(comparePlaylists(key));
-    return rows;
+    const sorted = prefs.values.playlist_sort_locked && key !== "manual" ? key : null;
+
+    const cols: SidebarRow[] = [];
+    for (const c of this.collections) {
+      const members = this.list.filter((p) => p.collection_id === c.id);
+      // A collection whose own name matches shows everything inside it;
+      // otherwise only the members that match.
+      const children = hit(c.name) ? members : members.filter((p) => hit(p.name));
+      if (children.length === 0 && !hit(c.name)) continue;
+      if (sorted) children.sort(comparePlaylists(sorted));
+      // While filtering, open every collection so the matches are on screen.
+      cols.push({ kind: "collection", collection: c, children, expanded: !c.collapsed || !!f });
+    }
+    const loose: SidebarRow[] = this.list
+      .filter((p) => p.collection_id == null && hit(p.name))
+      .map((playlist) => ({ kind: "playlist", playlist }));
+
+    if (sorted) {
+      const name = (r: SidebarRow) =>
+        r.kind === "collection" ? r.collection.name : r.kind === "playlist" ? r.playlist.name : "";
+      const count = (r: SidebarRow) =>
+        r.kind === "collection"
+          ? r.collection.track_count
+          : r.kind === "playlist"
+            ? r.playlist.track_count
+            : 0;
+      const cmp = (a: SidebarRow, b: SidebarRow) =>
+        compareBy(sorted, name(a), count(a), name(b), count(b));
+      cols.sort(cmp);
+      loose.sort(cmp);
+      if (prefs.values.collections_placement === "inline") {
+        return [...cols, ...loose].sort(cmp);
+      }
+    }
+    if (prefs.values.collections_placement === "inline") return [...cols, ...loose];
+    return cols.length > 0 ? [...loose, { kind: "separator" }, ...cols] : loose;
+  });
+
+  /** Playlists the sidebar actually draws, in drawn order — what a Shift-range
+      spans and what the selection is ordered by. Members of a folded
+      collection are not in it, because they are not on screen. */
+  visible = $derived.by(() => {
+    const out: PlaylistInfo[] = [];
+    for (const row of this.sidebar) {
+      if (row.kind === "playlist") out.push(row.playlist);
+      else if (row.kind === "collection" && row.expanded) out.push(...row.children);
+    }
+    return out;
+  });
+
+  /** Playlists the filter keeps, whether or not their collection is folded.
+      This is what the header counts: folding is a way of looking at the list,
+      not a way of leaving playlists out of it. */
+  matching = $derived.by(() => {
+    const out: PlaylistInfo[] = [];
+    for (const row of this.sidebar) {
+      if (row.kind === "playlist") out.push(row.playlist);
+      else if (row.kind === "collection") out.push(...row.children);
+    }
+    return out;
   });
 
   /** The tracks of every selected playlist, back to back. This flat order is
@@ -73,7 +148,12 @@ class PlaylistsStore {
   }
 
   async refresh() {
-    this.list = await call<PlaylistInfo[]>("playlist_list");
+    const [list, collections] = await Promise.all([
+      call<PlaylistInfo[]>("playlist_list"),
+      call<CollectionInfo[]>("collection_list"),
+    ]);
+    this.list = list;
+    this.collections = collections;
     // Drop any selection that no longer exists, then reload what is left.
     const alive = this.selectedIds.filter((id) => this.list.some((p) => p.id === id));
     await this.applySelection(alive);
@@ -179,6 +259,33 @@ class PlaylistsStore {
     // refresh() drops it from the selection; the rest of a multi-selection
     // stays on screen.
     await this.refresh();
+  }
+
+  /** Put playlists into the collection called `name`, creating it when the
+      name is new. A blank name takes them out of their collection. */
+  async setCollection(playlistIds: number[], name: string) {
+    await call("collection_set", { playlistIds, name });
+    await this.refresh();
+  }
+
+  async renameCollection(id: number, name: string) {
+    await call("collection_rename", { id, name });
+    await this.refresh();
+  }
+
+  /** Drop the group. Its playlists stay, loose again. */
+  async removeCollection(id: number) {
+    await call("collection_delete", { id });
+    await this.refresh();
+  }
+
+  /** Fold or unfold a collection. Patched locally as well as stored, so the
+      row responds to the click without waiting for a round trip. */
+  async toggleCollection(id: number) {
+    const c = this.collections.find((c) => c.id === id);
+    if (!c) return;
+    c.collapsed = !c.collapsed;
+    await call("collection_set_collapsed", { id, collapsed: c.collapsed });
   }
 
   async addTracks(id: number, trackIds: number[]) {

@@ -85,6 +85,7 @@ export const lucideIcons: Record<string, string> = {
   "calendar": "<path d=\"M8 2v4\" /> <path d=\"M16 2v4\" /> <rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\" /> <path d=\"M3 10h18\" />",
   "audio-lines": "<path d=\"M2 10v3\" /> <path d=\"M6 6v11\" /> <path d=\"M10 3v18\" /> <path d=\"M14 8v7\" /> <path d=\"M18 5v13\" /> <path d=\"M22 10v3\" />",
   "chart-no-axes-column": "<path d=\"M5 21v-6\" /> <path d=\"M12 21V3\" /> <path d=\"M19 21V9\" />",
+  "chevron-right": "<path d=\"m9 18 6-6-6-6\" />",
   "chevron-up": "<path d=\"m18 15-6-6-6 6\" />",
   "circle-pause": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <line x1=\"10\" x2=\"10\" y1=\"15\" y2=\"9\" /> <line x1=\"14\" x2=\"14\" y1=\"15\" y2=\"9\" />",
   "circle-stop": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <rect x=\"9\" y=\"9\" width=\"6\" height=\"6\" rx=\"1\" />",
