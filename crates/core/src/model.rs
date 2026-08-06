@@ -22,6 +22,9 @@ pub struct Track {
     pub rating: Option<i64>,
     /// Times this track has been played (>50% heard). See `Db::record_play`.
     pub play_count: i64,
+    /// The file was not on disk at the last scan. Playlists keep such tracks
+    /// and mark them; library views filter them out.
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

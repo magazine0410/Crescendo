@@ -7,6 +7,7 @@
   import { prefs } from "$lib/stores/prefs.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayName, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
+  import Icon from "../common/Icon.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
 
   const HEADER_H = 84;
@@ -225,12 +226,16 @@
     <button
       class="trow"
       class:playing={player.track?.id === r.track.id}
+      class:missing={r.track.missing}
       ondblclick={() => playAt(r.index)}
       oncontextmenu={(e) => trackMenu(e, r)}
     >
       <span class="no">{r.track.track_no ?? r.index + 1}</span>
       <div class="tmain">
         <div class="tline">
+          {#if r.track.missing}
+            <span class="warn" title="File missing"><Icon name="triangle-alert" size={13} /></span>
+          {/if}
           <span class="ttitle">{displayTitle(r.track)}</span>
           {#if r.track.artist && r.track.artist !== (r.track.albumartist ?? r.track.artist)}
             <span class="tartist">- {displayArtist(r.track)}</span>
@@ -387,6 +392,19 @@
     align-items: baseline;
     gap: 10px;
     min-width: 0;
+  }
+  /* A track whose file was gone at the last scan. It stays in the playlist
+     (removing it would shift every later row's play index), so mark it. */
+  .trow.missing .ttitle,
+  .trow.missing .tartist,
+  .trow.missing .no {
+    color: var(--missing);
+  }
+  .warn {
+    display: flex;
+    align-self: center;
+    flex: none;
+    color: var(--missing);
   }
   .tplays {
     font-size: 10px;

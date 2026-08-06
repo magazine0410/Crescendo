@@ -9,7 +9,7 @@ use rusqlite::{params_from_iter, types::Value, Connection, Row};
 pub const TRACK_COLS: &str = "id, path, title, artist, album, albumartist, titlesort, \
                               artistsort, albumartistsort, genre, grouping, \
                               track_no, disc_no, year, duration_ms, format, album_id, rating, \
-                              play_count";
+                              play_count, missing";
 
 /// Stable order used everywhere a "whole library" listing appears.
 pub const LIBRARY_SORT: &str = "albumartist COLLATE NOCASE, year, album COLLATE NOCASE, \
@@ -91,6 +91,7 @@ pub fn track_from_row(r: &Row) -> rusqlite::Result<Track> {
         album_id: r.get(16)?,
         rating: r.get(17)?,
         play_count: r.get(18)?,
+        missing: r.get::<_, i64>(19)? != 0,
     })
 }
 
@@ -473,11 +474,15 @@ impl Db {
                     vec![Value::from(*id)],
                 )
             }),
+            // Missing files stay in: a playlist view shows them (marked), and
+            // dropping them here would shift every later row's index, so
+            // clicking a row would play a different track. The player skips a
+            // file it cannot open and moves on.
             PlayContext::Playlist { id } => self.with(|conn| {
                 collect_ids(
                     conn,
                     "SELECT pt.track_id FROM playlist_tracks pt \
-                     JOIN tracks t ON t.id = pt.track_id AND t.missing = 0 \
+                     JOIN tracks t ON t.id = pt.track_id \
                      WHERE pt.playlist_id = ?1 ORDER BY pt.position",
                     vec![Value::from(*id)],
                 )
@@ -487,7 +492,7 @@ impl Db {
             PlayContext::Playlists { ids } => self.with(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT pt.track_id FROM playlist_tracks pt \
-                     JOIN tracks t ON t.id = pt.track_id AND t.missing = 0 \
+                     JOIN tracks t ON t.id = pt.track_id \
                      WHERE pt.playlist_id = ?1 ORDER BY pt.position",
                 )?;
                 let mut out = Vec::new();

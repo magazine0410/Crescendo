@@ -96,6 +96,37 @@ fn multi_selection_view_and_playback_agree_on_order() {
     assert_eq!(played, view, "playback order must match the view row for row");
 }
 
+/// A playlist keeps tracks whose file has gone missing, and shows them. If
+/// playback dropped them, every row after one would play the wrong track.
+#[test]
+fn missing_tracks_keep_the_rows_and_playback_lined_up() {
+    let (_d, db) = test_db();
+    let pid = db.playlist_create("P").unwrap();
+    db.playlist_add_tracks(pid, &[1, 2, 3, 4]).unwrap();
+    db.with(|conn| {
+        conn.execute("UPDATE tracks SET missing = 1 WHERE id IN (2, 3)", [])?;
+        Ok(())
+    })
+    .unwrap();
+
+    let view = db.playlist_tracks(pid).unwrap();
+    assert_eq!(ids(&db, pid), vec![1, 2, 3, 4], "the view keeps missing tracks");
+    assert_eq!(
+        view.iter().map(|t| t.missing).collect::<Vec<_>>(),
+        vec![false, true, true, false],
+        "and flags them, so the UI can mark them"
+    );
+
+    let played = db.resolve_context(&PlayContext::Playlist { id: pid }).unwrap();
+    assert_eq!(played, vec![1, 2, 3, 4], "row index N must resolve to row N");
+    // The last row is what breaks first when missing tracks are dropped: it
+    // sat at index 3 in the view but would have been index 1 in playback.
+    assert_eq!(played[3], view[3].id);
+
+    let multi = db.resolve_context(&PlayContext::Playlists { ids: vec![pid] }).unwrap();
+    assert_eq!(multi, played, "multi-selection resolves the same way");
+}
+
 #[test]
 fn multi_selection_keeps_a_group_per_id() {
     let (_d, db) = test_db();

@@ -82,6 +82,11 @@ function build() {
         // Sprinkle some non-zero play counts so the "Plays: N" line is visible
         // in `npm run dev`.
         play_count: (a + t) % 3 === 0 ? ((a * 5 + t) % 4) + 1 : 0,
+        // One gone-from-disk track inside each mock playlist, so the "File
+        // missing" marking is visible. Kept to a couple of tracks because
+        // these mock queries, unlike the backend's, do not filter missing
+        // tracks out of the library views.
+        missing: (a === 0 && t === 3) || (a === 3 && t === 5),
       });
     }
     albums.push({
@@ -468,4 +473,5 @@ export const mockNowPlaying: Track = {
   album_id: 1,
   rating: null,
   play_count: 3,
+  missing: false,
 };

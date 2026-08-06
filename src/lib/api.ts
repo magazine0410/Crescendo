@@ -30,6 +30,9 @@ export interface Track {
   album_id: number | null;
   rating: number | null;
   play_count: number;
+  /** The file was not on disk at the last scan. Playlists keep such tracks
+      and mark them; library views never return them. */
+  missing: boolean;
 }
 
 export interface Album {
