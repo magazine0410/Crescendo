@@ -109,6 +109,87 @@
     ]);
   }
 
+  // --- Dragging playlists into and out of collections ---
+  //
+  // Pointer events, not HTML5 drag-and-drop: the webview reserves drag-and-drop
+  // for files coming from the file manager (see events.ts), and the rest of
+  // this app hand-rolls its drags the same way (Splitter, ColorPicker).
+
+  /** Playlists being dragged; empty when no drag is in progress. */
+  let dragIds = $state<number[]>([]);
+  /** Collection under the pointer: an id, null for the loose area, or
+      undefined when the pointer is outside the list (dropping there does
+      nothing). */
+  let dragTarget = $state<number | null | undefined>(undefined);
+  let dragFrom: { x: number; y: number; id: number } | null = null;
+  /** A drag ends with a click event on the row; that click must not also
+      change the selection. */
+  let suppressClick = false;
+
+  const DRAG_THRESHOLD = 4;
+
+  function onRowPointerDown(e: PointerEvent, id: number) {
+    if (e.button !== 0) return;
+    dragFrom = { x: e.clientX, y: e.clientY, id };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (!dragFrom) return;
+    if (dragIds.length === 0) {
+      const far =
+        Math.abs(e.clientX - dragFrom.x) > DRAG_THRESHOLD ||
+        Math.abs(e.clientY - dragFrom.y) > DRAG_THRESHOLD;
+      if (!far) return;
+      // Dragging a row of a multi-selection drags the whole selection, the
+      // same way the right-click menu acts on it.
+      dragIds =
+        playlists.isSelected(dragFrom.id) && playlists.selectedIds.length > 1
+          ? [...playlists.selectedIds]
+          : [dragFrom.id];
+    }
+    dragTarget = collectionAt(e.clientX, e.clientY);
+  }
+
+  async function onPointerUp() {
+    window.removeEventListener("pointermove", onPointerMove);
+    const ids = dragIds;
+    const target = dragTarget;
+    const dragged = ids.length > 0;
+    dragFrom = null;
+    dragIds = [];
+    dragTarget = undefined;
+    if (!dragged) return;
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false));
+    if (target !== undefined) await applyDrop(ids, target);
+  }
+
+  /** Which collection the pointer is over: an id, null for the loose area of
+      the list, undefined for anywhere else (including outside the sidebar). */
+  function collectionAt(x: number, y: number): number | null | undefined {
+    const el = document.elementFromPoint(x, y);
+    if (!el?.closest(".items")) return undefined;
+    const marker = el.closest<HTMLElement>("[data-collection]");
+    return marker ? Number(marker.dataset.collection) : null;
+  }
+
+  async function applyDrop(ids: number[], target: number | null) {
+    const where = (id: number) => playlists.list.find((p) => p.id === id)?.collection_id ?? null;
+    if (ids.every((id) => where(id) === target)) return; // already there
+    const name =
+      target == null ? "" : (playlists.collections.find((c) => c.id === target)?.name ?? "");
+    if (target != null && !name) return;
+    await playlists.setCollection(ids, name);
+  }
+
+  /** True while the drag would take playlists out of a collection, so the
+      list can show that dropping here is a real change. */
+  const draggingOutOfCollection = $derived(
+    dragIds.some((id) => playlists.list.find((p) => p.id === id)?.collection_id != null),
+  );
+
   /** Stable key per drawn row; collections and playlists share the list. */
   function rowKey(row: SidebarRow): string {
     return row.kind === "collection"
@@ -189,7 +270,11 @@
       <button onclick={() => (playlists.dropReport = null)}>✕</button>
     </div>
   {/if}
-  <div class="items">
+  <div
+    class="items"
+    class:dragging={dragIds.length > 0}
+    class:dragloose={dragIds.length > 0 && dragTarget === null && draggingOutOfCollection}
+  >
     {#if playlists.matching.length === 0 && playlists.filter}
       <div class="nomatch">No playlist matches “{playlists.filter}”</div>
     {/if}
@@ -211,8 +296,10 @@
         {:else}
           <button
             class="citem"
+            class:dragover={dragIds.length > 0 && dragTarget === row.collection.id}
+            data-collection={row.collection.id}
             title={`${row.collection.playlist_count} playlists`}
-            onclick={() => playlists.toggleCollection(row.collection.id)}
+            onclick={() => !suppressClick && playlists.toggleCollection(row.collection.id)}
             oncontextmenu={(e) => collectionMenu(e, row.collection.id, row.collection.name)}
           >
             <span class="chev" class:open={row.expanded}>
@@ -224,17 +311,17 @@
         {/if}
         {#if row.expanded}
           {#each row.children as p (p.id)}
-            {@render playlistRow(p, true)}
+            {@render playlistRow(p, true, row.collection.id)}
           {/each}
         {/if}
       {:else}
-        {@render playlistRow(row.playlist, false)}
+        {@render playlistRow(row.playlist, false, null)}
       {/if}
     {/each}
   </div>
 </aside>
 
-{#snippet playlistRow(p: PlaylistInfo, nested: boolean)}
+{#snippet playlistRow(p: PlaylistInfo, nested: boolean, collectionId: number | null)}
   {#if renamingId === p.id}
     <input
       class="rename"
@@ -253,8 +340,16 @@
       class:nested
       class:selected={playlists.isSelected(p.id)}
       class:droptarget={playlists.dropTargetId === p.id}
+      class:dragging={dragIds.includes(p.id)}
+      class:dragover={dragIds.length > 0 &&
+        !dragIds.includes(p.id) &&
+        dragTarget === collectionId &&
+        collectionId !== null}
       data-drop-playlist={p.id}
+      data-collection={collectionId}
+      onpointerdown={(e) => onRowPointerDown(e, p.id)}
       onclick={(e) => {
+        if (suppressClick) return;
         if (e.shiftKey) playlists.selectRange(p.id);
         else if (e.ctrlKey || e.metaKey) playlists.toggle(p.id);
         else playlists.select(p.id);
@@ -368,6 +463,21 @@
     height: 1px;
     margin: 6px 12px;
     background: var(--hairline);
+  }
+  /* dragging a playlist into or out of a collection */
+  .items.dragging {
+    cursor: grabbing;
+  }
+  .items.dragloose {
+    box-shadow: inset 0 0 0 1px var(--selection);
+  }
+  .item.dragging {
+    opacity: 0.5;
+  }
+  .citem.dragover,
+  .item.dragover {
+    background: var(--hover-row);
+    box-shadow: inset 0 0 0 1px var(--selection);
   }
   .create {
     display: flex;
