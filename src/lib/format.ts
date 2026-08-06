@@ -15,6 +15,13 @@ export function formatTime(ms: number): string {
   return neg ? `-${core}` : core;
 }
 
+/** Display label for a %duration% browse bucket (whole minutes): 0 ->
+    "Less than a minute (0:00 - 0:59)", 3 -> "3 minutes (3:00 - 3:59)". */
+export function durationBucketLabel(bucket: number): string {
+  if (!Number.isFinite(bucket) || bucket <= 0) return "Less than a minute (0:00 - 0:59)";
+  return `${bucket} minute${bucket === 1 ? "" : "s"} (${bucket}:00 - ${bucket}:59)`;
+}
+
 /** "3 days, 11 h, 48 min" style used in header stats. */
 export function formatLongDuration(ms: number): string {
   const min = Math.floor(ms / 60000);

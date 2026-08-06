@@ -94,9 +94,51 @@ impl BrowseMode {
             BrowseMode::Album => Some("album"),
             BrowseMode::Albumartist => Some("albumartist"),
             BrowseMode::Grouping => Some("grouping"),
+            BrowseMode::Custom(_) if self.is_duration() => Some("duration_ms"),
             BrowseMode::Custom(tag) => crate::search::browse_column(tag),
         }
     }
+
+    /// Whether this is the custom `%duration%` / `%length%` filter. Duration has
+    /// no browsable text column: the value list buckets tracks per whole minute
+    /// (`duration_ms / 60000`, see queries.rs) and values are bucket numbers as
+    /// strings ("0", "3", …); the UI renders them as "3 minutes (3:00 - 3:59)".
+    pub fn is_duration(&self) -> bool {
+        matches!(self, BrowseMode::Custom(tag)
+            if matches!(tag.trim().to_lowercase().as_str(), "duration" | "length"))
+    }
+}
+
+/// A user-selectable sort key for the Track-list view. Maps to a hardcoded
+/// ORDER BY expression in `queries::order_sql` — never raw user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortKey {
+    Albumartist,
+    Artist,
+    Album,
+    Genre,
+    Grouping,
+    Year,
+    Title,
+    Duration,
+}
+
+/// Explicit Track-list sort: a primary key with its direction, and an optional
+/// secondary key whose direction either follows the primary
+/// (`secondary_descending: None`) or is set on its own. `None` in the
+/// `Option<TrackSort>` spots means the default `LIBRARY_SORT` order. Remaining
+/// ties always fall back to the LIBRARY_SORT chain minus the keys already
+/// chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackSort {
+    pub key: SortKey,
+    #[serde(default)]
+    pub secondary: Option<SortKey>,
+    #[serde(default)]
+    pub descending: bool,
+    #[serde(default)]
+    pub secondary_descending: Option<bool>,
 }
 
 /// What ordered set of tracks playback iterates over. Resolved to concrete
@@ -106,14 +148,22 @@ impl BrowseMode {
 pub enum PlayContext {
     Album { id: i64 },
     Playlist { id: i64 },
-    LibraryView { query: Option<String>, sort: Option<String> },
+    LibraryView {
+        query: Option<String>,
+        #[serde(default)]
+        sort: Option<TrackSort>,
+    },
     ValueTracks {
         mode: BrowseMode,
-        value: String,
+        /// The left-panel selection (one or more Ctrl-multi-selected values);
+        /// tracks matching any of them play.
+        values: Vec<String>,
         query: Option<String>,
         /// Collapse multi-theme grouping tags under their primary theme (only
         /// meaningful when `mode == Grouping`).
         #[serde(default)]
         collapse: bool,
+        #[serde(default)]
+        sort: Option<TrackSort>,
     },
 }

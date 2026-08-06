@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { library } from "$lib/stores/library.svelte";
+  import { library, SORT_KEYS } from "$lib/stores/library.svelte";
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import { call, type PlayContext } from "$lib/api";
+  import { call, type PlayContext, type SortKey } from "$lib/api";
+  import Icon from "../common/Icon.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem } from "$lib/menu";
@@ -18,13 +19,14 @@
   // its fast constant-height path.
   const ROW_H = 38;
 
-  // Recount + reset whenever the filter (mode / value / query), the library (after
-  // a rescan), or the separators toggle changes. reloadTrackView bumps
-  // library.trackEpoch, which the range effect below watches to re-fetch.
+  // Recount + reset whenever the filter (mode / value / query), the sort, the
+  // library (after a rescan), or the separators toggle changes. reloadTrackView
+  // bumps library.trackEpoch, which the range effect below watches to re-fetch.
   $effect(() => {
     library.mode;
-    library.selectedValue;
+    library.selectedValues;
     library.query;
+    library.sort;
     library.stats;
     library.reloadTrackView(prefs.values.track_separators);
   });
@@ -57,19 +59,21 @@
     list?.scrollToIndex(row);
   }
 
-  /** Play order matches the visible track order (both use LIBRARY_SORT), so the
-      track index is the start index. A left-panel selection narrows to that value. */
+  /** Play order matches the visible track order (both use the same sort), so
+      the track index is the start index. A left-panel selection narrows to that
+      value. */
   function playAt(trackIndex: number) {
     const ctx: PlayContext =
-      library.selectedValue != null
+      library.selectedValues.length > 0
         ? {
             type: "value_tracks",
             mode: library.wireMode,
-            value: library.selectedValue,
+            values: library.selectedValues,
             query: library.query,
             collapse: library.groupingCollapse,
+            sort: library.sort,
           }
-        : { type: "library_view", query: library.query, sort: null };
+        : { type: "library_view", query: library.query, sort: library.sort };
     player.playContext(ctx, trackIndex);
   }
 
@@ -120,6 +124,59 @@
 <section class="view">
   <header class="viewheader">
     <span class="title">Library {#if library.query}(Filtered){/if}</span>
+    <div class="sortctl">
+      <span class="sortlabel">Sort:</span>
+      <select
+        class="sortsel"
+        title="Sort by"
+        value={library.sort?.key ?? ""}
+        onchange={(e) => library.setSortKey((e.currentTarget.value || null) as SortKey | null)}
+      >
+        <option value="">Default</option>
+        {#each SORT_KEYS as [key, label] (key)}
+          <option value={key}>{label}</option>
+        {/each}
+      </select>
+      <button
+        class="dirbtn"
+        disabled={!library.sort}
+        title={library.sort?.descending ? "Descending" : "Ascending"}
+        onclick={() => library.toggleSortDirection()}
+      >
+        <Icon name={library.sort?.descending ? "triangle-down" : "triangle-up"} size={9} />
+      </button>
+      <select
+        class="sortsel"
+        title="Then by"
+        disabled={!library.sort}
+        value={library.sort?.secondary ?? ""}
+        onchange={(e) =>
+          library.setSortSecondary((e.currentTarget.value || null) as SortKey | null)}
+      >
+        <option value="">Off</option>
+        {#each SORT_KEYS as [key, label] (key)}
+          {#if key !== library.sort?.key}
+            <option value={key}>{label}</option>
+          {/if}
+        {/each}
+      </select>
+      <button
+        class="dirbtn"
+        class:following={library.sort?.secondary_descending == null}
+        disabled={!library.sort?.secondary}
+        title={library.sort?.secondary_descending == null
+          ? "Following the primary direction — click to set separately"
+          : library.sortSecondaryDescending
+            ? "Descending"
+            : "Ascending"}
+        onclick={() => library.toggleSortSecondaryDirection()}
+      >
+        <Icon
+          name={library.sortSecondaryDescending ? "triangle-down" : "triangle-up"}
+          size={9}
+        />
+      </button>
+    </div>
     <span class="items">{library.trackCount.toLocaleString()} tracks</span>
   </header>
   {#if library.trackCount === 0}
@@ -207,7 +264,7 @@
   .viewheader {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
     height: var(--header-h);
     padding: 0 16px;
     border-bottom: 1px solid var(--hairline);
@@ -217,10 +274,69 @@
     font-style: italic;
     font-weight: 350;
     font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .items {
     color: var(--txt-faded);
     font-size: 11px;
+    flex: none;
+  }
+  /* sort controls, sitting left of the track count */
+  .sortctl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex: none;
+  }
+  .sortlabel {
+    color: var(--txt-faded);
+    font-size: 11px;
+  }
+  .sortsel {
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border);
+    color: var(--txt);
+    font-size: 11px;
+    padding: 2px 18px 2px 6px;
+    /* WebKitGTK renders a native (light) combobox unless appearance is cleared */
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 5px center;
+    cursor: pointer;
+  }
+  .sortsel:disabled {
+    color: var(--txt-faded);
+    cursor: default;
+  }
+  .sortsel option {
+    background: var(--bg-main);
+    color: var(--txt);
+  }
+  .dirbtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: 1px solid var(--border);
+    background: var(--bg-panel);
+    color: var(--txt);
+  }
+  .dirbtn:hover:not(:disabled) {
+    color: var(--txt-full);
+  }
+  .dirbtn:disabled {
+    color: var(--txt-faded);
+    cursor: default;
+  }
+  /* secondary direction still mirroring the primary (not set on its own) */
+  .dirbtn.following:not(:disabled):not(:hover) {
+    color: var(--txt-semifaded);
   }
   .empty {
     flex: 1;

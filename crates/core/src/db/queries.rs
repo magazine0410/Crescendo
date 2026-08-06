@@ -1,5 +1,7 @@
 use super::Db;
-use crate::model::{Album, BrowseMode, LibraryStats, PlayContext, Track, TrackGroup};
+use crate::model::{
+    Album, BrowseMode, LibraryStats, PlayContext, SortKey, Track, TrackGroup, TrackSort,
+};
 use crate::search::SearchFilter;
 use anyhow::Result;
 use rusqlite::{params_from_iter, types::Value, Connection, Row};
@@ -12,6 +14,51 @@ pub const TRACK_COLS: &str = "id, path, title, artist, album, albumartist, title
 /// Stable order used everywhere a "whole library" listing appears.
 pub const LIBRARY_SORT: &str = "albumartist COLLATE NOCASE, year, album COLLATE NOCASE, \
                                 disc_no, track_no, path";
+
+/// ORDER BY expression for one explicit sort key. Title honors the romanized
+/// titlesort tag when present, matching how titles render (see format.ts).
+fn sort_key_sql(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Albumartist => "albumartist COLLATE NOCASE",
+        SortKey::Artist => "artist COLLATE NOCASE",
+        SortKey::Album => "album COLLATE NOCASE",
+        SortKey::Genre => "genre COLLATE NOCASE",
+        SortKey::Grouping => "grouping COLLATE NOCASE",
+        SortKey::Year => "year",
+        SortKey::Title => "COALESCE(NULLIF(titlesort, ''), title) COLLATE NOCASE",
+        SortKey::Duration => "duration_ms",
+    }
+}
+
+/// Full ORDER BY body for the Track-list view: `LIBRARY_SORT` when no explicit
+/// sort is chosen, otherwise the chosen key(s) — each with its direction —
+/// followed by the LIBRARY_SORT tiebreakers the chosen keys don't already cover.
+pub fn order_sql(sort: Option<TrackSort>) -> String {
+    let Some(s) = sort else { return LIBRARY_SORT.into() };
+    let dir = if s.descending { " DESC" } else { "" };
+    let mut used = vec![s.key];
+    let mut out = format!("{}{dir}", sort_key_sql(s.key));
+    if let Some(sec) = s.secondary.filter(|k| *k != s.key) {
+        used.push(sec);
+        let sec_dir = if s.secondary_descending.unwrap_or(s.descending) { " DESC" } else { "" };
+        out = format!("{out}, {}{sec_dir}", sort_key_sql(sec));
+    }
+    const CHAIN: [(Option<SortKey>, &str); 6] = [
+        (Some(SortKey::Albumartist), "albumartist COLLATE NOCASE"),
+        (Some(SortKey::Year), "year"),
+        (Some(SortKey::Album), "album COLLATE NOCASE"),
+        (None, "disc_no"),
+        (None, "track_no"),
+        (None, "path"),
+    ];
+    for (key, expr) in CHAIN {
+        if key.is_some_and(|k| used.contains(&k)) {
+            continue;
+        }
+        out = format!("{out}, {expr}");
+    }
+    out
+}
 
 /// SQL for the "primary theme" of a grouping tag: the text before the first
 /// ';' (trimmed). Used to collapse multi-theme grouping tags (Touhou remixes
@@ -68,29 +115,46 @@ fn track_where(filter: Option<&SearchFilter>) -> (String, Vec<Value>) {
     }
 }
 
-/// Append a `<mode column> = value` equality to a `track_where` fragment, in place.
-/// NULLs collate to "" (so selecting the "?" group matches untagged tracks) — this
-/// is the single source of the left-panel value filter shared by browse_albums,
-/// track_count/tracks_range, and the ValueTracks play context. When `collapse` is
-/// set for grouping mode, the value is matched against the primary theme
+/// Whole-minute bucket of a track's duration, as TEXT — the value the custom
+/// `%duration%` filter groups and matches by ("0" = under a minute, "3" =
+/// 3:00–3:59, …). The UI formats the label; only the bucket number crosses IPC.
+const DURATION_BUCKET: &str = "CAST(duration_ms / 60000 AS TEXT)";
+
+/// Append a `<mode expr> IN (values…)` narrowing to a `track_where` fragment,
+/// in place; a track matches when its value is any of the (Ctrl-multi-selected)
+/// `values`. No-op when `values` is empty (= the "All" row). NULLs collate to ""
+/// (so selecting the "?" group matches untagged tracks) — this is the single
+/// source of the left-panel value filter shared by browse_albums,
+/// track_count/tracks_range, and the ValueTracks play context. When `collapse`
+/// is set for grouping mode, values are matched against the primary theme
 /// (`GROUPING_FIRST_SEG`) instead of the whole tag, so an umbrella row selects
-/// every track whose first theme equals `value`.
-fn push_value_clause(
+/// every track whose first theme equals a selected value. Duration mode matches
+/// the per-minute bucket (`DURATION_BUCKET`).
+fn push_values_clause(
     where_sql: &mut String,
     params: &mut Vec<Value>,
     mode: &BrowseMode,
-    value: &str,
+    values: &[String],
     collapse: bool,
 ) {
+    if values.is_empty() {
+        return;
+    }
     let lhs = if collapse && mode.column() == Some("grouping") {
         Some(GROUPING_FIRST_SEG.to_string())
+    } else if mode.is_duration() {
+        Some(DURATION_BUCKET.to_string())
     } else {
         mode.column().map(col_expr)
     };
     match lhs {
         Some(lhs) => {
-            *where_sql = format!("{where_sql} AND {lhs} = ?{}", params.len() + 1);
-            params.push(Value::from(value.to_string()));
+            let mut placeholders = Vec::with_capacity(values.len());
+            for v in values {
+                params.push(Value::from(v.clone()));
+                placeholders.push(format!("?{}", params.len()));
+            }
+            *where_sql = format!("{where_sql} AND {lhs} IN ({})", placeholders.join(", "));
         }
         // Custom tag that resolves to no real column: select nothing.
         None => where_sql.push_str(" AND 0"),
@@ -162,6 +226,11 @@ impl Db {
                 "SELECT {GROUPING_FIRST_SEG}, COUNT(*), '' FROM tracks WHERE {where_sql} \
                  GROUP BY {GROUPING_FIRST_SEG} ORDER BY 1 COLLATE NOCASE"
             ),
+            // Duration buckets one row per whole minute, ordered numerically.
+            _ if mode.is_duration() => format!(
+                "SELECT {DURATION_BUCKET}, COUNT(*), '' FROM tracks WHERE {where_sql} \
+                 GROUP BY duration_ms / 60000 ORDER BY duration_ms / 60000"
+            ),
             // Genre / Album / non-collapsed Grouping / Custom. TEXT-cast so
             // integer columns (year, rating, …) come back as strings.
             _ => format!(
@@ -178,18 +247,16 @@ impl Db {
         })
     }
 
-    /// Albums that contain at least one track matching (mode=value AND search).
+    /// Albums that contain at least one track matching (mode in values AND search).
     pub fn browse_albums(
         &self,
         mode: BrowseMode,
-        value: Option<&str>,
+        values: &[String],
         filter: Option<&SearchFilter>,
         collapse: bool,
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
-        if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
-        }
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
         self.with(|conn| {
             let sql = format!(
                 "SELECT a.id, a.album, a.albumartist, a.albumartist_sort, a.year, a.genre, \
@@ -253,18 +320,16 @@ impl Db {
         })
     }
 
-    /// Count of live tracks matching (search filter AND optional mode=value).
+    /// Count of live tracks matching (search filter AND optional mode values).
     pub fn track_count(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
-        value: Option<&str>,
+        values: &[String],
         collapse: bool,
     ) -> Result<i64> {
         let (mut where_sql, mut params) = track_where(filter);
-        if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
-        }
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
         self.with(|conn| {
             Ok(conn.query_row(
                 &format!("SELECT COUNT(*) FROM tracks WHERE {where_sql}"),
@@ -274,26 +339,26 @@ impl Db {
         })
     }
 
-    /// Windowed page of the library view (search filter + optional mode=value +
+    /// Windowed page of the library view (search filter + optional mode values +
     /// stable sort). The sort matches `resolve_context` so a row's index is its
     /// index in the resolved play queue.
     pub fn tracks_range(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
-        value: Option<&str>,
+        values: &[String],
         collapse: bool,
+        sort: Option<TrackSort>,
         offset: i64,
         limit: i64,
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
-        if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
-        }
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
+        let order = order_sql(sort);
         self.with(|conn| {
             let sql = format!(
                 "SELECT {TRACK_COLS} FROM tracks WHERE {where_sql} \
-                 ORDER BY {LIBRARY_SORT} LIMIT ?{} OFFSET ?{}",
+                 ORDER BY {order} LIMIT ?{} OFFSET ?{}",
                 params.len() + 1,
                 params.len() + 2
             );
@@ -305,26 +370,26 @@ impl Db {
         })
     }
 
-    /// 0-based index of `track_id` within the filtered + LIBRARY_SORT-ordered
-    /// view (same order as `tracks_range`), or `None` when the track isn't in
-    /// that set. Lets the Track-list view scroll to the now-playing track after
-    /// a filter change (e.g. clearing the search).
+    /// 0-based index of `track_id` within the filtered + ordered view (same
+    /// order as `tracks_range`), or `None` when the track isn't in that set.
+    /// Lets the Track-list view scroll to the now-playing track after a filter
+    /// change (e.g. clearing the search).
     pub fn track_index(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
-        value: Option<&str>,
+        values: &[String],
         collapse: bool,
+        sort: Option<TrackSort>,
         track_id: i64,
     ) -> Result<Option<i64>> {
         let (mut where_sql, mut params) = track_where(filter);
-        if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
-        }
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
+        let order = order_sql(sort);
         self.with(|conn| {
             let sql = format!(
                 "SELECT rn FROM ( \
-                   SELECT id, ROW_NUMBER() OVER (ORDER BY {LIBRARY_SORT}) - 1 AS rn \
+                   SELECT id, ROW_NUMBER() OVER (ORDER BY {order}) - 1 AS rn \
                    FROM tracks WHERE {where_sql} \
                  ) WHERE id = ?{}",
                 params.len() + 1
@@ -340,27 +405,27 @@ impl Db {
     }
 
     /// Album runs for the Track-list view: consecutive same-album_id blocks over
-    /// the same filtered + LIBRARY_SORT-ordered set as `tracks_range`. Uses the
+    /// the same filtered + ordered set as `tracks_range`. Uses the
     /// gaps-and-islands pattern so a re-appearing album_id (e.g. split by a year
     /// change) and scattered NULL-album tracks each form their own run.
     pub fn track_groups(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
-        value: Option<&str>,
+        values: &[String],
         collapse: bool,
+        sort: Option<TrackSort>,
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
-        if let Some(v) = value {
-            push_value_clause(&mut where_sql, &mut params, &mode, v, collapse);
-        }
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
+        let order = order_sql(sort);
         self.with(|conn| {
             let sql = format!(
                 "WITH ordered AS ( \
                    SELECT album_id, album, \
                           COALESCE(albumartist, artist) AS artist, \
                           COALESCE(albumartistsort, artistsort) AS artist_sort, year, \
-                          ROW_NUMBER() OVER (ORDER BY {LIBRARY_SORT}) AS rn \
+                          ROW_NUMBER() OVER (ORDER BY {order}) AS rn \
                    FROM tracks WHERE {where_sql} \
                  ), islands AS ( \
                    SELECT *, rn - ROW_NUMBER() OVER (PARTITION BY album_id ORDER BY rn) AS grp \
@@ -417,29 +482,27 @@ impl Db {
                     vec![Value::from(*id)],
                 )
             }),
-            PlayContext::LibraryView { query, .. } => {
+            PlayContext::LibraryView { query, sort } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (where_sql, params) = track_where(filter.as_ref());
+                let order = order_sql(*sort);
                 self.with(|conn| {
                     collect_ids(
                         conn,
-                        &format!(
-                            "SELECT id FROM tracks WHERE {where_sql} ORDER BY {LIBRARY_SORT}"
-                        ),
+                        &format!("SELECT id FROM tracks WHERE {where_sql} ORDER BY {order}"),
                         params,
                     )
                 })
             }
-            PlayContext::ValueTracks { mode, value, query, collapse } => {
+            PlayContext::ValueTracks { mode, values, query, collapse, sort } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                push_value_clause(&mut where_sql, &mut params, mode, value, *collapse);
+                push_values_clause(&mut where_sql, &mut params, mode, values, *collapse);
+                let order = order_sql(*sort);
                 self.with(|conn| {
                     collect_ids(
                         conn,
-                        &format!(
-                            "SELECT id FROM tracks WHERE {where_sql} ORDER BY {LIBRARY_SORT}"
-                        ),
+                        &format!("SELECT id FROM tracks WHERE {where_sql} ORDER BY {order}"),
                         params,
                     )
                 })

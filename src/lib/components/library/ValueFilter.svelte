@@ -7,7 +7,8 @@
     : library.mode === "artist" ? "artists"
     : library.mode === "album" ? "albums"
     : library.mode === "albumartist" ? "album artists"
-    : library.isGroupingMode ? "groups" : "values",
+    : library.isGroupingMode ? "groups"
+    : library.isDurationMode ? "durations" : "values",
   );
 </script>
 

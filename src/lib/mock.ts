@@ -3,7 +3,7 @@
  * Generates a deterministic fake library big enough to exercise the
  * virtualized lists, and implements the same command surface as src-tauri.
  */
-import type { Album, PlaylistInfo, Track } from "./api";
+import type { Album, PlaylistInfo, SortKey, Track, TrackSort } from "./api";
 
 const GENRES = ["Jazz", "Soundtrack", "Pop Rock", "Doujin", "Electronic", "Metal", null];
 // [artist, artistsort] — sort tag only where the name is Japanese
@@ -135,6 +135,9 @@ function customField(tag: string): ((t: Track) => string) | null {
     case "title": return (t) => t.title ?? "";
     case "format":
     case "codec": return (t) => t.format ?? "";
+    // Whole-minute duration bucket (mirrors the backend DURATION_BUCKET).
+    case "duration":
+    case "length": return (t) => String(Math.floor(t.duration_ms / 60000));
     case "track":
     case "tracknumber": return (t) => (t.track_no != null ? String(t.track_no) : "");
     case "disc":
@@ -163,13 +166,15 @@ function browseKey(t: Track, mode: WireMode, collapse: boolean): string {
   return mode === "grouping" && collapse ? firstSeg(v) : v;
 }
 
-/** Track-list filter: search query AND optional left-panel mode=value. */
+/** Track-list filter: search query AND optional left-panel mode values (a
+    track matches when its value is any of the multi-selected ones). */
 function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
   if (!matches(t, args.query as string | null | undefined)) return false;
-  const value = args.value as string | null | undefined;
+  const values = args.values as string[] | null | undefined;
   return (
-    value == null ||
-    browseKey(t, args.mode as WireMode, args.collapse as boolean) === value
+    values == null ||
+    values.length === 0 ||
+    values.includes(browseKey(t, args.mode as WireMode, args.collapse as boolean))
   );
 }
 
@@ -183,6 +188,38 @@ function libSort(a: Track, b: Track): number {
     (a.track_no ?? 0) - (b.track_no ?? 0) ||
     a.path.localeCompare(b.path)
   );
+}
+
+/** One explicit sort key's comparison (mirrors queries.rs sort_key_sql). */
+function keyCmp(a: Track, b: Track, key: SortKey): number {
+  switch (key) {
+    case "year": return (a.year ?? 0) - (b.year ?? 0);
+    case "duration": return a.duration_ms - b.duration_ms;
+    case "title":
+      return (a.titlesort || a.title || "").localeCompare(b.titlesort || b.title || "");
+    case "albumartist": return (a.albumartist ?? "").localeCompare(b.albumartist ?? "");
+    case "artist": return (a.artist ?? "").localeCompare(b.artist ?? "");
+    case "album": return (a.album ?? "").localeCompare(b.album ?? "");
+    case "genre": return (a.genre ?? "").localeCompare(b.genre ?? "");
+    case "grouping": return (a.grouping ?? "").localeCompare(b.grouping ?? "");
+  }
+}
+
+/** Track-list comparator honoring the explicit sort (mirrors queries.rs
+    order_sql): chosen key(s) with their directions (secondary follows the
+    primary unless set on its own), then libSort for remaining ties (keys
+    compared equal already, so no filtering needed). */
+function viewSort(args: Record<string, unknown>): (a: Track, b: Track) => number {
+  const s = args.sort as TrackSort | null | undefined;
+  if (!s) return libSort;
+  const dir = s.descending ? -1 : 1;
+  const secDir = (s.secondary_descending ?? s.descending) ? -1 : 1;
+  return (a, b) => {
+    let c = dir * keyCmp(a, b, s.key);
+    if (c === 0 && s.secondary && s.secondary !== s.key)
+      c = secDir * keyCmp(a, b, s.secondary);
+    return c || libSort(a, b);
+  };
 }
 
 export async function mockCall<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
@@ -210,18 +247,26 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         if (mode === "artist" && t.artistsort) sorts.set(v, t.artistsort);
         if (mode === "albumartist" && t.albumartistsort) sorts.set(v, t.albumartistsort);
       }
+      // Duration buckets order numerically ("10" after "3"), like the backend.
+      const numeric =
+        typeof mode === "object" &&
+        ["duration", "length"].includes(mode.custom.trim().toLowerCase());
       return [...counts.entries()]
         .map(([v, n]): [string, number, string] => [v, n, sorts.get(v) ?? ""])
-        .sort((a, b) => (a[2] || a[0]).localeCompare(b[2] || b[0])) as T;
+        .sort((a, b) =>
+          numeric
+            ? Number(a[0]) - Number(b[0])
+            : (a[2] || a[0]).localeCompare(b[2] || b[0]),
+        ) as T;
     }
     case "browse_albums": {
       const mode = args.mode as WireMode;
-      const value = args.value as string | null;
+      const values = (args.values as string[] | null) ?? [];
       const collapse = args.collapse as boolean;
       const ids = new Set<number>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
-        if (value != null && browseKey(t, mode, collapse) !== value) continue;
+        if (values.length > 0 && !values.includes(browseKey(t, mode, collapse))) continue;
         if (t.album_id != null) ids.add(t.album_id);
       }
       return albums.filter((a) => ids.has(a.id)) as T;
@@ -231,7 +276,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "track_count":
       return tracks.filter((t) => trackListMatch(t, args)).length as T;
     case "tracks_range": {
-      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(libSort);
+      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(viewSort(args));
       const offset = args.offset as number;
       const limit = args.limit as number;
       return filtered.slice(offset, offset + limit) as T;
@@ -239,7 +284,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "album_by_id":
       return (albums.find((a) => a.id === (args.albumId as number)) ?? null) as T;
     case "track_groups": {
-      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(libSort);
+      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(viewSort(args));
       const groups: {
         album_id: number | null;
         album: string | null;
@@ -266,7 +311,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return groups as T;
     }
     case "track_index": {
-      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(libSort);
+      const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(viewSort(args));
       const idx = filtered.findIndex((t) => t.id === (args.trackId as number));
       return (idx < 0 ? null : idx) as T;
     }

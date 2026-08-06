@@ -16,7 +16,7 @@
       album / albumartist are deliberately omitted (they're the four built-in tabs)
       but still work if typed in manually. */
   const TAGS = [
-    "bitdepth", "bitrate", "codec", "date", "disc",
+    "bitdepth", "bitrate", "codec", "date", "disc", "duration",
     "grouping", "rating", "samplerate", "track", "year",
   ];
 

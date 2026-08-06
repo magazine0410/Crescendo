@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
     println!("  deleted test playlist");
 
     // --- thumbnails at scale: first 100 albums ---
-    let albums = db.browse_albums(BrowseMode::Album, None, None, false)?;
+    let albums = db.browse_albums(BrowseMode::Album, &[], None, false)?;
     let store = ArtStore::new(std::path::Path::new(&cache))?;
     let n = albums.len().min(100);
     let t0 = Instant::now();

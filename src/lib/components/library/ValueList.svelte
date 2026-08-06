@@ -6,12 +6,13 @@
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import { displayName } from "$lib/format";
+  import { displayName, durationBucketLabel } from "$lib/format";
 
   // row 0 = "All", rows 1.. = values (narrowed by the filter bar)
   const count = $derived(library.filteredValues.length + 1);
 
   function label(v: string): string {
+    if (library.isDurationMode) return durationBucketLabel(Number(v));
     return v === "" ? "?" : v;
   }
 
@@ -20,9 +21,10 @@
       {
         type: "value_tracks",
         mode: library.wireMode,
-        value,
+        values: [value],
         query: library.query,
         collapse: library.groupingCollapse,
+        sort: library.sort,
       },
       0,
     );
@@ -33,13 +35,22 @@
     await queue.add(ids);
   }
 
+  /** Plain click selects only this value; Ctrl (or Cmd) toggles it in/out of a
+      multi-selection; Shift selects the visible range from the last plainly
+      clicked/toggled value, so several values can show together. */
+  function onRowClick(e: MouseEvent, value: string) {
+    if (e.shiftKey) library.selectValueRange(value);
+    else if (e.ctrlKey || e.metaKey) library.toggleValue(value);
+    else library.selectValue(value);
+  }
+
   async function valueTrackIds(value: string): Promise<number[]> {
     // Reuse browse_albums + album_tracks would be N calls; ask for the whole
     // value's track list in one range call is not filtered by value, so go
     // through albums for now (values rarely exceed a few hundred albums).
     const albums = await call<{ id: number }[]>("browse_albums", {
       mode: library.wireMode,
-      value,
+      values: [value],
       query: library.query,
       collapse: library.groupingCollapse,
     });
@@ -65,7 +76,7 @@
   {#if i === 0}
     <button
       class="row all"
-      class:selected={library.selectedValue === null}
+      class:selected={library.selectedValues.length === 0}
       onclick={() => library.selectValue(null)}
     >
       <span class="name">All ({library.values.length}
@@ -73,16 +84,17 @@
         : library.mode === "artist" ? "artists"
         : library.mode === "album" ? "albums"
         : library.mode === "albumartist" ? "album artists"
-        : library.isGroupingMode ? "groups" : "values"})</span>
+        : library.isGroupingMode ? "groups"
+        : library.isDurationMode ? "durations" : "values"})</span>
     </button>
   {:else}
     {@const [value, n, sort] = library.filteredValues[i - 1]}
     <button
       class="row"
-      class:selected={library.selectedValue === value}
+      class:selected={library.selectedValues.includes(value)}
       ondblclick={() => playValue(value)}
       oncontextmenu={(e) => onRowContext(e, value)}
-      onclick={() => library.selectValue(value)}
+      onclick={(e) => onRowClick(e, value)}
       title={sort && sort !== value ? value : undefined}
     >
       <span class="name">{displayName(label(value), sort || null) ?? "?"}</span>

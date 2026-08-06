@@ -4,11 +4,50 @@ import {
   type BrowseMode,
   type LibraryStats,
   type ScanProgress,
+  type SortKey,
   type Track,
   type TrackGroup,
+  type TrackSort,
   type WireBrowseMode,
 } from "../api";
+import { durationBucketLabel } from "../format";
 import { prefs } from "./prefs.svelte";
+
+/** Track-list sort keys with their dropdown labels, in menu order. */
+export const SORT_KEYS: [SortKey, string][] = [
+  ["albumartist", "Album Artist"],
+  ["artist", "Artist"],
+  ["album", "Album"],
+  ["genre", "Genre"],
+  ["grouping", "Grouping"],
+  ["year", "Year"],
+  ["title", "Title"],
+  ["duration", "Duration"],
+];
+
+function isSortKey(s: string): s is SortKey {
+  return SORT_KEYS.some(([k]) => k === s);
+}
+
+/** Parse the `track_sort` pref (`key:secondary:asc|desc:asc|desc`, the last
+    part blank while the secondary direction follows the primary). Blank or
+    anything unrecognized falls back to null = default LIBRARY_SORT order. */
+export function parseTrackSort(raw: string): TrackSort | null {
+  const [key, secondary, dir, secDir] = raw.split(":");
+  if (!key || !isSortKey(key)) return null;
+  return {
+    key,
+    secondary: secondary && isSortKey(secondary) && secondary !== key ? secondary : null,
+    descending: dir === "desc",
+    secondary_descending: secDir === "desc" ? true : secDir === "asc" ? false : null,
+  };
+}
+
+function serializeTrackSort(s: TrackSort): string {
+  const secDir =
+    s.secondary_descending == null ? "" : s.secondary_descending ? "desc" : "asc";
+  return `${s.key}:${s.secondary ?? ""}:${s.descending ? "desc" : "asc"}:${secDir}`;
+}
 
 /** Rows fetched per windowed page in the Track-list view. */
 const TRACK_PAGE = 200;
@@ -70,9 +109,15 @@ class LibraryStore {
   /** [value, track count, sort/display value ("" when none)] */
   values = $state<[string, number, string][]>([]);
   /** Plain-text narrowing of the left-panel value list (not a search query).
-      Matches the raw value or its sort/romaji, case-insensitively. */
+      Matches the raw value or its sort/romaji, case-insensitively; in duration
+      mode a time like "3:56" matches its minute bucket. */
   valueFilter = $state("");
-  selectedValue = $state<string | null>(null);
+  /** Left-panel selection: empty = "All", several entries = Ctrl-multi-select
+      (tracks matching any of them show). */
+  selectedValues = $state<string[]>([]);
+  /** Base value for Shift-range selects in the left panel: the last plainly
+      clicked or Ctrl-toggled value. Null until something is clicked. */
+  valueAnchor = $state<string | null>(null);
   albums = $state<Album[]>([]);
   selectedAlbum = $state<Album | null>(null);
   albumTracks = $state<Track[]>([]);
@@ -126,6 +171,16 @@ class LibraryStore {
     return this.isGroupingMode && !prefs.values.grouping_split_multi;
   }
 
+  /** Whether the custom filter browses per-minute duration buckets
+      (`%duration%` / `%length%`). Values are bucket numbers as strings; the UI
+      renders them via durationBucketLabel. */
+  get isDurationMode(): boolean {
+    return (
+      this.mode === "custom" &&
+      (this.customTagName === "duration" || this.customTagName === "length")
+    );
+  }
+
   /** Raw text of the custom filter (persisted centrally in prefs). */
   get customTag(): string {
     return prefs.values.custom_browse_tag;
@@ -148,7 +203,8 @@ class LibraryStore {
   async setCustomTag(raw: string) {
     await prefs.set("custom_browse_tag", raw);
     this.mode = "custom";
-    this.selectedValue = null;
+    this.selectedValues = [];
+    this.valueAnchor = null;
     this.selectedAlbum = null;
     this.albumTracks = [];
     this.resetScroll();
@@ -156,10 +212,86 @@ class LibraryStore {
     await this.loadAlbums();
   }
 
-  /** `values` narrowed by `valueFilter` (memoized). Empty filter -> all values. */
+  /** Explicit Track-list sort (persisted in prefs), or null = default order. */
+  sort = $derived.by(() => parseTrackSort(prefs.values.track_sort));
+
+  /** Change the primary sort key (null = back to the default order, which also
+      drops the secondary key and directions). Keeps the rest of the selection. */
+  async setSortKey(key: SortKey | null) {
+    const cur = this.sort;
+    await prefs.set(
+      "track_sort",
+      key === null
+        ? ""
+        : serializeTrackSort({
+            key,
+            secondary: cur?.secondary === key ? null : (cur?.secondary ?? null),
+            descending: cur?.descending ?? false,
+            secondary_descending: cur?.secondary_descending ?? null,
+          }),
+    );
+  }
+
+  /** Change the secondary sort key. Turning it off (null) also puts its
+      direction back to following the primary. */
+  async setSortSecondary(secondary: SortKey | null) {
+    const cur = this.sort;
+    if (!cur) return;
+    await prefs.set(
+      "track_sort",
+      serializeTrackSort({
+        ...cur,
+        secondary,
+        secondary_descending: secondary === null ? null : cur.secondary_descending,
+      }),
+    );
+  }
+
+  async toggleSortDirection() {
+    const cur = this.sort;
+    if (!cur) return;
+    await prefs.set(
+      "track_sort",
+      serializeTrackSort({ ...cur, descending: !cur.descending }),
+    );
+  }
+
+  /** Effective secondary direction: its own when set, else the primary's. */
+  get sortSecondaryDescending(): boolean {
+    const s = this.sort;
+    return s ? (s.secondary_descending ?? s.descending) : false;
+  }
+
+  /** Flip the secondary direction. The first click detaches it from the
+      primary (it flips from whatever it currently shows and stays explicit). */
+  async toggleSortSecondaryDirection() {
+    const cur = this.sort;
+    if (!cur || !cur.secondary) return;
+    await prefs.set(
+      "track_sort",
+      serializeTrackSort({
+        ...cur,
+        secondary_descending: !this.sortSecondaryDescending,
+      }),
+    );
+  }
+
+  /** `values` narrowed by `valueFilter` (memoized). Empty filter -> all values.
+      Duration mode: a time like "3:56" narrows to its minute bucket ("3 minutes
+      (3:00 - 3:59)"); any other text matches the rendered bucket labels. */
   filteredValues = $derived.by(() => {
     const f = this.valueFilter.trim().toLowerCase();
     if (!f) return this.values;
+    if (this.isDurationMode) {
+      const time = /^(\d+):\d{0,2}$/.exec(f);
+      if (time) {
+        const bucket = String(parseInt(time[1], 10));
+        return this.values.filter(([v]) => v === bucket);
+      }
+      return this.values.filter(([v]) =>
+        durationBucketLabel(Number(v)).toLowerCase().includes(f),
+      );
+    }
     return this.values.filter(
       ([v, , sort]) => v.toLowerCase().includes(f) || sort.toLowerCase().includes(f),
     );
@@ -178,7 +310,8 @@ class LibraryStore {
 
   async setMode(mode: BrowseMode) {
     this.mode = mode;
-    this.selectedValue = null;
+    this.selectedValues = [];
+    this.valueAnchor = null;
     this.selectedAlbum = null;
     this.albumTracks = [];
     this.valueFilter = "";
@@ -192,14 +325,18 @@ class LibraryStore {
     if (norm === this.query) return;
     this.query = norm;
     await this.loadValues();
-    // Drop a selection the new search filtered away.
-    if (
-      this.selectedValue !== null &&
-      !this.values.some(([v]) => v === this.selectedValue)
-    ) {
-      this.selectedValue = null;
-      this.selectedAlbum = null;
-      this.albumTracks = [];
+    // Drop the parts of the selection the new search filtered away.
+    if (this.selectedValues.length > 0) {
+      const still = this.selectedValues.filter((v) =>
+        this.values.some(([x]) => x === v),
+      );
+      if (still.length !== this.selectedValues.length) {
+        this.selectedValues = still;
+        if (still.length === 0) {
+          this.selectedAlbum = null;
+          this.albumTracks = [];
+        }
+      }
     }
     this.resetScroll();
     await this.loadAlbums();
@@ -229,8 +366,38 @@ class LibraryStore {
     }
   }
 
+  /** Plain click: select exactly this value (or "All" for null). */
   async selectValue(v: string | null) {
-    this.selectedValue = v;
+    this.valueAnchor = v;
+    await this.applyValueSelection(v === null ? [] : [v]);
+  }
+
+  /** Ctrl+click: toggle this value in/out of the multi-selection. */
+  async toggleValue(v: string) {
+    this.valueAnchor = v;
+    await this.applyValueSelection(
+      this.selectedValues.includes(v)
+        ? this.selectedValues.filter((x) => x !== v)
+        : [...this.selectedValues, v],
+    );
+  }
+
+  /** Shift+click: select the visible range between the anchor (the last
+      plainly clicked or toggled value) and this one, replacing the selection.
+      Without a usable anchor — none yet, or it was filtered out of the visible
+      list — acts like a plain click. The anchor stays, so a second Shift+click
+      re-ranges from the same base (matching the Track-list behavior). */
+  async selectValueRange(v: string) {
+    const visible = this.filteredValues.map(([x]) => x);
+    const a = this.valueAnchor === null ? -1 : visible.indexOf(this.valueAnchor);
+    const b = visible.indexOf(v);
+    if (a < 0 || b < 0) return this.selectValue(v);
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    await this.applyValueSelection(visible.slice(lo, hi + 1));
+  }
+
+  private async applyValueSelection(values: string[]) {
+    this.selectedValues = values;
     this.selectedAlbum = null;
     this.albumTracks = [];
     this.resetScroll();
@@ -241,7 +408,7 @@ class LibraryStore {
     try {
       this.albums = await call<Album[]>("browse_albums", {
         mode: this.wireMode,
-        value: this.selectedValue,
+        values: this.selectedValues,
         query: this.query,
         collapse: this.groupingCollapse,
       });
@@ -300,8 +467,9 @@ class LibraryStore {
       return await call<number | null>("track_index", {
         query: this.query,
         mode: this.wireMode,
-        value: this.selectedValue,
+        values: this.selectedValues,
         collapse: this.groupingCollapse,
+        sort: this.sort,
         trackId: id,
       });
     } catch (e) {
@@ -343,7 +511,7 @@ class LibraryStore {
       count = await call<number>("track_count", {
         query: this.query,
         mode: this.wireMode,
-        value: this.selectedValue,
+        values: this.selectedValues,
         collapse: this.groupingCollapse,
       });
     } catch (e) {
@@ -358,8 +526,9 @@ class LibraryStore {
         const groups = await call<TrackGroup[]>("track_groups", {
           query: this.query,
           mode: this.wireMode,
-          value: this.selectedValue,
+          values: this.selectedValues,
           collapse: this.groupingCollapse,
+          sort: this.sort,
         });
         if (reqId !== this.trackReqId) return;
         model = buildRowModel(groups);
@@ -468,8 +637,9 @@ class LibraryStore {
       rows = await call<Track[]>("tracks_range", {
         query: this.query,
         mode: this.wireMode,
-        value: this.selectedValue,
+        values: this.selectedValues,
         collapse: this.groupingCollapse,
+        sort: this.sort,
         offset,
         limit: TRACK_PAGE,
       });

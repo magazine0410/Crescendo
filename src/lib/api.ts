@@ -143,18 +143,42 @@ export type WireBrowseMode =
   | "grouping"
   | { custom: string };
 
+/** User-selectable Track-list sort key (backend `SortKey`). */
+export type SortKey =
+  | "albumartist"
+  | "artist"
+  | "album"
+  | "genre"
+  | "grouping"
+  | "year"
+  | "title"
+  | "duration";
+
+/** Explicit Track-list sort (backend `TrackSort`); null = default LIBRARY_SORT.
+    The secondary key's direction follows the primary until set on its own
+    (`secondary_descending` null = follow); remaining ties fall back to the
+    default order minus the chosen keys. */
+export interface TrackSort {
+  key: SortKey;
+  secondary: SortKey | null;
+  descending: boolean;
+  secondary_descending: boolean | null;
+}
+
 /** Context descriptor: what ordered set of tracks playback walks through. */
 export type PlayContext =
   | { type: "album"; id: number }
   | { type: "playlist"; id: number }
-  | { type: "library_view"; query: string | null; sort: string | null }
+  | { type: "library_view"; query: string | null; sort: TrackSort | null }
   | {
       type: "value_tracks";
       mode: WireBrowseMode;
-      value: string;
+      /** The left-panel selection (one or more Ctrl-multi-selected values). */
+      values: string[];
       query: string | null;
       /** Collapse multi-theme grouping tags under their primary theme. */
       collapse: boolean;
+      sort: TrackSort | null;
     };
 
 export function artUrl(

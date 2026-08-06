@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crescendo_core::model::{Album, BrowseMode, LibraryStats, Track, TrackGroup};
+use crescendo_core::model::{Album, BrowseMode, LibraryStats, Track, TrackGroup, TrackSort};
 use crescendo_core::scanner::{scan, ScanOptions};
 use crescendo_core::search::SearchFilter;
 use std::sync::atomic::Ordering;
@@ -97,14 +97,14 @@ pub async fn browse_values(
 pub async fn browse_albums(
     state: State<'_, AppState>,
     mode: BrowseMode,
-    value: Option<String>,
+    values: Option<Vec<String>>,
     query: Option<String>,
     collapse: bool,
 ) -> Result<Vec<Album>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .browse_albums(mode, value.as_deref(), filter.as_ref(), collapse)
+        .browse_albums(mode, &values.unwrap_or_default(), filter.as_ref(), collapse)
         .map_err(|e| e.to_string())
 }
 
@@ -118,13 +118,13 @@ pub async fn track_count(
     state: State<'_, AppState>,
     query: Option<String>,
     mode: BrowseMode,
-    value: Option<String>,
+    values: Option<Vec<String>>,
     collapse: bool,
 ) -> Result<i64, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .track_count(filter.as_ref(), mode, value.as_deref(), collapse)
+        .track_count(filter.as_ref(), mode, &values.unwrap_or_default(), collapse)
         .map_err(|e| e.to_string())
 }
 
@@ -133,15 +133,24 @@ pub async fn tracks_range(
     state: State<'_, AppState>,
     query: Option<String>,
     mode: BrowseMode,
-    value: Option<String>,
+    values: Option<Vec<String>>,
     collapse: bool,
+    sort: Option<TrackSort>,
     offset: i64,
     limit: i64,
 ) -> Result<Vec<Track>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .tracks_range(filter.as_ref(), mode, value.as_deref(), collapse, offset, limit.clamp(1, 2000))
+        .tracks_range(
+            filter.as_ref(),
+            mode,
+            &values.unwrap_or_default(),
+            collapse,
+            sort,
+            offset,
+            limit.clamp(1, 2000),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -150,14 +159,15 @@ pub async fn track_index(
     state: State<'_, AppState>,
     query: Option<String>,
     mode: BrowseMode,
-    value: Option<String>,
+    values: Option<Vec<String>>,
     collapse: bool,
+    sort: Option<TrackSort>,
     track_id: i64,
 ) -> Result<Option<i64>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .track_index(filter.as_ref(), mode, value.as_deref(), collapse, track_id)
+        .track_index(filter.as_ref(), mode, &values.unwrap_or_default(), collapse, sort, track_id)
         .map_err(|e| e.to_string())
 }
 
@@ -166,13 +176,14 @@ pub async fn track_groups(
     state: State<'_, AppState>,
     query: Option<String>,
     mode: BrowseMode,
-    value: Option<String>,
+    values: Option<Vec<String>>,
     collapse: bool,
+    sort: Option<TrackSort>,
 ) -> Result<Vec<TrackGroup>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .track_groups(filter.as_ref(), mode, value.as_deref(), collapse)
+        .track_groups(filter.as_ref(), mode, &values.unwrap_or_default(), collapse, sort)
         .map_err(|e| e.to_string())
 }
 

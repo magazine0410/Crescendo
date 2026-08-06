@@ -77,17 +77,17 @@ fn selecting_umbrella_matches_every_variant() {
     // Collapsed selection matches all three variants; uncollapsed matches only
     // the byte-exact tag.
     assert_eq!(
-        db.track_count(None, grouping(), Some(umbrella), true).unwrap(),
+        db.track_count(None, grouping(), &[umbrella.into()], true).unwrap(),
         3
     );
     assert_eq!(
-        db.track_count(None, grouping(), Some(umbrella), false).unwrap(),
+        db.track_count(None, grouping(), &[umbrella.into()], false).unwrap(),
         1
     );
 
     // tracks_range (the windowed list + play-queue order) agrees with the count.
     let rows = db
-        .tracks_range(None, grouping(), Some(umbrella), true, 0, 100)
+        .tracks_range(None, grouping(), &[umbrella.into()], true, None, 0, 100)
         .unwrap();
     assert_eq!(rows.len(), 3);
 }

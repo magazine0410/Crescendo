@@ -123,6 +123,10 @@ export const lucideIcons: Record<string, string> = {
   "star": "<path d=\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z\" />",
   "sun": "<circle cx=\"12\" cy=\"12\" r=\"4\" /> <path d=\"M12 2v2\" /> <path d=\"M12 20v2\" /> <path d=\"m4.93 4.93 1.41 1.41\" /> <path d=\"m17.66 17.66 1.41 1.41\" /> <path d=\"M2 12h2\" /> <path d=\"M20 12h2\" /> <path d=\"m6.34 17.66-1.41 1.41\" /> <path d=\"m19.07 4.93-1.41 1.41\" />",
   "table-of-contents": "<path d=\"M16 5H3\" /> <path d=\"M16 12H3\" /> <path d=\"M16 19H3\" /> <path d=\"M21 5h.01\" /> <path d=\"M21 12h.01\" /> <path d=\"M21 19h.01\" />",
+  // Custom: filled sort-direction triangles (path-level fill overrides the
+  // stroke-only defaults from Icon.svelte).
+  "triangle-up": "<path d=\"M12 5 20 19H4z\" fill=\"currentColor\" stroke=\"currentColor\" />",
+  "triangle-down": "<path d=\"M12 19 4 5h16z\" fill=\"currentColor\" stroke=\"currentColor\" />",
   "two-arrows-right": "<path d=\"m16 3 4 4-4 4\" /> <path d=\"M20 7H4\" /> <path d=\"m16 13 4 4-4 4\" /> <path d=\"M20 17H4\" />",
   "user-round": "<circle cx=\"12\" cy=\"8\" r=\"5\" /> <path d=\"M20 21a8 8 0 0 0-16 0\" />",
   "volume-1": "<path d=\"M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z\" /><path d=\"M13.695 9.593a4 4 0 0 1 0 4.815\" />",

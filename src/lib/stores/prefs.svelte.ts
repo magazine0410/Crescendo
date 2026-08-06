@@ -23,6 +23,9 @@ export interface Prefs {
   custom_browse_tag: string;
   /** Bar color for the Visualizer tab, `#rrggbb`. Defaults to the theme accent. */
   visualizer_color: string;
+  /** Track-list sort, encoded `key:secondary:asc|desc` (see library store's
+      parseTrackSort). Blank = default LIBRARY_SORT order. */
+  track_sort: string;
 }
 
 const DEFAULTS: Prefs = {
@@ -39,6 +42,7 @@ const DEFAULTS: Prefs = {
   grouping_split_multi: false,
   custom_browse_tag: "",
   visualizer_color: "#ffaf32", // == --accent (theme orange)
+  track_sort: "",
 };
 
 class PrefsStore {
@@ -78,6 +82,7 @@ class PrefsStore {
       }
     }
     if (raw.visualizer_color) v.visualizer_color = raw.visualizer_color;
+    if (raw.track_sort) v.track_sort = raw.track_sort;
     this.values = v;
     this.loaded = true;
   }

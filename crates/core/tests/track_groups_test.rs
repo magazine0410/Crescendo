@@ -55,13 +55,13 @@ fn test_db() -> (tempfile::TempDir, Db) {
 #[test]
 fn groups_split_reappearing_album_id_and_isolate_null() {
     let (_d, db) = test_db();
-    let groups = db.track_groups(None, BrowseMode::Artist, None, false).unwrap();
+    let groups = db.track_groups(None, BrowseMode::Artist, &[], false, None).unwrap();
     let shape: Vec<(Option<i64>, i64)> = groups.iter().map(|g| (g.album_id, g.count)).collect();
     // album_id 1 appears as two separate runs (not merged), NULL is its own run.
     assert_eq!(shape, vec![(Some(1), 2), (Some(2), 2), (Some(1), 1), (None, 1)]);
     // The runs' counts partition the whole filtered track set exactly.
     let total: i64 = groups.iter().map(|g| g.count).sum();
-    assert_eq!(total, db.track_count(None, BrowseMode::Artist, None, false).unwrap());
+    assert_eq!(total, db.track_count(None, BrowseMode::Artist, &[], false).unwrap());
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn groups_respect_value_filter() {
     let (_d, db) = test_db();
     // Narrow to album "Beta": one run of 2 tracks.
     let groups = db
-        .track_groups(None, BrowseMode::Album, Some("Beta"), false)
+        .track_groups(None, BrowseMode::Album, &["Beta".into()], false, None)
         .unwrap();
     let shape: Vec<(Option<i64>, i64)> = groups.iter().map(|g| (g.album_id, g.count)).collect();
     assert_eq!(shape, vec![(Some(2), 2)]);

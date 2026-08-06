@@ -91,9 +91,9 @@ fn selecting_custom_integer_value_matches_via_text_compare() {
 
     // The selected value is a string ("1999") compared against an INTEGER column
     // — the CAST-to-TEXT is what makes this equal.
-    assert_eq!(db.track_count(None, custom("year"), Some("1999"), false).unwrap(), 2);
-    assert_eq!(db.track_count(None, custom("year"), Some("2000"), false).unwrap(), 1);
-    assert_eq!(db.track_count(None, custom("year"), Some(""), false).unwrap(), 1);
+    assert_eq!(db.track_count(None, custom("year"), &["1999".into()], false).unwrap(), 2);
+    assert_eq!(db.track_count(None, custom("year"), &["2000".into()], false).unwrap(), 1);
+    assert_eq!(db.track_count(None, custom("year"), &["".into()], false).unwrap(), 1);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn custom_genre_handles_non_ascii_values() {
     assert_eq!(c.get("ジャズ"), Some(&2));
     assert_eq!(c.get("Rock"), Some(&1));
     // Selecting a CJK value round-trips.
-    assert_eq!(db.track_count(None, custom("genre"), Some("ジャズ"), false).unwrap(), 2);
+    assert_eq!(db.track_count(None, custom("genre"), &["ジャズ".into()], false).unwrap(), 2);
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn unresolvable_custom_tag_yields_nothing() {
     // Unknown tag → empty value list …
     assert!(db.browse_values(custom("composer"), None, false).unwrap().is_empty());
     // … and selecting against it matches no tracks (the `AND 0` guard).
-    assert_eq!(db.track_count(None, custom("nope"), Some("x"), false).unwrap(), 0);
+    assert_eq!(db.track_count(None, custom("nope"), &["x".into()], false).unwrap(), 0);
 }
 
 #[test]
@@ -124,9 +124,10 @@ fn resolve_context_plays_custom_value() {
 
     let ctx = PlayContext::ValueTracks {
         mode: custom("year"),
-        value: "1999".into(),
+        values: vec!["1999".into()],
         query: None,
         collapse: false,
+        sort: None,
     };
     let ids = db.resolve_context(&ctx).unwrap();
     assert_eq!(ids.len(), 2, "both 1999 tracks resolve for playback");
@@ -134,9 +135,10 @@ fn resolve_context_plays_custom_value() {
     // An unresolvable custom tag resolves to an empty queue rather than erroring.
     let empty = PlayContext::ValueTracks {
         mode: custom("composer"),
-        value: "whoever".into(),
+        values: vec!["whoever".into()],
         query: None,
         collapse: false,
+        sort: None,
     };
     assert!(db.resolve_context(&empty).unwrap().is_empty());
 }
