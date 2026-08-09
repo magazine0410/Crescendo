@@ -37,6 +37,7 @@ export function formatLongDuration(ms: number): string {
 
 /** CJK detection: kana, CJK ideographs (+ ext. A), halfwidth katakana, Hangul. */
 const CJK_RE = /[぀-ヿ㐀-䶿一-鿿豈-﫿ｦ-ﾟ가-힯]/;
+const LATIN_RE = /\p{Script=Latin}/u;
 
 /**
  * Prefer the romanized sort tag when the display value contains CJK text and
@@ -49,6 +50,25 @@ function romanized(value: string | null, sort: string | null): string | null {
 
 export function displayTitle(t: Track): string {
   return romanized(t.title, t.titlesort) ?? fileStem(t.path);
+}
+
+/** A Latin-script titlesort that can stand in for an original CJK title. */
+export function latinTitleSort(t: Track): string | null {
+  if (
+    t.title &&
+    t.titlesort &&
+    CJK_RE.test(t.title) &&
+    !CJK_RE.test(t.titlesort) &&
+    LATIN_RE.test(t.titlesort)
+  ) {
+    return t.titlesort;
+  }
+  return null;
+}
+
+/** The unmodified title tag, with the usual filename fallback. */
+export function displayOriginalTitle(t: Track): string {
+  return t.title ?? fileStem(t.path);
 }
 
 /** "N plays" for a track that has been played, or null when it never has —

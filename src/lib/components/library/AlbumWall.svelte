@@ -5,7 +5,7 @@
   import { playlists } from "$lib/stores/playlists.svelte";
   import { artUrl, call, type Album, type Track } from "$lib/api";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
-  import { addToPlaylistItem } from "$lib/menu";
+  import { addToPlaylistItem, openInFileManager } from "$lib/menu";
   import VirtualGrid from "$lib/virtual/VirtualGrid.svelte";
   import { displayName } from "$lib/format";
 
@@ -20,6 +20,14 @@
     const items: MenuItem[] = [
       { label: "Play", action: () => playAlbum(a) },
       { label: "Show tracks", action: () => library.selectAlbum(a) },
+      {
+        label: "Open in file manager",
+        action: async () => {
+          const tracks = await call<Track[]>("album_tracks", { albumId: a.id });
+          const first = tracks.find((t) => !t.missing);
+          if (first) await openInFileManager(first.path);
+        },
+      },
       {
         label: "Add to queue",
         action: async () => {

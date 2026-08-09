@@ -1,5 +1,26 @@
 import { playlists } from "./stores/playlists.svelte";
+import { isTauri, type Track } from "./api";
 import type { MenuItem } from "./components/common/ContextMenu.svelte";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+
+/** Reveal a library file in the system file manager. Browser preview is a no-op. */
+export async function openInFileManager(path: string): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await revealItemInDir(path);
+  } catch (e) {
+    console.error("Could not open file manager:", e);
+  }
+}
+
+/** Shared context-menu entry for a track. Missing playlist files cannot be revealed. */
+export function openTrackInFileManagerItem(track: Track): MenuItem {
+  return {
+    label: "Open in file manager",
+    disabled: track.missing,
+    action: track.missing ? undefined : () => openInFileManager(track.path),
+  };
+}
 
 /**
  * Build the "Add to playlist" context-menu entry: a single item that reveals

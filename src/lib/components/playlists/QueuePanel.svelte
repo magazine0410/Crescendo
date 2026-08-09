@@ -1,6 +1,8 @@
 <script lang="ts">
   import { queue } from "$lib/stores/queue.svelte";
   import { formatTime, displayTitle, displayArtist } from "$lib/format";
+  import { openContextMenu } from "../common/ContextMenu.svelte";
+  import { openTrackInFileManagerItem } from "$lib/menu";
 </script>
 
 <aside class="queue">
@@ -13,9 +15,13 @@
   {#if queue.tracks.length === 0}
     <div class="empty">Queue is empty</div>
   {:else}
-    <div class="items">
+    <div class="items" role="list">
       {#each queue.tracks as t, i (i)}
-        <div class="row">
+        <div
+          class="row"
+          role="listitem"
+          oncontextmenu={(e) => openContextMenu(e, [openTrackInFileManagerItem(t)])}
+        >
           <span class="no">{i + 1}</span>
           <div class="text">
             <div class="title">{displayTitle(t)}</div>

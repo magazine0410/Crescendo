@@ -1,42 +1,81 @@
 <script lang="ts">
   import { player } from "$lib/stores/player.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import { call, artUrl, isTauri, type ArtistInfo, type AlbumInfo } from "$lib/api";
-  import { formatTime, displayTitle, displayAlbumartist } from "$lib/format";
+  import { call, artUrl, isTauri, type Album, type ArtistInfo, type AlbumInfo } from "$lib/api";
+  import { formatTime, displayOriginalTitle, displayAlbumartist, latinTitleSort } from "$lib/format";
 
   let artistInfo = $state<ArtistInfo | null>(null);
   let albumInfo = $state<AlbumInfo | null>(null);
+  let localAlbum = $state<Album | null>(null);
   let loadedFor = $state<string>("");
+  let groupingClipped = $state(false);
 
   $effect(() => {
     const t = player.track;
     if (!t) {
       artistInfo = null;
       albumInfo = null;
+      localAlbum = null;
       loadedFor = "";
       return;
     }
     const artist = t.albumartist ?? t.artist ?? "";
-    const key = `${artist}${t.album ?? ""}`;
+    const key = `${artist}${t.album ?? ""}${t.album_id ?? ""}`;
     if (key === loadedFor) return;
     loadedFor = key;
     artistInfo = null;
     albumInfo = null;
+    localAlbum = null;
+    if (t.album_id != null) {
+      call<Album | null>("album_by_id", { albumId: t.album_id })
+        .then((r) => {
+          if (loadedFor === key) localAlbum = r;
+        })
+        .catch(() => {});
+    }
     if (!isTauri || !artist) return;
     call<ArtistInfo | null>("lastfm_artist_info", { artist })
-      .then((r) => (artistInfo = r))
+      .then((r) => {
+        if (loadedFor === key) artistInfo = r;
+      })
       .catch(() => {});
     if (t.album) {
       call<AlbumInfo | null>("lastfm_album_info", { artist, album: t.album })
-        .then((r) => (albumInfo = r))
+        .then((r) => {
+          if (loadedFor === key) albumInfo = r;
+        })
         .catch(() => {});
     }
   });
 
   const track = $derived(player.track);
+  const romanizedTitle = $derived(track ? latinTitleSort(track) : null);
+  const originalTitle = $derived(track ? displayOriginalTitle(track) : "");
 
   function onImgError(e: Event) {
     (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+  }
+
+  function measureGrouping(node: HTMLElement, _grouping: string) {
+    let frame = 0;
+    const measure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        groupingClipped = node.scrollHeight > node.clientHeight + 1;
+      });
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    measure();
+    return {
+      update(_nextGrouping: string) {
+        measure();
+      },
+      destroy() {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+      },
+    };
   }
 </script>
 
@@ -58,15 +97,30 @@
       />
       <div class="local">
         <div class="row"><span>Album</span><b>{track.album ?? "?"}</b></div>
+        {#if romanizedTitle}<div class="row"><span>Original title</span><b>{originalTitle}</b></div>{/if}
         {#if track.year}<div class="row"><span>Year</span><b>{track.year}</b></div>{/if}
         {#if track.genre}<div class="row"><span>Genre</span><b>{track.genre}</b></div>{/if}
         <div class="row"><span>Codec</span><b>{track.format}</b></div>
         <div class="row"><span>Length</span><b>{formatTime(track.duration_ms)}</b></div>
+        {#if track.disc_no != null}<div class="row"><span>Disc number</span><b>{track.disc_no}</b></div>{/if}
+        {#if track.track_no != null && localAlbum}
+          <div class="row"><span>Track number</span><b>{track.track_no}/{localAlbum.track_count}</b></div>
+        {/if}
+        {#if track.grouping}
+          <div class="row">
+            <span>Grouping</span>
+            <b class="grouping" title={track.grouping}>
+              <span class="grouping-text" use:measureGrouping={track.grouping}>{track.grouping}</span>
+              {#if groupingClipped}<span class="grouping-ellipsis" aria-hidden="true">…</span>{/if}
+            </b>
+          </div>
+        {/if}
+        {#if track.play_count > 0}<div class="row"><span>Play count</span><b>{track.play_count}</b></div>{/if}
       </div>
     </div>
     <div class="right">
       <h1>{displayAlbumartist(track) ?? "?"}</h1>
-      <h2>{displayTitle(track)}</h2>
+      <h2>{romanizedTitle ?? originalTitle}</h2>
 
       {#if artistInfo?.tags?.length}
         <div class="tags">
@@ -133,6 +187,11 @@
     padding: 28px 34px;
     overflow-y: auto;
   }
+  .local,
+  .right {
+    user-select: text;
+    cursor: text;
+  }
   .left {
     flex: none;
     width: 320px;
@@ -161,6 +220,31 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .local b.grouping {
+    position: relative;
+    display: block;
+    min-width: 0;
+    white-space: normal;
+  }
+  .grouping-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  .grouping-ellipsis {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    padding-left: 0.15em;
+    background: var(--bg-main);
+  }
+  .local .grouping-text,
+  .local .grouping-ellipsis {
+    color: inherit;
   }
   .right {
     flex: 1;

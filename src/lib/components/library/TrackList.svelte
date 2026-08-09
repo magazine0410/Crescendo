@@ -4,11 +4,11 @@
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import { call, type PlayContext, type SortKey } from "$lib/api";
+  import { call, type PlayContext, type SortKey, type Track } from "$lib/api";
   import Icon from "../common/Icon.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
-  import { addToPlaylistItem } from "$lib/menu";
+  import { addToPlaylistItem, openTrackInFileManagerItem } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import { tick, untrack } from "svelte";
 
@@ -84,7 +84,7 @@
     });
   }
 
-  async function trackMenu(e: MouseEvent, trackIndex: number) {
+  async function trackMenu(e: MouseEvent, trackIndex: number, clickedTrack: Track) {
     e.preventDefault();
     e.stopPropagation();
     // Right-clicking a row outside the current selection selects just that row.
@@ -94,7 +94,7 @@
     if (sel.length === 0) return;
     const ids = sel.map((t) => t.id);
 
-    // "Open album" only when the whole selection shares one album.
+    // "View album" only when the whole selection shares one album.
     const albumId = sel[0].album_id;
     const sameAlbum = albumId != null && sel.every((t) => t.album_id === albumId);
 
@@ -110,10 +110,11 @@
         action: () => queue.add(ids),
       },
       {
-        label: "Open album",
+        label: "View album",
         disabled: !sameAlbum,
         action: sameAlbum ? () => library.openAlbumById(albumId) : undefined,
       },
+      openTrackInFileManagerItem(clickedTrack),
       { separator: true, label: "" },
       addToPlaylistItem((pid) => playlists.addTracks(pid, ids), { memberOf }),
     ];
@@ -212,7 +213,7 @@
         class:playing={player.track?.id === t.id}
         onclick={(e) => onRowClick(e, cell.trackIndex)}
         ondblclick={() => playAt(cell.trackIndex)}
-        oncontextmenu={(e) => trackMenu(e, cell.trackIndex)}
+        oncontextmenu={(e) => trackMenu(e, cell.trackIndex, t)}
       >
         <span class="no">{t.track_no ?? cell.trackIndex + 1}</span>
         <div class="tmain">

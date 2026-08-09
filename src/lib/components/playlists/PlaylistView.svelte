@@ -9,6 +9,7 @@
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import Icon from "../common/Icon.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
+  import { openTrackInFileManagerItem } from "$lib/menu";
 
   const HEADER_H = 84;
   // Two-line track rows so the play counter can sit under the title.
@@ -150,6 +151,7 @@
     openContextMenu(e, [
       { label: "Play", action: () => playAt(r.index) },
       { label: "Add to queue", action: () => queue.add([r.track.id]) },
+      openTrackInFileManagerItem(r.track),
       { separator: true, label: "" },
       {
         // Removal takes the row's position inside its own playlist, which is

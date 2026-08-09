@@ -4,11 +4,11 @@
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import { artUrl } from "$lib/api";
+  import { artUrl, type Track } from "$lib/api";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
-  import { addToPlaylistItem } from "$lib/menu";
+  import { addToPlaylistItem, openTrackInFileManagerItem } from "$lib/menu";
 
   const album = $derived(library.selectedAlbum);
 
@@ -16,10 +16,12 @@
     (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
   }
 
-  function trackMenu(e: MouseEvent, trackId: number) {
+  function trackMenu(e: MouseEvent, track: Track) {
     openContextMenu(e, [
-      { label: "Add to queue", action: () => queue.add([trackId]) },
-      addToPlaylistItem((pid) => playlists.addTracks(pid, [trackId])),
+      { label: "Add to queue", action: () => queue.add([track.id]) },
+      openTrackInFileManagerItem(track),
+      { separator: true, label: "" },
+      addToPlaylistItem((pid) => playlists.addTracks(pid, [track.id])),
     ]);
   }
 </script>
@@ -58,7 +60,7 @@
           class="trow"
           class:playing={player.track?.id === t.id}
           ondblclick={() => player.playContext({ type: "album", id: album.id }, i)}
-          oncontextmenu={(e) => trackMenu(e, t.id)}
+          oncontextmenu={(e) => trackMenu(e, t)}
         >
           <span class="no">{t.track_no ?? i + 1}</span>
           <div class="tmain">
