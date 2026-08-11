@@ -34,19 +34,85 @@
     if (menu && !(e.target as HTMLElement).closest(".ctx-menu")) closeContextMenu();
   }
 
-  // Open submenus to the left when the menu sits in the right portion of the
-  // window, so a wide playlist list never spills off-screen.
-  const flip = $derived(menu != null && menu.x + 360 > window.innerWidth);
+  /** Gap kept between a menu and the window edges. */
+  const MARGIN = 6;
+
+  let rootEl = $state<HTMLElement | null>(null);
+
+  // Put the root menu fully inside the window. The size is measured, not
+  // guessed from the item count: separators and wrapped labels are not 26px.
+  $effect(() => {
+    const el = rootEl;
+    const m = menu;
+    if (!el || !m) return;
+    const left =
+      m.x + el.offsetWidth > window.innerWidth - MARGIN
+        ? Math.max(MARGIN, m.x - el.offsetWidth)
+        : m.x;
+    const top =
+      m.y + el.offsetHeight > window.innerHeight - MARGIN
+        ? Math.max(MARGIN, window.innerHeight - MARGIN - el.offsetHeight)
+        : m.y;
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  });
+
+  /**
+   * Position a submenu against the window instead of against its parent item.
+   * The height follows the free space, and the box moves up when it does not
+   * fit below the item. A fixed `max-height` (60vh) let the lower part of the
+   * scroll box fall outside the window, and the entries in that part could
+   * never be scrolled into view — the more so for an item near the bottom.
+   */
+  function placeSubmenu(el: HTMLElement) {
+    const wrap = el.parentElement as HTMLElement;
+
+    function place() {
+      // Show and unclamp first, so the natural height can be measured. The
+      // inline value must be "none": an empty value lets the stylesheet limit
+      // (60vh) apply again, and the measurement stays clamped.
+      el.style.display = "block";
+      el.style.maxHeight = "none";
+      const natural = el.offsetHeight;
+      const wrapRect = wrap.getBoundingClientRect();
+
+      const avail = window.innerHeight - MARGIN * 2;
+      const h = Math.min(natural, avail);
+      el.style.maxHeight = `${avail}px`;
+
+      let top = wrapRect.top - 5;
+      if (top + h > window.innerHeight - MARGIN) top = window.innerHeight - MARGIN - h;
+      if (top < MARGIN) top = MARGIN;
+      el.style.top = `${top - wrapRect.top}px`;
+
+      // Open to the left only when the right side has no room and the left
+      // side has. The width is measured, not a guess at the label lengths.
+      const w = el.offsetWidth;
+      const flip = wrapRect.right + w > window.innerWidth - MARGIN && wrapRect.left - w >= MARGIN;
+      el.style.left = flip ? "auto" : "100%";
+      el.style.right = flip ? "100%" : "auto";
+      el.scrollTop = 0;
+    }
+
+    function hide() {
+      el.style.display = "";
+    }
+
+    wrap.addEventListener("pointerenter", place);
+    wrap.addEventListener("pointerleave", hide);
+    return {
+      destroy() {
+        wrap.removeEventListener("pointerenter", place);
+        wrap.removeEventListener("pointerleave", hide);
+      },
+    };
+  }
 </script>
 
 <svelte:window onpointerdown={onWindowDown} onblur={closeContextMenu} />
 
 {#if menu}
-  <div
-    class="ctx-menu"
-    style:left={`${Math.min(menu.x, window.innerWidth - 200)}px`}
-    style:top={`${Math.min(menu.y, window.innerHeight - menu.items.length * 26 - 12)}px`}
-  >
+  <div class="ctx-menu" bind:this={rootEl} style:left={`${menu.x}px`} style:top={`${menu.y}px`}>
     {#each menu.items as item, i (i)}
       {@render renderItem(item)}
     {/each}
@@ -57,12 +123,12 @@
   {#if item.separator}
     <div class="sep"></div>
   {:else if item.submenu}
-    <div class="item-wrap" class:flip>
+    <div class="item-wrap">
       <button class="item parent" class:disabled={item.disabled}>
         {item.label}
         <span class="arrow">›</span>
       </button>
-      <div class="submenu">
+      <div class="submenu" use:placeSubmenu>
         {#each item.submenu as sub, j (j)}
           {@render renderItem(sub)}
         {/each}
@@ -128,6 +194,8 @@
     font-size: 14px;
     line-height: 1;
   }
+  /* `left`, `top` and `max-height` are set by placeSubmenu() on hover; the
+     values here only apply until the first measurement. */
   .submenu {
     display: none;
     position: absolute;
@@ -140,10 +208,6 @@
     border: 1px solid var(--popup-border);
     padding: 4px 0;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
-  }
-  .item-wrap.flip > .submenu {
-    left: auto;
-    right: 100%;
   }
   .item-wrap:hover > .submenu {
     display: block;
