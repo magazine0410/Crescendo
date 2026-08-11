@@ -3,9 +3,10 @@ import { isTauri, call } from "../api";
 /** Sidebar order of the playlist list. "manual" = the stored order. */
 export type PlaylistSort = "manual" | "name" | "count";
 
-/** Where collections sit in the playlist sidebar: mixed in with the loose
-    playlists, or gathered below them under a separator. */
-export type CollectionsPlacement = "inline" | "below";
+/** Where collections sit in the playlist sidebar: gathered above the loose
+    playlists under a separator, sorted in among them by name, or gathered
+    below them under a separator. */
+export type CollectionsPlacement = "above" | "within" | "below";
 
 /** Keys mirrored into the backend `prefs` table. */
 export interface Prefs {
@@ -59,7 +60,7 @@ const DEFAULTS: Prefs = {
   track_sort: "",
   playlist_sort: "manual",
   playlist_sort_locked: false,
-  collections_placement: "inline",
+  collections_placement: "above",
 };
 
 class PrefsStore {
@@ -103,8 +104,12 @@ class PrefsStore {
     if (raw.playlist_sort === "name" || raw.playlist_sort === "count")
       v.playlist_sort = raw.playlist_sort;
     if (raw.playlist_sort_locked) v.playlist_sort_locked = raw.playlist_sort_locked === "true";
-    if (raw.collections_placement === "inline" || raw.collections_placement === "below")
-      v.collections_placement = raw.collections_placement;
+    // "inline" was the earlier name of "above": collections first, but with
+    // no separator. Read it as "above" so existing sidebars keep their shape.
+    const placement =
+      raw.collections_placement === "inline" ? "above" : raw.collections_placement;
+    if (placement === "above" || placement === "within" || placement === "below")
+      v.collections_placement = placement;
     this.values = v;
     this.loaded = true;
   }

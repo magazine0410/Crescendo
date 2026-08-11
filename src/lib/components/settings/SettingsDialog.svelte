@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { prefs } from "$lib/stores/prefs.svelte";
+  import { prefs, type CollectionsPlacement } from "$lib/stores/prefs.svelte";
   import { library } from "$lib/stores/library.svelte";
   import { call, isTauri } from "$lib/api";
   import { formatLongDuration } from "$lib/format";
@@ -161,13 +161,11 @@
           id="collplacement"
           value={prefs.values.collections_placement}
           onchange={(e) =>
-            prefs.set(
-              "collections_placement",
-              e.currentTarget.value as "inline" | "below",
-            )}
+            prefs.set("collections_placement", e.currentTarget.value as CollectionsPlacement)}
         >
-          <option value="inline">Within the playlist list</option>
-          <option value="below">Below the playlists, after a separator</option>
+          <option value="above">Above the playlist list, with a separator</option>
+          <option value="within">Within the playlist list</option>
+          <option value="below">Below the playlist list, with a separator</option>
         </select>
         <p class="hint">
           Where grouped playlists appear in the sidebar. Group playlists by

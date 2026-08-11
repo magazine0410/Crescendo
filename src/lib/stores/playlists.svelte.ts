@@ -34,6 +34,39 @@ export type SidebarRow =
   | { kind: "playlist"; playlist: PlaylistInfo }
   | { kind: "separator" };
 
+const rowName = (r: SidebarRow) =>
+  r.kind === "collection" ? r.collection.name : r.kind === "playlist" ? r.playlist.name : "";
+
+const rowCount = (r: SidebarRow) =>
+  r.kind === "collection"
+    ? r.collection.track_count
+    : r.kind === "playlist"
+      ? r.playlist.track_count
+      : 0;
+
+/** Two groups of rows with a separator between them, unless one group is
+    empty — a sidebar must not open or end with a separator. */
+function withSeparator(first: SidebarRow[], second: SidebarRow[]): SidebarRow[] {
+  if (first.length === 0 || second.length === 0) return [...first, ...second];
+  return [...first, { kind: "separator" }, ...second];
+}
+
+/** Collections put into the playlists' own order, each one where a playlist
+    of that name would be. The playlists keep their stored (manual) order:
+    no stored order spans both kinds, so only the names can place them. */
+function mergeByName(cols: SidebarRow[], loose: SidebarRow[]): SidebarRow[] {
+  const pending = [...cols].sort((a, b) => compareBy("name", rowName(a), 0, rowName(b), 0));
+  const out: SidebarRow[] = [];
+  let i = 0;
+  for (const row of loose) {
+    while (i < pending.length && compareBy("name", rowName(pending[i]), 0, rowName(row), 0) <= 0)
+      out.push(pending[i++]);
+    out.push(row);
+  }
+  out.push(...pending.slice(i));
+  return out;
+}
+
 class PlaylistsStore {
   list = $state<PlaylistInfo[]>([]);
   /** Selected playlists, in sidebar order. Usually one; Ctrl/Shift-click in
@@ -56,8 +89,9 @@ class PlaylistsStore {
   collections = $state<CollectionInfo[]>([]);
 
   /** The sidebar's rows: collections with their members, loose playlists, and
-      the separator between the two when collections sit below. Honors the
-      filter, the locked sort, and where collections are shown. */
+      the separator between the two groups when collections sit above or
+      below them. Honors the filter, the locked sort, and where collections
+      are shown. */
   sidebar = $derived.by((): SidebarRow[] => {
     const f = this.filter.trim().toLowerCase();
     const hit = (name: string) => !f || name.toLowerCase().includes(f);
@@ -79,25 +113,25 @@ class PlaylistsStore {
       .filter((p) => p.collection_id == null && hit(p.name))
       .map((playlist) => ({ kind: "playlist", playlist }));
 
-    if (sorted) {
-      const name = (r: SidebarRow) =>
-        r.kind === "collection" ? r.collection.name : r.kind === "playlist" ? r.playlist.name : "";
-      const count = (r: SidebarRow) =>
-        r.kind === "collection"
-          ? r.collection.track_count
-          : r.kind === "playlist"
-            ? r.playlist.track_count
-            : 0;
-      const cmp = (a: SidebarRow, b: SidebarRow) =>
-        compareBy(sorted, name(a), count(a), name(b), count(b));
+    const cmp = sorted
+      ? (a: SidebarRow, b: SidebarRow) =>
+          compareBy(sorted, rowName(a), rowCount(a), rowName(b), rowCount(b))
+      : null;
+    if (cmp) {
       cols.sort(cmp);
       loose.sort(cmp);
-      if (prefs.values.collections_placement === "inline") {
-        return [...cols, ...loose].sort(cmp);
-      }
     }
-    if (prefs.values.collections_placement === "inline") return [...cols, ...loose];
-    return cols.length > 0 ? [...loose, { kind: "separator" }, ...cols] : loose;
+
+    switch (prefs.values.collections_placement) {
+      case "within":
+        // One list, no separator. A locked sort keys both kinds the same way;
+        // without one, the names put each collection into place.
+        return cmp ? [...cols, ...loose].sort(cmp) : mergeByName(cols, loose);
+      case "below":
+        return withSeparator(loose, cols);
+      default:
+        return withSeparator(cols, loose);
+    }
   });
 
   /** Playlists the sidebar actually draws, in drawn order — what a Shift-range
