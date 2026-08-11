@@ -150,6 +150,17 @@ export interface AlbumInfo {
   url: string | null;
 }
 
+export interface AboutDependency {
+  name: string;
+  version: string;
+}
+
+export interface AboutInfo {
+  version: string;
+  repository_url: string;
+  dependencies: AboutDependency[];
+}
+
 /** The left-panel filter category. `custom` is a user-defined single-tag filter
     (see LibraryStore.customTag); it is the only mode that carries extra data. */
 export type BrowseMode =

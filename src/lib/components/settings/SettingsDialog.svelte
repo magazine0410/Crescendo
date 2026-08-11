@@ -50,6 +50,14 @@
     }
   }
 
+  async function openAbout() {
+    if (isTauri) {
+      await call("open_about_window");
+    } else {
+      window.open("/about", "crescendo-about", "width=500,height=600");
+    }
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onclose();
   }
@@ -273,6 +281,11 @@
         <p class="hint">
           Change the bar color from the swatch in the Visualizer tab. More options coming here later.
         </p>
+      </section>
+
+      <section>
+        <h3>About</h3>
+        <button class="btn" onclick={openAbout}>About Crescendo</button>
       </section>
     </div>
   </div>

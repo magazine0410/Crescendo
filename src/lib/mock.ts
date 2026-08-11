@@ -4,6 +4,7 @@
  * virtualized lists, and implements the same command surface as src-tauri.
  */
 import type { Album, CollectionInfo, PlaylistInfo, SortKey, Track, TrackSort } from "./api";
+import packageInfo from "../../package.json";
 
 const GENRES = ["Jazz", "Soundtrack", "Pop Rock", "Doujin", "Electronic", "Metal", null];
 // [artist, artistsort] — sort tag only where the name is Japanese
@@ -465,6 +466,29 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return {} as T;
     case "prefs_set":
       return undefined as T;
+    case "about_info":
+      return {
+        version: packageInfo.version,
+        repository_url: "https://github.com/magazine0410/Crescendo",
+        dependencies: [
+          { name: "Tauri", version: "2.11.5" },
+          { name: "Tauri JS API", version: "2.11.1" },
+          { name: "Tauri Dialog", version: "2.7.2" },
+          { name: "Tauri Opener", version: "2.5.4" },
+          { name: "Svelte", version: "5.56.6" },
+          { name: "SvelteKit", version: "2.70.0" },
+          { name: "Vite", version: "6.4.3" },
+          { name: "GStreamer bindings", version: "0.24.5" },
+          { name: "Tokio", version: "1.53.0" },
+          { name: "rusqlite", version: "0.32.1" },
+          { name: "Lofty", version: "0.22.4" },
+          { name: "image", version: "0.25.10" },
+          { name: "ureq", version: "2.12.1" },
+          { name: "walkdir", version: "2.5.0" },
+          { name: "regex", version: "1.13.1" },
+          { name: "Serde", version: "1.0.229" },
+        ],
+      } as T;
     case "player_set_spectrum_enabled":
       return undefined as T;
     case "waveform_get": {

@@ -4,6 +4,19 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Manager, State, WebviewUrl};
 use tokio::sync::Semaphore;
 
+#[derive(serde::Serialize)]
+pub struct AboutDependency {
+    name: &'static str,
+    version: &'static str,
+}
+
+#[derive(serde::Serialize)]
+pub struct AboutInfo {
+    version: &'static str,
+    repository_url: &'static str,
+    dependencies: Vec<AboutDependency>,
+}
+
 /// Bound concurrent waveform decodes (each fully decodes a track). Skipping
 /// tracks quickly could otherwise stack several CPU-heavy decodes at once.
 static WAVEFORM_PERMITS: Semaphore = Semaphore::const_new(2);
@@ -20,6 +33,80 @@ pub async fn prefs_set(
     value: String,
 ) -> Result<(), String> {
     state.db.prefs_set(&key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn about_info() -> AboutInfo {
+    AboutInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        repository_url: "https://github.com/magazine0410/Crescendo",
+        dependencies: vec![
+            AboutDependency {
+                name: "Tauri",
+                version: env!("CRESCENDO_DEP_TAURI"),
+            },
+            AboutDependency {
+                name: "Tauri JS API",
+                version: env!("CRESCENDO_DEP_TAURI_API"),
+            },
+            AboutDependency {
+                name: "Tauri Dialog",
+                version: env!("CRESCENDO_DEP_TAURI_DIALOG"),
+            },
+            AboutDependency {
+                name: "Tauri Opener",
+                version: env!("CRESCENDO_DEP_TAURI_OPENER"),
+            },
+            AboutDependency {
+                name: "Svelte",
+                version: env!("CRESCENDO_DEP_SVELTE"),
+            },
+            AboutDependency {
+                name: "SvelteKit",
+                version: env!("CRESCENDO_DEP_SVELTEKIT"),
+            },
+            AboutDependency {
+                name: "Vite",
+                version: env!("CRESCENDO_DEP_VITE"),
+            },
+            AboutDependency {
+                name: "GStreamer bindings",
+                version: env!("CRESCENDO_DEP_GSTREAMER"),
+            },
+            AboutDependency {
+                name: "Tokio",
+                version: env!("CRESCENDO_DEP_TOKIO"),
+            },
+            AboutDependency {
+                name: "rusqlite",
+                version: env!("CRESCENDO_DEP_RUSQLITE"),
+            },
+            AboutDependency {
+                name: "Lofty",
+                version: env!("CRESCENDO_DEP_LOFTY"),
+            },
+            AboutDependency {
+                name: "image",
+                version: env!("CRESCENDO_DEP_IMAGE"),
+            },
+            AboutDependency {
+                name: "ureq",
+                version: env!("CRESCENDO_DEP_UREQ"),
+            },
+            AboutDependency {
+                name: "walkdir",
+                version: env!("CRESCENDO_DEP_WALKDIR"),
+            },
+            AboutDependency {
+                name: "regex",
+                version: env!("CRESCENDO_DEP_REGEX"),
+            },
+            AboutDependency {
+                name: "Serde",
+                version: env!("CRESCENDO_DEP_SERDE"),
+            },
+        ],
+    }
 }
 
 /// Loudness-waveform peaks (0..=255) for a track; generated and cached on first
@@ -192,6 +279,25 @@ pub async fn open_cover_window(
         .title("Cover art")
         .inner_size(600.0, 600.0)
         .min_inner_size(200.0, 200.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Open or focus the compact About window.
+#[tauri::command]
+pub async fn open_about_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("about") {
+        win.unminimize().map_err(|e| e.to_string())?;
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "about", WebviewUrl::App("/about".into()))
+        .title("About Crescendo")
+        .inner_size(500.0, 600.0)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())

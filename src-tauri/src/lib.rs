@@ -99,6 +99,7 @@ pub fn run() {
             commands::playlists::collection_set_collapsed,
             commands::misc::prefs_get_all,
             commands::misc::prefs_set,
+            commands::misc::about_info,
             commands::misc::waveform_get,
             commands::misc::lastfm_artist_info,
             commands::misc::lastfm_album_info,
@@ -106,6 +107,7 @@ pub fn run() {
             commands::misc::autostart_get,
             commands::misc::autostart_set,
             commands::misc::open_cover_window,
+            commands::misc::open_about_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
