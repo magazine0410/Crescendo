@@ -1,4 +1,5 @@
 import type { Track } from "./api";
+import { prefs } from "./stores/prefs.svelte";
 
 /** 83000 -> "1:23"; hours kick in past 60 min. Negative -> "-1:23". */
 export function formatTime(ms: number): string {
@@ -41,9 +42,11 @@ const LATIN_RE = /\p{Script=Latin}/u;
 
 /**
  * Prefer the romanized sort tag when the display value contains CJK text and
- * the sort tag exists. Libraries without sort tags are unaffected.
+ * the sort tag exists. Libraries without sort tags are unaffected, and the
+ * `prefer_romanized` pref turns the substitution off altogether.
  */
 function romanized(value: string | null, sort: string | null): string | null {
+  if (!prefs.values.prefer_romanized) return value;
   if (value && sort && CJK_RE.test(value)) return sort;
   return value;
 }
@@ -55,6 +58,7 @@ export function displayTitle(t: Track): string {
 /** A Latin-script titlesort that can stand in for an original CJK title. */
 export function latinTitleSort(t: Track): string | null {
   if (
+    prefs.values.prefer_romanized &&
     t.title &&
     t.titlesort &&
     CJK_RE.test(t.title) &&
@@ -95,16 +99,16 @@ export function displayName(value: string | null, sort: string | null): string |
   return romanized(value, sort);
 }
 
+// %title%, %artist% and %albumartist% go through the display helpers, so the
+// "Prefer romanized names" pref reaches format patterns too. The plain *sort
+// tags stay literal — they are the raw tag, not a display choice.
 const TAG_GETTERS: Record<string, (t: Track) => string | number | null> = {
-  title: (t) => t.title ?? fileStem(t.path),
-  artist: (t) => t.artist ?? t.albumartist,
-  albumartist: (t) => t.albumartist ?? t.artist,
+  title: (t) => displayTitle(t),
+  artist: (t) => displayArtist(t),
+  albumartist: (t) => displayAlbumartist(t),
   titlesort: (t) => t.titlesort,
   artistsort: (t) => t.artistsort,
   albumartistsort: (t) => t.albumartistsort,
-  title_display: (t) => displayTitle(t),
-  artist_display: (t) => displayArtist(t),
-  albumartist_display: (t) => displayAlbumartist(t),
   album: (t) => t.album,
   genre: (t) => t.genre,
   grouping: (t) => t.grouping,

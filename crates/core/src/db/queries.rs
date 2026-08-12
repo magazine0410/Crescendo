@@ -15,9 +15,10 @@ pub const TRACK_COLS: &str = "id, path, title, artist, album, albumartist, title
 pub const LIBRARY_SORT: &str = "albumartist COLLATE NOCASE, year, album COLLATE NOCASE, \
                                 disc_no, track_no, path";
 
-/// ORDER BY expression for one explicit sort key. Title honors the romanized
-/// titlesort tag when present, matching how titles render (see format.ts).
-fn sort_key_sql(key: SortKey) -> &'static str {
+/// ORDER BY expression for one explicit sort key. With `romanized`, Title
+/// honors the titlesort tag when present, matching how titles render (see
+/// format.ts); without it, titles sort by the tag they show.
+fn sort_key_sql(key: SortKey, romanized: bool) -> &'static str {
     match key {
         SortKey::Albumartist => "albumartist COLLATE NOCASE",
         SortKey::Artist => "artist COLLATE NOCASE",
@@ -25,7 +26,8 @@ fn sort_key_sql(key: SortKey) -> &'static str {
         SortKey::Genre => "genre COLLATE NOCASE",
         SortKey::Grouping => "grouping COLLATE NOCASE",
         SortKey::Year => "year",
-        SortKey::Title => "COALESCE(NULLIF(titlesort, ''), title) COLLATE NOCASE",
+        SortKey::Title if romanized => "COALESCE(NULLIF(titlesort, ''), title) COLLATE NOCASE",
+        SortKey::Title => "title COLLATE NOCASE",
         SortKey::Duration => "duration_ms",
     }
 }
@@ -33,15 +35,17 @@ fn sort_key_sql(key: SortKey) -> &'static str {
 /// Full ORDER BY body for the Track-list view: `LIBRARY_SORT` when no explicit
 /// sort is chosen, otherwise the chosen key(s) — each with its direction —
 /// followed by the LIBRARY_SORT tiebreakers the chosen keys don't already cover.
-pub fn order_sql(sort: Option<TrackSort>) -> String {
+/// `romanized` is the `prefer_romanized` pref; pass the same value to the view
+/// and to `resolve_context` or a row's index stops matching its queue position.
+pub fn order_sql(sort: Option<TrackSort>, romanized: bool) -> String {
     let Some(s) = sort else { return LIBRARY_SORT.into() };
     let dir = if s.descending { " DESC" } else { "" };
     let mut used = vec![s.key];
-    let mut out = format!("{}{dir}", sort_key_sql(s.key));
+    let mut out = format!("{}{dir}", sort_key_sql(s.key, romanized));
     if let Some(sec) = s.secondary.filter(|k| *k != s.key) {
         used.push(sec);
         let sec_dir = if s.secondary_descending.unwrap_or(s.descending) { " DESC" } else { "" };
-        out = format!("{out}, {}{sec_dir}", sort_key_sql(sec));
+        out = format!("{out}, {}{sec_dir}", sort_key_sql(sec, romanized));
     }
     const CHAIN: [(Option<SortKey>, &str); 6] = [
         (Some(SortKey::Albumartist), "albumartist COLLATE NOCASE"),
@@ -209,18 +213,29 @@ impl Db {
         };
         let (where_sql, params) = track_where(filter);
         let val = col_expr(col);
+        // Artist rows are ordered by the sort tag only while it is what they
+        // show; with the pref off they order by the name on screen.
+        let name_order = |sort_col: &str| {
+            if self.prefer_romanized() {
+                format!(
+                    "COALESCE(NULLIF(COALESCE(MAX({sort_col}), ''), ''), COALESCE({col}, ''))"
+                )
+            } else {
+                format!("COALESCE({col}, '')")
+            }
+        };
         let sql = match &mode {
             BrowseMode::Artist => format!(
                 "SELECT COALESCE({col}, ''), COUNT(*), COALESCE(MAX(artistsort), '') \
                  FROM tracks WHERE {where_sql} GROUP BY COALESCE({col}, '') \
-                 ORDER BY COALESCE(NULLIF(COALESCE(MAX(artistsort), ''), ''), \
-                                   COALESCE({col}, '')) COLLATE NOCASE"
+                 ORDER BY {} COLLATE NOCASE",
+                name_order("artistsort")
             ),
             BrowseMode::Albumartist => format!(
                 "SELECT COALESCE({col}, ''), COUNT(*), COALESCE(MAX(albumartistsort), '') \
                  FROM tracks WHERE {where_sql} GROUP BY COALESCE({col}, '') \
-                 ORDER BY COALESCE(NULLIF(COALESCE(MAX(albumartistsort), ''), ''), \
-                                   COALESCE({col}, '')) COLLATE NOCASE"
+                 ORDER BY {} COLLATE NOCASE",
+                name_order("albumartistsort")
             ),
             // Collapse multi-theme grouping tags under their primary theme.
             _ if col == "grouping" && collapse => format!(
@@ -258,13 +273,19 @@ impl Db {
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
         push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
+        // Read before locking: `with` holds the connection mutex.
+        let artist_order = if self.prefer_romanized() {
+            "COALESCE(NULLIF(a.albumartist_sort, ''), a.albumartist)"
+        } else {
+            "a.albumartist"
+        };
         self.with(|conn| {
             let sql = format!(
                 "SELECT a.id, a.album, a.albumartist, a.albumartist_sort, a.year, a.genre, \
                         a.track_count, a.total_duration_ms \
                  FROM albums a WHERE a.id IN \
                    (SELECT DISTINCT album_id FROM tracks WHERE {where_sql}) \
-                 ORDER BY COALESCE(NULLIF(a.albumartist_sort, ''), a.albumartist) \
+                 ORDER BY {artist_order} \
                           COLLATE NOCASE, a.year, a.album COLLATE NOCASE"
             );
             let mut stmt = conn.prepare(&sql)?;
@@ -355,7 +376,7 @@ impl Db {
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
         push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
-        let order = order_sql(sort);
+        let order = order_sql(sort, self.prefer_romanized());
         self.with(|conn| {
             let sql = format!(
                 "SELECT {TRACK_COLS} FROM tracks WHERE {where_sql} \
@@ -386,7 +407,7 @@ impl Db {
     ) -> Result<Option<i64>> {
         let (mut where_sql, mut params) = track_where(filter);
         push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
-        let order = order_sql(sort);
+        let order = order_sql(sort, self.prefer_romanized());
         self.with(|conn| {
             let sql = format!(
                 "SELECT rn FROM ( \
@@ -419,7 +440,7 @@ impl Db {
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
         push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
-        let order = order_sql(sort);
+        let order = order_sql(sort, self.prefer_romanized());
         self.with(|conn| {
             let sql = format!(
                 "WITH ordered AS ( \
@@ -506,7 +527,7 @@ impl Db {
             PlayContext::LibraryView { query, sort } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (where_sql, params) = track_where(filter.as_ref());
-                let order = order_sql(*sort);
+                let order = order_sql(*sort, self.prefer_romanized());
                 self.with(|conn| {
                     collect_ids(
                         conn,
@@ -519,7 +540,7 @@ impl Db {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
                 push_values_clause(&mut where_sql, &mut params, mode, values, *collapse);
-                let order = order_sql(*sort);
+                let order = order_sql(*sort, self.prefer_romanized());
                 self.with(|conn| {
                     collect_ids(
                         conn,

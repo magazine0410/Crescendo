@@ -88,6 +88,25 @@ fn title_sort_uses_titlesort_tag() {
 }
 
 #[test]
+fn prefer_romanized_off_sorts_titles_by_the_shown_tag() {
+    let (_d, db) = test_db();
+    db.prefs_set("prefer_romanized", "false").unwrap();
+    // With the tag ignored, "ボーナス" sorts by itself again — after the Latin
+    // titles, where SQLite's code-point order puts it.
+    let s = sort(SortKey::Title, None, false);
+    assert_eq!(titles(&db, s), ["Aria", "Coda", "ボーナス"]);
+
+    // The view and the play queue must still agree on that order.
+    let ids = db.resolve_context(&PlayContext::LibraryView { query: None, sort: s }).unwrap();
+    let view = db.tracks_range(None, BrowseMode::Artist, &[], false, s, 0, 100).unwrap();
+    assert_eq!(ids, view.iter().map(|t| t.id).collect::<Vec<_>>());
+    for (i, t) in view.iter().enumerate() {
+        let idx = db.track_index(None, BrowseMode::Artist, &[], false, s, t.id).unwrap();
+        assert_eq!(idx, Some(i as i64));
+    }
+}
+
+#[test]
 fn secondary_key_breaks_primary_ties() {
     let (_d, db) = test_db();
     // Within the 2014 pair, duration (following the descending primary)

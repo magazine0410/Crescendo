@@ -24,6 +24,17 @@ impl Db {
         })
     }
 
+    /// The frontend's "Prefer romanized names" tick box (default on). Ordering
+    /// reads it so ORDER BY follows what the rows actually show — see
+    /// `queries::order_sql` and `browse_values`. Never called from inside a
+    /// `with` closure: the connection mutex is not reentrant.
+    pub fn prefer_romanized(&self) -> bool {
+        !matches!(
+            self.prefs_get("prefer_romanized").ok().flatten().as_deref(),
+            Some("false")
+        )
+    }
+
     pub fn prefs_set(&self, key: &str, value: &str) -> Result<()> {
         self.with(|conn| {
             conn.execute(

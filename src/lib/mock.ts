@@ -197,13 +197,23 @@ function libSort(a: Track, b: Track): number {
   );
 }
 
+/** Mirrors the backend `prefer_romanized` pref (default on), which decides
+    whether ordering follows the romanized *sort tags. `prefs_set` keeps it
+    current; the dev backend stores nothing else. */
+let preferRomanized = true;
+
+/** Sort key of a title: the romanized tag only while it is what the row shows. */
+function titleKey(t: Track): string {
+  return (preferRomanized ? t.titlesort || t.title : t.title) || "";
+}
+
 /** One explicit sort key's comparison (mirrors queries.rs sort_key_sql). */
 function keyCmp(a: Track, b: Track, key: SortKey): number {
   switch (key) {
     case "year": return (a.year ?? 0) - (b.year ?? 0);
     case "duration": return a.duration_ms - b.duration_ms;
     case "title":
-      return (a.titlesort || a.title || "").localeCompare(b.titlesort || b.title || "");
+      return titleKey(a).localeCompare(titleKey(b));
     case "albumartist": return (a.albumartist ?? "").localeCompare(b.albumartist ?? "");
     case "artist": return (a.artist ?? "").localeCompare(b.artist ?? "");
     case "album": return (a.album ?? "").localeCompare(b.album ?? "");
@@ -263,7 +273,9 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         .sort((a, b) =>
           numeric
             ? Number(a[0]) - Number(b[0])
-            : (a[2] || a[0]).localeCompare(b[2] || b[0]),
+            : preferRomanized
+              ? (a[2] || a[0]).localeCompare(b[2] || b[0])
+              : a[0].localeCompare(b[0]),
         ) as T;
     }
     case "browse_albums": {
@@ -465,6 +477,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "prefs_get_all":
       return {} as T;
     case "prefs_set":
+      if (args.key === "prefer_romanized") preferRomanized = args.value !== "false";
       return undefined as T;
     case "about_info":
       return {

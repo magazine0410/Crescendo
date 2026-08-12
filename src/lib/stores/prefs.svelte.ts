@@ -12,6 +12,9 @@ export type CollectionsPlacement = "above" | "within" | "below";
 export interface Prefs {
   library_path: string;
   lastfm_api_key: string;
+  /** Substitute the romanized *sort tag wherever a title or artist that
+      contains CJK text renders (see format.ts). Off shows the original tags. */
+  prefer_romanized: boolean;
   titlebar_format: string;
   track_detail_format: string;
   /** Optional smaller second line under track_detail (same %tag% syntax).
@@ -46,7 +49,8 @@ export interface Prefs {
 const DEFAULTS: Prefs = {
   library_path: "/mnt/Mythic_Meme/Music/",
   lastfm_api_key: "",
-  titlebar_format: "%albumartist_display% - %title_display%",
+  prefer_romanized: true,
+  titlebar_format: "%albumartist% - %title%",
   track_detail_format: "",
   track_detail_format_2: "",
   scan_threads: 4,
@@ -63,6 +67,11 @@ const DEFAULTS: Prefs = {
   collections_placement: "above",
 };
 
+/** `%title_display%` -> `%title%` for the three retired _display tags. */
+function foldDisplayTags(pattern: string): string {
+  return pattern.replace(/%(title|artist|albumartist)_display%/gi, "%$1%");
+}
+
 class PrefsStore {
   values = $state<Prefs>({ ...DEFAULTS });
   loaded = $state(false);
@@ -76,9 +85,15 @@ class PrefsStore {
     const v: Prefs = { ...DEFAULTS };
     if (raw.library_path) v.library_path = raw.library_path;
     if (raw.lastfm_api_key) v.lastfm_api_key = raw.lastfm_api_key;
-    if (raw.titlebar_format) v.titlebar_format = raw.titlebar_format;
-    if (raw.track_detail_format) v.track_detail_format = raw.track_detail_format;
-    if (raw.track_detail_format_2) v.track_detail_format_2 = raw.track_detail_format_2;
+    if (raw.prefer_romanized) v.prefer_romanized = raw.prefer_romanized === "true";
+    // %title_display% and friends became the prefer_romanized toggle: fold any
+    // stored pattern back onto the plain tags, which now follow that toggle.
+    for (const key of ["titlebar_format", "track_detail_format", "track_detail_format_2"] as const) {
+      if (!raw[key]) continue;
+      const folded = foldDisplayTags(raw[key]);
+      v[key] = folded;
+      if (folded !== raw[key]) await call("prefs_set", { key, value: folded });
+    }
     if (raw.scan_threads) v.scan_threads = parseInt(raw.scan_threads, 10) || 4;
     if (raw.show_waveform) v.show_waveform = raw.show_waveform === "true";
     if (raw.library_view === "track_list" || raw.library_view === "album_wall")
@@ -116,7 +131,9 @@ class PrefsStore {
 
   async set<K extends keyof Prefs>(key: K, value: Prefs[K]) {
     this.values[key] = value;
-    if (isTauri) await call("prefs_set", { key, value: String(value) });
+    // Also in the browser: mock.ts mirrors the prefs the dev backend needs
+    // (prefer_romanized decides its ordering), and ignores the rest.
+    await call("prefs_set", { key, value: String(value) });
   }
 
   /** UI layout numbers, persisted with a shared prefix. */

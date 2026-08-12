@@ -62,6 +62,24 @@ fn fixed_albumartist_uses_romanized_sort_values() {
 }
 
 #[test]
+fn prefer_romanized_off_orders_album_artists_by_the_shown_name() {
+    let (_d, db) = make_db();
+    db.prefs_set("prefer_romanized", "false").unwrap();
+
+    // The sort value still rides along for callers that want it, but the row
+    // order now follows the name on screen: 上海… falls after the Latin ones.
+    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    assert_eq!(
+        vals,
+        vec![
+            ("".into(), 1, "".into()),
+            ("Zulu".into(), 1, "".into()),
+            ("上海アリス幻樂団".into(), 2, "Shanghai Alice".into()),
+        ],
+    );
+}
+
+#[test]
 fn custom_year_browses_integer_column_as_text() {
     let (_d, db) = make_db();
 

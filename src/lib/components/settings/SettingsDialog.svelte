@@ -13,6 +13,17 @@
   let keyTest = $state<"idle" | "testing" | "ok" | "bad">("idle");
   let autostart = $state(false);
 
+  /** Ordering follows this pref in SQL (see queries.rs), so the pref has to be
+      written before anything re-queries — hence the reload here rather than an
+      effect on prefs.values, which would fire while the old value is still
+      stored. */
+  async function setPreferRomanized(on: boolean) {
+    await prefs.set("prefer_romanized", on);
+    await library.loadValues();
+    await library.loadAlbums();
+    await library.reloadTrackView(prefs.values.track_separators);
+  }
+
   // Reflect the actual on-disk autostart state whenever the dialog opens.
   $effect(() => {
     if (open) {
@@ -209,6 +220,23 @@
           Show loudness waveform under the seek bar
         </label>
 
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={prefs.values.prefer_romanized}
+            onchange={(e) => setPreferRomanized(e.currentTarget.checked)}
+          />
+          Prefer romanized names where available
+        </label>
+        <p class="hint">
+          Shows the romanized titlesort / artistsort / albumartistsort tag wherever a
+          title or artist that contains Japanese/CJK text renders — track lists,
+          albums, the playlist, the queue and the Now playing tab, plus %title%,
+          %artist% and %albumartist% in the formats below. Sorting follows it too, so
+          a row sits where its visible name says it should. The Now playing tab keeps
+          its "Original title" row. Turn this off to always show the original tags.
+        </p>
+
         <label for="fmt">Now-playing title format</label>
         <input
           id="fmt"
@@ -219,10 +247,9 @@
         <p class="hint">
           %tag% placeholders: albumartist, artist, title, album, grouping, genre,
           tracknumber, discnumber, year, length, codec, titlesort, artistsort,
-          albumartistsort. The _display variants (title_display, artist_display,
-          albumartist_display) automatically substitute the romanized sort tag when
-          the original contains Japanese/CJK text. [brackets] render only when every
-          tag inside resolves.
+          albumartistsort. The three *sort tags print the file's sort tag exactly as
+          stored — the tick box does not change them, and they show nothing on tracks
+          without one. [brackets] render only when every tag inside resolves.
         </p>
 
         <label for="rowfmt">Track detail (shown left of the duration)</label>
