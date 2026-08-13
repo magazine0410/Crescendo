@@ -21,8 +21,8 @@
   let { active = true }: Props = $props();
 
   interface BundledPreset {
-    /** File name under static/projectm/presets/en-d/, and the stable key the
-        `en-d:` preset id is built from. */
+    /** File name under static/projectm/presets/en-d/, and the key that
+        identifies this preset everywhere else. */
     file: string;
     name: string;
   }
@@ -30,6 +30,30 @@
   interface PresetIndex {
     pack: string;
     presets: BundledPreset[];
+  }
+
+  /** Which preset is on screen, in the one shape every lookup uses.
+      `visualizer_mode` already records the source, so only `key` is
+      persisted; `refId` builds the renderer-facing identity from it. */
+  interface PresetRef {
+    source: "en-d" | "import";
+    /** En D: the file name. Import: the path relative to `root`. */
+    key: string;
+    /** Import root `key` is relative to; empty for bundled presets. */
+    root: string;
+  }
+
+  /** The only place a preset id string is assembled. projectM uses it purely
+      as a cache key, so it just has to stay unique per folder and preset. */
+  function refId(ref: PresetRef): string {
+    return ref.source === "en-d" ? `en-d:${ref.key}` : `import:${ref.root}:${ref.key}`;
+  }
+
+  /** Bundled keys used to be stored with the `en-d:` prefix that the mode
+      already implies. Accept the old form so a saved preset survives. */
+  function savedBundledKey(): string {
+    const saved = prefs.values.visualizer_preset;
+    return saved.startsWith("en-d:") ? saved.slice("en-d:".length) : saved;
   }
 
   type Choice =
@@ -44,6 +68,7 @@
   let bundledPack = $state("En D");
   let imported = $state<ProjectMImport | null>(null);
   let activePreset = $state<ProjectMPresetFile | null>(null);
+  let activeRef = $state<PresetRef | null>(null);
   let activeAssets = $state<ProjectMAssetEntry[]>([]);
   let activeAssetRoot = $state("");
   let projectmMounted = $state(false);
@@ -101,14 +126,10 @@
     return rows;
   });
 
-  async function readBundled(preset: BundledPreset): Promise<ProjectMPresetFile> {
-    const response = await fetch(`/projectm/presets/en-d/${preset.file}`);
-    if (!response.ok) throw new Error(`Could not load En D preset: ${preset.name}`);
-    return {
-      id: `en-d:${preset.file}`,
-      name: preset.name,
-      data: await response.text(),
-    };
+  async function readBundled(ref: PresetRef, name: string): Promise<ProjectMPresetFile> {
+    const response = await fetch(`/projectm/presets/en-d/${ref.key}`);
+    if (!response.ok) throw new Error(`Could not load En D preset: ${name}`);
+    return { id: refId(ref), name, data: await response.text() };
   }
 
   async function setMode(mode: VisualizerMode) {
@@ -118,11 +139,13 @@
   /** Put a bundled preset on screen and remember it. Shared by the explicit
       picks and by the rotation, which differ only in surrounding chrome. */
   async function showBundled(preset: BundledPreset) {
+    const ref: PresetRef = { source: "en-d", key: preset.file, root: "" };
     activeAssets = [];
     activeAssetRoot = "";
-    activePreset = await readBundled(preset);
+    activePreset = await readBundled(ref, preset.name);
+    activeRef = ref;
     projectmMounted = true;
-    await prefs.set("visualizer_preset", activePreset.id);
+    await prefs.set("visualizer_preset", ref.key);
   }
 
   async function activateBundled(
@@ -142,27 +165,34 @@
     }
   }
 
-  async function readImported(preset: ProjectMPresetEntry): Promise<ProjectMPresetFile> {
-    const path = prefs.values.visualizer_import_path;
+  async function readImported(ref: PresetRef): Promise<ProjectMPresetFile> {
     const loaded = await call<ProjectMPresetFile>("projectm_load_preset", {
-      path,
-      id: preset.id,
+      path: ref.root,
+      id: ref.key,
     });
-    return {
-      ...loaded,
-      id: `import:${path}:${preset.id}`,
+    return { ...loaded, id: refId(ref) };
+  }
+
+  /** Put an imported preset on screen and remember it. */
+  async function showImported(preset: ProjectMPresetEntry) {
+    const ref: PresetRef = {
+      source: "import",
+      key: preset.id,
+      root: prefs.values.visualizer_import_path,
     };
+    activeAssets = imported?.assets ?? [];
+    activeAssetRoot = ref.root;
+    activePreset = await readImported(ref);
+    activeRef = ref;
+    projectmMounted = true;
+    await prefs.set("visualizer_preset", ref.key);
   }
 
   async function activateImported(preset: ProjectMPresetEntry) {
     busy = true;
     error = "";
     try {
-      activeAssets = imported?.assets ?? [];
-      activeAssetRoot = prefs.values.visualizer_import_path;
-      activePreset = await readImported(preset);
-      projectmMounted = true;
-      await prefs.set("visualizer_preset", preset.id);
+      await showImported(preset);
       if (prefs.values.visualizer_mode !== "projectm_import") {
         await setMode("projectm_import");
       }
@@ -214,35 +244,30 @@
     }
   }
 
+  /** Every option is a mode the app can already be in, so selecting one only
+      has to switch to it — no option needs undoing after the fact. */
   async function selectVisualizer(event: Event) {
-    const select = event.currentTarget as HTMLSelectElement;
-    const value = select.value;
+    const value = (event.currentTarget as HTMLSelectElement).value;
     if (value === "bars") {
       error = "";
       notice = "";
       activePreset = null;
+      activeRef = null;
       activeAssets = [];
       activeAssetRoot = "";
       await setMode("bars");
     } else if (value === "en-d") {
-      const saved = prefs.values.visualizer_preset;
-      const match = bundled.find((preset) => `en-d:${preset.file}` === saved);
+      const match = bundled.find((preset) => preset.file === savedBundledKey());
       const next = match ?? bundled[Math.floor(Math.random() * bundled.length)];
       if (next) await activateBundled(next, "projectm_en_d");
-    } else if (value === "choose") {
-      await openChooser();
-      // The choice is not committed until a preset is picked.
-      select.value = selectorValue;
-    } else if (value === "import") {
-      select.value = selectorValue;
-      await importFolder();
     }
+    // "current-preset" and "current-import" name the mode already in effect.
   }
 
   async function cycleEnD() {
     if (!bundled.length || busy || player.status !== "playing" || !active) return;
-    const current = activePreset?.id;
-    let candidates = bundled.filter((preset) => `en-d:${preset.file}` !== current);
+    const current = activeRef?.source === "en-d" ? activeRef.key : "";
+    let candidates = bundled.filter((preset) => preset.file !== current);
     if (!candidates.length) candidates = bundled;
     const next = candidates[Math.floor(Math.random() * candidates.length)];
     if (!next) return;
@@ -279,14 +304,10 @@
         const selected =
           imported.presets.find((preset) => preset.id === prefs.values.visualizer_preset) ??
           imported.presets[0];
-        activeAssets = imported.assets;
-        activeAssetRoot = prefs.values.visualizer_import_path;
-        activePreset = await readImported(selected);
-        projectmMounted = true;
+        await showImported(selected);
       } else if (mode !== "bars") {
         const selected =
-          bundled.find((preset) => `en-d:${preset.file}` === prefs.values.visualizer_preset) ??
-          bundled[0];
+          bundled.find((preset) => preset.file === savedBundledKey()) ?? bundled[0];
         if (selected) await showBundled(selected);
       }
     } catch (cause) {
@@ -300,6 +321,7 @@
   async function onProjectMError(message: string) {
     projectmMounted = false;
     activePreset = null;
+    activeRef = null;
     activeAssets = [];
     activeAssetRoot = "";
     await setMode("bars");
@@ -367,12 +389,12 @@
         {#if prefs.values.visualizer_mode === "projectm_preset"}
           <option value="current-preset">MilkDrop: Selected preset</option>
         {/if}
-        <option value="choose">Choose preset</option>
         {#if prefs.values.visualizer_mode === "projectm_import"}
           <option value="current-import">MilkDrop: Imported folder</option>
         {/if}
-        <option value="import">Import preset folder...</option>
       </select>
+      <button class="action" disabled={busy} onclick={openChooser}>Choose preset...</button>
+      <button class="action" disabled={busy} onclick={importFolder}>Import folder...</button>
       {#if activePreset && prefs.values.visualizer_mode !== "bars"}
         <span class="preset-name" title={activePreset.name}>{activePreset.name}</span>
       {/if}
@@ -515,6 +537,25 @@
   select option {
     color: var(--txt);
     background: var(--bg-main);
+  }
+  /* The two actions sit beside the mode list rather than inside it, so every
+     option in the list is a state the visualizer can actually be left in. */
+  .action {
+    flex: none;
+    height: 32px;
+    padding: 0 10px;
+    color: var(--txt);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  .action:hover:not(:disabled) {
+    background: var(--hover-row);
+  }
+  .action:disabled {
+    color: var(--txt-faded);
+    cursor: default;
   }
   .preset-name {
     min-width: 0;
