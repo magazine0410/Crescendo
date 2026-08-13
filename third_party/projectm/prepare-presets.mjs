@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 
 const [source, output = "static/projectm/presets/en-d"] = process.argv.slice(2);
@@ -19,13 +19,10 @@ const files = walk(source)
 const presets = files.map((path, index) => {
   const file = `${String(index + 1).padStart(3, "0")}.milk`;
   copyFileSync(path, join(output, file));
-  return {
-    id: file,
-    file,
-    name: basename(path, extname(path)),
-    source: relative(source, path),
-    bytes: statSync(path).size,
-  };
+  // `file` is both the copied name and the stable key the frontend's
+  // `en-d:<file>` preset id is built from, so it must not be renumbered
+  // without also migrating the stored `visualizer_preset` pref.
+  return { file, name: basename(path, extname(path)) };
 });
 
 writeFileSync(join(output, "index.json"), `${JSON.stringify({ pack: "En D", presets }, null, 2)}\n`);

@@ -21,11 +21,10 @@
   let { active = true }: Props = $props();
 
   interface BundledPreset {
-    id: string;
+    /** File name under static/projectm/presets/en-d/, and the stable key the
+        `en-d:` preset id is built from. */
     file: string;
     name: string;
-    source: string;
-    bytes: number;
   }
 
   interface PresetIndex {
@@ -42,6 +41,7 @@
     | { type: "preset"; choice: Choice };
 
   let bundled = $state<BundledPreset[]>([]);
+  let bundledPack = $state("En D");
   let imported = $state<ProjectMImport | null>(null);
   let activePreset = $state<ProjectMPresetFile | null>(null);
   let activeAssets = $state<ProjectMAssetEntry[]>([]);
@@ -85,7 +85,7 @@
 
   const chooserRows = $derived.by(() => {
     const rows: ChooserRow[] = [
-      { type: "header", label: "En D", count: filteredBundled.length },
+      { type: "header", label: bundledPack, count: filteredBundled.length },
       ...filteredBundled.map(
         (preset): ChooserRow => ({ type: "preset", choice: { source: "en-d", preset } }),
       ),
@@ -105,7 +105,7 @@
     const response = await fetch(`/projectm/presets/en-d/${preset.file}`);
     if (!response.ok) throw new Error(`Could not load En D preset: ${preset.name}`);
     return {
-      id: `en-d:${preset.id}`,
+      id: `en-d:${preset.file}`,
       name: preset.name,
       data: await response.text(),
     };
@@ -115,25 +115,30 @@
     await prefs.set("visualizer_mode", mode);
   }
 
+  /** Put a bundled preset on screen and remember it. Shared by the explicit
+      picks and by the rotation, which differ only in surrounding chrome. */
+  async function showBundled(preset: BundledPreset) {
+    activeAssets = [];
+    activeAssetRoot = "";
+    activePreset = await readBundled(preset);
+    projectmMounted = true;
+    await prefs.set("visualizer_preset", activePreset.id);
+  }
+
   async function activateBundled(
     preset: BundledPreset,
     mode: "projectm_en_d" | "projectm_preset",
-    foreground = true,
   ) {
-    if (foreground) busy = true;
+    busy = true;
     error = "";
     notice = "";
     try {
-      activeAssets = [];
-      activeAssetRoot = "";
-      activePreset = await readBundled(preset);
-      projectmMounted = true;
-      await prefs.set("visualizer_preset", activePreset.id);
+      await showBundled(preset);
       if (prefs.values.visualizer_mode !== mode) await setMode(mode);
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     } finally {
-      if (foreground) busy = false;
+      busy = false;
     }
   }
 
@@ -221,7 +226,7 @@
       await setMode("bars");
     } else if (value === "en-d") {
       const saved = prefs.values.visualizer_preset;
-      const match = bundled.find((preset) => `en-d:${preset.id}` === saved);
+      const match = bundled.find((preset) => `en-d:${preset.file}` === saved);
       const next = match ?? bundled[Math.floor(Math.random() * bundled.length)];
       if (next) await activateBundled(next, "projectm_en_d");
     } else if (value === "choose") {
@@ -237,15 +242,14 @@
   async function cycleEnD() {
     if (!bundled.length || busy || player.status !== "playing" || !active) return;
     const current = activePreset?.id;
-    let candidates = bundled.filter((preset) => `en-d:${preset.id}` !== current);
+    let candidates = bundled.filter((preset) => `en-d:${preset.file}` !== current);
     if (!candidates.length) candidates = bundled;
     const next = candidates[Math.floor(Math.random() * candidates.length)];
     if (!next) return;
+    // Deliberately without `busy`: the rotation must not grey out the selector
+    // or clear a message the user is still reading.
     try {
-      activeAssets = [];
-      activeAssetRoot = "";
-      activePreset = await readBundled(next);
-      await prefs.set("visualizer_preset", activePreset.id);
+      await showBundled(next);
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     }
@@ -258,6 +262,7 @@
       if (!response.ok) throw new Error("The bundled En D preset pack is unavailable");
       const index = (await response.json()) as PresetIndex;
       bundled = index.presets;
+      if (index.pack) bundledPack = index.pack;
 
       const mode = prefs.values.visualizer_mode;
       if (mode === "projectm_import") {
@@ -280,14 +285,9 @@
         projectmMounted = true;
       } else if (mode !== "bars") {
         const selected =
-          bundled.find((preset) => `en-d:${preset.id}` === prefs.values.visualizer_preset) ??
+          bundled.find((preset) => `en-d:${preset.file}` === prefs.values.visualizer_preset) ??
           bundled[0];
-        if (selected) {
-          activeAssets = [];
-          activeAssetRoot = "";
-          activePreset = await readBundled(selected);
-          projectmMounted = true;
-        }
+        if (selected) await showBundled(selected);
       }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
@@ -304,6 +304,11 @@
     activeAssetRoot = "";
     await setMode("bars");
     error = `projectM could not start; switched to Bars (Eole). ${message}`;
+  }
+
+  /** A single preset failing keeps the renderer and its previous visual. */
+  function onPresetFail(message: string) {
+    error = `That preset could not be loaded. ${message}`;
   }
 
   function onDialogKeydown(event: KeyboardEvent) {
@@ -387,6 +392,7 @@
             assetRoot={activeAssetRoot}
             active={active && prefs.values.visualizer_mode !== "bars"}
             onerror={onProjectMError}
+            onpresetfail={onPresetFail}
           />
         </div>
       {/if}

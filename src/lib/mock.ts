@@ -504,14 +504,12 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         ],
       } as T;
     case "player_set_spectrum_enabled":
-    case "player_set_projectm_enabled":
       return undefined as T;
-    case "player_take_projectm_pcm":
-      return new ArrayBuffer(0) as T;
-    case "projectm_import_folder":
-    case "projectm_load_preset":
-    case "projectm_load_asset":
-      throw new Error("Importing projectM presets needs the desktop app");
+    // The projectM commands (player_set_projectm_enabled,
+    // player_take_projectm_pcm, projectm_import_folder, projectm_load_preset,
+    // projectm_load_asset) have no mock on purpose: every call site is behind
+    // an `isTauri` guard, and the Visualizer tab drives its own preview audio
+    // in the browser. Add mocks here if any of those guards ever go away.
     case "waveform_get": {
       // Synthetic loudness envelope so the waveform is visible in `npm run dev`.
       const n = 500;

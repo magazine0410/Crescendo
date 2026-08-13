@@ -7,8 +7,11 @@
     assets?: ProjectMAssetEntry[];
     assetRoot?: string;
     active?: boolean;
-    onready?: () => void;
+    /** The renderer itself cannot run; the caller is expected to fall back. */
     onerror?: (message: string) => void;
+    /** A preset or its textures failed after startup. The previously loaded
+        visual keeps rendering, so this only needs reporting. */
+    onpresetfail?: (message: string) => void;
   }
 
   interface ProjectMModule {
@@ -48,8 +51,8 @@
     assets = [],
     assetRoot = "",
     active = true,
-    onready,
     onerror,
+    onpresetfail,
   }: Props = $props();
 
   let host: HTMLDivElement;
@@ -71,9 +74,8 @@
   let cssWidth = 0;
   let cssHeight = 0;
 
+  /** Emscripten asks for `projectm.wasm` and `projectm.data` by bare name. */
   function runtimeFile(path: string): string {
-    if (path.endsWith(".wasm")) return "/projectm/projectm.wasm";
-    if (path.endsWith(".data")) return "/projectm/projectm.data";
     return `/projectm/${path.split("/").pop()}`;
   }
 
@@ -111,21 +113,18 @@
     return pcmPointer;
   }
 
-  function addPcm(samples: number[] | Int16Array) {
+  function addPcm(samples: Int16Array) {
     const runtime = module;
     if (!runtime || status !== "ready" || !active) return;
-    // Keep each copy bounded. GStreamer normally sends far fewer than this,
-    // but imported/slow webview frames must not grow one giant WASM allocation.
+    // Keep each copy bounded: one pull can carry up to MAX_PROJECTM_PCM_BYTES
+    // (128 KiB, so 65,536 samples), which must not grow one giant allocation.
+    // `enqueue_projectm_pcm` only ever hands back whole stereo frames, so both
+    // the total and every chunk of it are even and frame-aligned.
     const maxSamples = 8192;
-    for (let offset = 0; offset + 1 < samples.length; offset += maxSamples) {
-      const count = Math.min(maxSamples, samples.length - offset) & ~1;
+    for (let offset = 0; offset < samples.length; offset += maxSamples) {
+      const count = Math.min(maxSamples, samples.length - offset);
       const pointer = ensurePcmCapacity(count);
-      runtime.HEAP16.set(
-        samples instanceof Int16Array
-          ? samples.subarray(offset, offset + count)
-          : samples.slice(offset, offset + count),
-        pointer >> 1,
-      );
+      runtime.HEAP16.set(samples.subarray(offset, offset + count), pointer >> 1);
       runtime._crescendo_projectm_add_pcm(pointer, count / 2);
     }
   }
@@ -157,8 +156,10 @@
     runtime._crescendo_projectm_render();
   }
 
+  /** Rust sends bare file names, so this only guards the WASM filesystem
+      against separators that are legal in a Linux file name. */
   function safeAssetName(name: string): string {
-    return name.replaceAll("\\", "_").replaceAll("/", "_").replaceAll("..", "_");
+    return name.replaceAll("\\", "_").replaceAll("/", "_");
   }
 
   async function installAssets(
@@ -169,6 +170,9 @@
   ) {
     const key = `${root}|${next.map((asset) => `${asset.id}:${asset.bytes}`).join("|")}`;
     if (key === installedAssetKey) return;
+    // Every bail-out below leaves /imports wiped or half-written, so stop
+    // claiming any particular set is installed until the last file lands.
+    installedAssetKey = "";
     runtime.FS.mkdirTree("/imports");
     for (const old of runtime.FS.readdir("/imports")) {
       if (old !== "." && old !== "..") runtime.FS.unlink(`/imports/${old}`);
@@ -196,11 +200,16 @@
     loadedPresetId = next.id;
   }
 
+  /** `fatal` is set only for the startup selection, which has no earlier
+      preset to fall back on: a failure there means the renderer never runs.
+      Later failures leave the previous preset on screen and are only
+      reported, so one unreadable file cannot take the visualizer down. */
   async function applySelection(
     runtime: ProjectMModule,
     nextPreset: ProjectMPresetFile | null,
     nextAssets: ProjectMAssetEntry[],
     root: string,
+    fatal = false,
   ) {
     const generation = ++selectionGeneration;
     try {
@@ -211,7 +220,12 @@
         loadPreset(runtime, nextPreset);
       }
     } catch (cause) {
-      fail(cause);
+      if (fatal) {
+        fail(cause);
+      } else {
+        console.error(cause);
+        onpresetfail?.(cause instanceof Error ? cause.message : String(cause));
+      }
     }
   }
 
@@ -267,12 +281,11 @@
             "projectM could not initialize",
         );
       }
-      await applySelection(runtime, preset, assets, assetRoot);
+      await applySelection(runtime, preset, assets, assetRoot, true);
       if (status === "error") return;
       status = "ready";
       resizeObserver = new ResizeObserver(resize);
       resizeObserver.observe(host);
-      onready?.();
     } catch (cause) {
       fail(cause);
     }
