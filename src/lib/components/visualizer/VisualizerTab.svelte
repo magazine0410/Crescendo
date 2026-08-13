@@ -37,9 +37,9 @@
       case "projectm_en_d":
         return "en-d";
       case "projectm_preset":
-        return "choose";
+        return "current-preset";
       case "projectm_import":
-        return "import";
+        return "current-import";
       default:
         return "bars";
     }
@@ -220,14 +220,6 @@
 
 <div class="vis" style:padding-bottom={`${ui.bottombarH}px`}>
   <div class="surface">
-    {#if prefs.values.visualizer_mode === "bars"}
-      <BarsVisualizer />
-    {:else if activePreset}
-      <ProjectMVisualizer preset={activePreset} assets={activeAssets} />
-    {:else}
-      <div class="empty">{busy ? "Loading visualizer…" : "Select a projectM preset"}</div>
-    {/if}
-
     <div class="toolbar">
       <select
         aria-label="Visualizer"
@@ -238,7 +230,11 @@
       >
         <option value="bars">Bars (Eole)</option>
         <option value="en-d">MilkDrop: En D</option>
+        <!-- Keep action modes on a hidden display value so selecting the same
+             action again still dispatches a native change event. -->
+        <option value="current-preset" disabled hidden>Choose preset</option>
         <option value="choose">Choose preset</option>
+        <option value="current-import" disabled hidden>Import preset folder...</option>
         <option value="import">Import preset folder...</option>
       </select>
       {#if activePreset && prefs.values.visualizer_mode !== "bars"}
@@ -246,9 +242,19 @@
       {/if}
     </div>
 
-    {#if error}
-      <button class="error" title="Dismiss" onclick={() => (error = "")}>{error}</button>
-    {/if}
+    <div class="viewport">
+      {#if prefs.values.visualizer_mode === "bars"}
+        <BarsVisualizer />
+      {:else if activePreset}
+        <ProjectMVisualizer preset={activePreset} assets={activeAssets} />
+      {:else}
+        <div class="empty">{busy ? "Loading visualizer…" : "Select a projectM preset"}</div>
+      {/if}
+
+      {#if error}
+        <button class="error" title="Dismiss" onclick={() => (error = "")}>{error}</button>
+      {/if}
+    </div>
   </div>
 </div>
 
@@ -290,9 +296,16 @@
     box-sizing: border-box;
   }
   .surface {
-    position: relative;
+    display: flex;
+    flex-direction: column;
     width: 100%;
     height: 100%;
+    overflow: hidden;
+  }
+  .viewport {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: hidden;
   }
   .empty {
@@ -302,18 +315,19 @@
     color: var(--txt-faded);
   }
   .toolbar {
-    position: absolute;
-    top: 12px;
-    left: 14px;
     display: flex;
+    flex: 0 0 52px;
     align-items: center;
-    max-width: calc(100% - 80px);
-    gap: 9px;
-    z-index: 4;
+    gap: 14px;
+    min-width: 0;
+    padding: 0 9px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--hairline);
+    box-sizing: border-box;
   }
   select {
-    height: 28px;
-    min-width: 154px;
+    flex: 0 0 171px;
+    height: 32px;
     padding: 0 25px 0 8px;
     color: var(--txt);
     appearance: none;
@@ -324,7 +338,6 @@
     background-position: right 7px center;
     border: 1px solid var(--border);
     border-radius: 2px;
-    box-shadow: 0 2px 9px rgba(0, 0, 0, 0.35);
     cursor: pointer;
   }
   select:disabled {
@@ -336,13 +349,13 @@
     background: var(--bg-main);
   }
   .preset-name {
+    min-width: 0;
     overflow: hidden;
-    max-width: min(48vw, 520px);
-    color: rgba(255, 255, 255, 0.68);
+    max-width: min(52vw, 620px);
+    color: var(--txt-semifaded);
     font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
-    text-shadow: 0 1px 3px #000;
   }
   .error {
     position: absolute;
