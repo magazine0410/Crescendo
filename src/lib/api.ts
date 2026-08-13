@@ -161,6 +161,23 @@ export interface AboutInfo {
   dependencies: AboutDependency[];
 }
 
+export interface ProjectMPresetFile {
+  id: string;
+  name: string;
+  data: string;
+}
+
+export interface ProjectMAssetFile {
+  name: string;
+  data_base64: string;
+}
+
+export interface ProjectMImport {
+  folder_name: string;
+  presets: ProjectMPresetFile[];
+  assets: ProjectMAssetFile[];
+}
+
 /** The left-panel filter category. `custom` is a user-defined single-tag filter
     (see LibraryStore.customTag); it is the only mode that carries extra data. */
 export type BrowseMode =

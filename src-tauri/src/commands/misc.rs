@@ -74,6 +74,10 @@ pub async fn about_info() -> AboutInfo {
                 version: env!("CRESCENDO_DEP_GSTREAMER"),
             },
             AboutDependency {
+                name: "projectM WebAssembly",
+                version: "4.1.5",
+            },
+            AboutDependency {
                 name: "Tokio",
                 version: env!("CRESCENDO_DEP_TOKIO"),
             },

@@ -1,0 +1,285 @@
+{
+  "pack": "En D",
+  "presets": [
+    {
+      "id": "001.milk",
+      "file": "001.milk",
+      "name": "Fumbling_Foo + En D, Martin - The Lifeforce of the music v4a",
+      "source": "Fumbling Foo/Fumbling_Foo + En D, Martin - The Lifeforce of the music v4a.milk",
+      "bytes": 30739
+    },
+    {
+      "id": "002.milk",
+      "file": "002.milk",
+      "name": "Fumbling_Foo__En_D_Martin_-_The_Lifeforce_of_the_music_v5",
+      "source": "Fumbling Foo/Fumbling_Foo__En_D_Martin_-_The_Lifeforce_of_the_music_v5.milk",
+      "bytes": 30634
+    },
+    {
+      "id": "003.milk",
+      "file": "003.milk",
+      "name": "Fumbling_Foo__En_D_Martin_-_The_Lifeforce_of_the_music_v6b",
+      "source": "Fumbling Foo/Fumbling_Foo__En_D_Martin_-_The_Lifeforce_of_the_music_v6b.milk",
+      "bytes": 33187
+    },
+    {
+      "id": "004.milk",
+      "file": "004.milk",
+      "name": "En D -  2001 (Beta)",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2001 (Beta).milk",
+      "bytes": 8687
+    },
+    {
+      "id": "005.milk",
+      "file": "005.milk",
+      "name": "En D -  2001",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2001.milk",
+      "bytes": 7192
+    },
+    {
+      "id": "006.milk",
+      "file": "006.milk",
+      "name": "En D -  2002 (Beta)",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2002 (Beta).milk",
+      "bytes": 7872
+    },
+    {
+      "id": "007.milk",
+      "file": "007.milk",
+      "name": "En D -  2002",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2002.milk",
+      "bytes": 20519
+    },
+    {
+      "id": "008.milk",
+      "file": "008.milk",
+      "name": "En D -  2003",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2003.milk",
+      "bytes": 28913
+    },
+    {
+      "id": "009.milk",
+      "file": "009.milk",
+      "name": "En D -  2004",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2004.milk",
+      "bytes": 20519
+    },
+    {
+      "id": "010.milk",
+      "file": "010.milk",
+      "name": "En D -  2005",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2005.milk",
+      "bytes": 10434
+    },
+    {
+      "id": "011.milk",
+      "file": "011.milk",
+      "name": "En D -  2006",
+      "source": "MD Episode 1 - New Millenium/Presets/En D -  2006.milk",
+      "bytes": 7872
+    },
+    {
+      "id": "012.milk",
+      "file": "012.milk",
+      "name": "En D + Martin - Perfect Simple Spectrum ",
+      "source": "MD Episode 1 - New Millenium/Presets/En D + Martin - Perfect Simple Spectrum .milk",
+      "bytes": 8687
+    },
+    {
+      "id": "013.milk",
+      "file": "013.milk",
+      "name": "En D -  Acid warp 2",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Acid warp 2.milk",
+      "bytes": 14035
+    },
+    {
+      "id": "014.milk",
+      "file": "014.milk",
+      "name": "En D -  Acid warp 3",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Acid warp 3.milk",
+      "bytes": 12937
+    },
+    {
+      "id": "015.milk",
+      "file": "015.milk",
+      "name": "En D -  Acid Warp 4",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Acid Warp 4.milk",
+      "bytes": 6542
+    },
+    {
+      "id": "016.milk",
+      "file": "016.milk",
+      "name": "En D -  Acid warp vs Starforge",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Acid warp vs Starforge.milk",
+      "bytes": 27685
+    },
+    {
+      "id": "017.milk",
+      "file": "017.milk",
+      "name": "En D -  Acid warp",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Acid warp.milk",
+      "bytes": 14414
+    },
+    {
+      "id": "018.milk",
+      "file": "018.milk",
+      "name": "En D -  Burning ground",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Burning ground.milk",
+      "bytes": 19286
+    },
+    {
+      "id": "019.milk",
+      "file": "019.milk",
+      "name": "En D -  Club lights",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Club lights.milk",
+      "bytes": 13627
+    },
+    {
+      "id": "020.milk",
+      "file": "020.milk",
+      "name": "En D -  Took Too Much Acid (Somewhere in a En D Aftermath",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D -  Took Too Much Acid (Somewhere in a En D Aftermath.milk",
+      "bytes": 13231
+    },
+    {
+      "id": "021.milk",
+      "file": "021.milk",
+      "name": "En D - Down at Lower harbor",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - Down at Lower harbor.milk",
+      "bytes": 9270
+    },
+    {
+      "id": "022.milk",
+      "file": "022.milk",
+      "name": "En D - I Won on Temptation Island because he was king",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - I Won on Temptation Island because he was king.milk",
+      "bytes": 7828
+    },
+    {
+      "id": "023.milk",
+      "file": "023.milk",
+      "name": "En D - Light Essences",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - Light Essences.milk",
+      "bytes": 8856
+    },
+    {
+      "id": "024.milk",
+      "file": "024.milk",
+      "name": "En D - Technocracy is bullshit",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - Technocracy is bullshit.milk",
+      "bytes": 13717
+    },
+    {
+      "id": "025.milk",
+      "file": "025.milk",
+      "name": "En D - Took Too much Acid ( It became a coldcut video)",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - Took Too much Acid ( It became a coldcut video).milk",
+      "bytes": 9104
+    },
+    {
+      "id": "026.milk",
+      "file": "026.milk",
+      "name": "En D - Took Too much Acid (and I Vomited out rainbow",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - Took Too much Acid (and I Vomited out rainbow.milk",
+      "bytes": 8661
+    },
+    {
+      "id": "027.milk",
+      "file": "027.milk",
+      "name": "En D - Took Too much Acid (and this happend)",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - Took Too much Acid (and this happend).milk",
+      "bytes": 9094
+    },
+    {
+      "id": "028.milk",
+      "file": "028.milk",
+      "name": "En D - Wild Why At the Artist Development center",
+      "source": "MD Episode 2 - out of Da club into da head/Presets/En D - Wild Why At the Artist Development center.milk",
+      "bytes": 6662
+    },
+    {
+      "id": "029.milk",
+      "file": "029.milk",
+      "name": "En D - Bitchcraft",
+      "source": "Remixes And Remakes/Presets/En D - Bitchcraft.milk",
+      "bytes": 7594
+    },
+    {
+      "id": "030.milk",
+      "file": "030.milk",
+      "name": "En D - Censored mosaic pixels",
+      "source": "Remixes And Remakes/Presets/En D - Censored mosaic pixels.milk",
+      "bytes": 9580
+    },
+    {
+      "id": "031.milk",
+      "file": "031.milk",
+      "name": "En D - Street Art",
+      "source": "Remixes And Remakes/Presets/En D - Street Art.milk",
+      "bytes": 13116
+    },
+    {
+      "id": "032.milk",
+      "file": "032.milk",
+      "name": "En D - Sunset color tower (Hakan presets are outdated) ",
+      "source": "Remixes And Remakes/Presets/En D - Sunset color tower (Hakan presets are outdated) .milk",
+      "bytes": 9686
+    },
+    {
+      "id": "033.milk",
+      "file": "033.milk",
+      "name": "martin - Hardcore mix 1 [mash 3] - En D - Autistic  aeromancy",
+      "source": "Remixes And Remakes/Presets/martin - Hardcore mix 1 [mash 3] - En D - Autistic  aeromancy.milk",
+      "bytes": 14374
+    },
+    {
+      "id": "034.milk",
+      "file": "034.milk",
+      "name": "martin - night in the forest - En D - if hakan says that i can scam code i  basically ",
+      "source": "Remixes And Remakes/Presets/martin - night in the forest - En D - if hakan says that i can scam code i  basically .milk",
+      "bytes": 14482
+    },
+    {
+      "id": "035.milk",
+      "file": "035.milk",
+      "name": "martin - night in the forest - En D - if hakan says that i can scam code i  basically could go Madame Chao on your ass!!!",
+      "source": "Remixes And Remakes/Presets/martin - night in the forest - En D - if hakan says that i can scam code i  basically could go Madame Chao on your ass!!!.milk",
+      "bytes": 8830
+    },
+    {
+      "id": "036.milk",
+      "file": "036.milk",
+      "name": "martin - night in the forest - En D - if hakan says that i can scam code i  basically Give head to a checkerboard",
+      "source": "Remixes And Remakes/Presets/martin - night in the forest - En D - if hakan says that i can scam code i  basically Give head to a checkerboard.milk",
+      "bytes": 19746
+    },
+    {
+      "id": "037.milk",
+      "file": "037.milk",
+      "name": "martin - night in the forest - En D - if hakan says that i can scam code i  basically i'd rather have tik tok girls go swim in lake superior during a storn",
+      "source": "Remixes And Remakes/Presets/martin - night in the forest - En D - if hakan says that i can scam code i  basically i'd rather have tik tok girls go swim in lake superior during a storn.milk",
+      "bytes": 10648
+    },
+    {
+      "id": "038.milk",
+      "file": "038.milk",
+      "name": "martin - night in the forest - En D - if hakan says that i can scam code i  basically potc ida mim ska de mumspissit",
+      "source": "Remixes And Remakes/Presets/martin - night in the forest - En D - if hakan says that i can scam code i  basically potc ida mim ska de mumspissit.milk",
+      "bytes": 19746
+    },
+    {
+      "id": "039.milk",
+      "file": "039.milk",
+      "name": "martin - night in the forest - En D - if hakan says that i can scam code i  basically send you to a push a unknown place filled with color",
+      "source": "Remixes And Remakes/Presets/martin - night in the forest - En D - if hakan says that i can scam code i  basically send you to a push a unknown place filled with color.milk",
+      "bytes": 13466
+    },
+    {
+      "id": "040.milk",
+      "file": "040.milk",
+      "name": "ORB - Acid Cycle [ En D's Sweet taste of  diffusion and black magik",
+      "source": "Remixes And Remakes/Presets/ORB - Acid Cycle [ En D's Sweet taste of  diffusion and black magik.milk",
+      "bytes": 9218
+    }
+  ]
+}

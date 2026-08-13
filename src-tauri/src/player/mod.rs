@@ -7,6 +7,7 @@ use crescendo_core::db::Db;
 use crescendo_core::model::{PlayContext, Track};
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use gstreamer::prelude::*;
+use gstreamer_app::{AppSink, AppSinkCallbacks};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -31,6 +32,9 @@ pub enum Cmd {
     /// Toggle spectrum-analysis messages on the audio-filter; the frontend
     /// enables this only while the Visualizer tab is visible.
     SetSpectrumEnabled(bool),
+    /// Toggle PCM frames for projectM. The tap is a side branch, resampled to
+    /// projectM's expected 44.1 kHz without changing the audible stream.
+    SetProjectMEnabled(bool),
     QueueAdd(Vec<i64>),
     QueueRemove(Vec<usize>),
     QueueClear,
@@ -71,6 +75,12 @@ pub struct PositionEvent {
 pub struct SpectrumEvent {
     pub bands: Vec<f32>,
     pub rate: u32,
+}
+
+/// Interleaved stereo signed-16 PCM for the WebAssembly projectM renderer.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectMPcmEvent {
+    pub samples: Vec<i16>,
 }
 
 /// Emitted when a track crosses the "played" threshold and its counter is bumped.
@@ -131,6 +141,8 @@ struct Engine {
     /// `spectrum` element spliced into playbin's audio path as its audio-filter;
     /// posts per-band magnitudes on the bus when `post-messages` is on.
     spectrum: gstreamer::Element,
+    /// The appsink callback reads this without touching the player thread.
+    projectm_enabled: Arc<AtomicBool>,
     app: AppHandle,
     db: Arc<Db>,
     queue: Arc<Mutex<PlayQueue>>,
@@ -165,19 +177,64 @@ fn run_player(
 ) -> anyhow::Result<()> {
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
 
-    // Spectrum analyser spliced into the audio path as a passthrough
-    // audio-filter. It starts silent (post-messages off) and the frontend
-    // turns it on only while the Visualizer tab is visible, so the FFT costs
-    // nothing the rest of the time. `bands` is the FFT resolution (log-binned
-    // into display bars on the frontend); `interval` sets the message rate.
-    let spectrum = gstreamer::ElementFactory::make("spectrum")
-        .property("bands", 512u32)
-        .property("interval", 33_000_000u64) // ns -> ~30 messages/sec
-        .property("threshold", -80i32) // dB noise floor
-        .property("post-messages", false)
-        .property("multi-channel", false) // single magnitude array (channels averaged)
-        .build()?;
-    playbin.set_property("audio-filter", &spectrum);
+    // One audio-filter bin serves both visualizers. The audible branch is a
+    // passthrough spectrum element and therefore preserves the decoded format.
+    // A leaky side branch converts/resamples only a copy for projectM, so its
+    // 44.1 kHz S16 input requirement never reduces playback fidelity. Its
+    // queue is bounded by three seconds of timestamps (about 517 KiB of stereo
+    // S16) and drops visualizer data if it ever fills, so this branch can never
+    // stall the audible one. The appsink must remain clock-synchronized:
+    // without `sync=true`, it consumes playbin's decode-ahead PCM roughly
+    // 1.5 seconds before the audio sink actually plays the same samples.
+    let audio_filter = gstreamer::parse::bin_from_description(
+        "tee name=visualizer_tee \
+         visualizer_tee. ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 \
+           ! spectrum name=spectrum bands=512 interval=33000000 threshold=-80 \
+             post-messages=false multi-channel=false \
+         visualizer_tee. ! queue leaky=downstream max-size-buffers=0 \
+             max-size-bytes=0 max-size-time=3000000000 \
+           ! audioconvert ! audioresample \
+           ! audio/x-raw,format=S16LE,layout=interleaved,rate=44100,channels=2 \
+           ! appsink name=projectm_pcm sync=true max-buffers=2 drop=true",
+        true,
+    )?;
+    let spectrum = audio_filter
+        .by_name("spectrum")
+        .ok_or_else(|| anyhow::anyhow!("visualizer spectrum element is missing"))?;
+    let pcm_sink = audio_filter
+        .by_name("projectm_pcm")
+        .ok_or_else(|| anyhow::anyhow!("projectM PCM appsink is missing"))?
+        .downcast::<AppSink>()
+        .map_err(|_| anyhow::anyhow!("projectM PCM element is not an appsink"))?;
+    let projectm_enabled = Arc::new(AtomicBool::new(false));
+    pcm_sink.set_callbacks(
+        AppSinkCallbacks::builder()
+            .new_sample({
+                let app = app.clone();
+                let enabled = projectm_enabled.clone();
+                move |sink| {
+                    let sample = sink.pull_sample().map_err(|_| gstreamer::FlowError::Eos)?;
+                    if !enabled.load(Ordering::Relaxed) {
+                        return Ok(gstreamer::FlowSuccess::Ok);
+                    }
+                    let buffer = sample.buffer().ok_or(gstreamer::FlowError::Error)?;
+                    let map = buffer
+                        .map_readable()
+                        .map_err(|_| gstreamer::FlowError::Error)?;
+                    let samples: Vec<i16> = map
+                        .as_slice()
+                        .chunks_exact(2)
+                        .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                        .collect();
+                    if !samples.is_empty() {
+                        let _ = app.emit("player:projectm-pcm", ProjectMPcmEvent { samples });
+                    }
+                    Ok(gstreamer::FlowSuccess::Ok)
+                }
+            })
+            .build(),
+    );
+    playbin.set_property("audio-filter", &audio_filter);
 
     let queue = Arc::new(Mutex::new(PlayQueue::default()));
     let gapless_pending = Arc::new(Mutex::new(false));
@@ -212,6 +269,7 @@ fn run_player(
     let mut engine = Engine {
         playbin,
         spectrum,
+        projectm_enabled,
         app,
         db,
         queue,
@@ -355,6 +413,9 @@ impl Engine {
             }
             Cmd::SetSpectrumEnabled(on) => {
                 self.spectrum.set_property("post-messages", on);
+            }
+            Cmd::SetProjectMEnabled(on) => {
+                self.projectm_enabled.store(on, Ordering::Relaxed);
             }
             Cmd::QueueAdd(ids) => {
                 self.queue.lock().expect("queue poisoned").queue_add(&ids);

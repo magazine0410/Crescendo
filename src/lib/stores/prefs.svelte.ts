@@ -8,6 +8,8 @@ export type PlaylistSort = "manual" | "name" | "count";
     below them under a separator. */
 export type CollectionsPlacement = "above" | "within" | "below";
 
+export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "projectm_import";
+
 /** Keys mirrored into the backend `prefs` table. */
 export interface Prefs {
   library_path: string;
@@ -34,6 +36,12 @@ export interface Prefs {
   custom_browse_tag: string;
   /** Bar color for the Visualizer tab, `#rrggbb`. Defaults to the theme accent. */
   visualizer_color: string;
+  /** Active Visualizer-tab engine/source. */
+  visualizer_mode: VisualizerMode;
+  /** Bundled preset id, or imported preset id for the chosen/imported modes. */
+  visualizer_preset: string;
+  /** Last user-selected MilkDrop folder, reloaded when the import mode returns. */
+  visualizer_import_path: string;
   /** Track-list sort, encoded `key:secondary:asc|desc` (see library store's
       parseTrackSort). Blank = default LIBRARY_SORT order. */
   track_sort: string;
@@ -61,6 +69,9 @@ const DEFAULTS: Prefs = {
   grouping_split_multi: false,
   custom_browse_tag: "",
   visualizer_color: "#ffaf32", // == --accent (theme orange)
+  visualizer_mode: "bars",
+  visualizer_preset: "",
+  visualizer_import_path: "",
   track_sort: "",
   playlist_sort: "manual",
   playlist_sort_locked: false,
@@ -115,6 +126,15 @@ class PrefsStore {
       }
     }
     if (raw.visualizer_color) v.visualizer_color = raw.visualizer_color;
+    if (
+      raw.visualizer_mode === "bars" ||
+      raw.visualizer_mode === "projectm_en_d" ||
+      raw.visualizer_mode === "projectm_preset" ||
+      raw.visualizer_mode === "projectm_import"
+    )
+      v.visualizer_mode = raw.visualizer_mode;
+    if (raw.visualizer_preset) v.visualizer_preset = raw.visualizer_preset;
+    if (raw.visualizer_import_path) v.visualizer_import_path = raw.visualizer_import_path;
     if (raw.track_sort) v.track_sort = raw.track_sort;
     if (raw.playlist_sort === "name" || raw.playlist_sort === "count")
       v.playlist_sort = raw.playlist_sort;

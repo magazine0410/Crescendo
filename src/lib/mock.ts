@@ -492,6 +492,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           { name: "SvelteKit", version: "2.70.0" },
           { name: "Vite", version: "6.4.3" },
           { name: "GStreamer bindings", version: "0.24.5" },
+          { name: "projectM WebAssembly", version: "4.1.5" },
           { name: "Tokio", version: "1.53.0" },
           { name: "rusqlite", version: "0.32.1" },
           { name: "Lofty", version: "0.22.4" },
@@ -503,7 +504,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         ],
       } as T;
     case "player_set_spectrum_enabled":
+    case "player_set_projectm_enabled":
       return undefined as T;
+    case "projectm_import_folder":
+      throw new Error("Importing projectM presets needs the desktop app");
     case "waveform_get": {
       // Synthetic loudness envelope so the waveform is visible in `npm run dev`.
       const n = 500;
