@@ -227,6 +227,7 @@
     {@const detail2 = formatTitle(prefs.values.track_detail_format_2, r.track)}
     <button
       class="trow"
+      class:alt={r.index % 2 === 1}
       class:playing={player.track?.id === r.track.id}
       class:missing={r.track.missing}
       ondblclick={() => playAt(r.index)}
@@ -363,6 +364,9 @@
     padding: 0 16px 0 24px;
     color: var(--txt);
     text-align: left;
+  }
+  .trow.alt {
+    background: var(--row-alt);
   }
   .trow:hover {
     background: var(--hover-row);
