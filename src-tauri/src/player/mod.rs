@@ -9,11 +9,33 @@ use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+
+const MAX_PROJECTM_PCM_BYTES: usize = 128 * 1024;
+
+fn enqueue_projectm_pcm(chunks: &mut VecDeque<Vec<u8>>, bytes: &[u8]) {
+    // Keep complete stereo S16 frames and, defensively, cap even a single
+    // unexpectedly large GStreamer buffer to the newest sub-second slice.
+    let complete_len = bytes.len() & !3;
+    let start = complete_len.saturating_sub(MAX_PROJECTM_PCM_BYTES);
+    let newest = &bytes[start..complete_len];
+    if newest.is_empty() {
+        return;
+    }
+    let mut queued_bytes: usize = chunks.iter().map(Vec::len).sum();
+    while queued_bytes.saturating_add(newest.len()) > MAX_PROJECTM_PCM_BYTES {
+        let Some(oldest) = chunks.pop_front() else {
+            break;
+        };
+        queued_bytes = queued_bytes.saturating_sub(oldest.len());
+    }
+    chunks.push_back(newest.to_vec());
+}
 
 #[derive(Debug)]
 pub enum Cmd {
@@ -77,12 +99,6 @@ pub struct SpectrumEvent {
     pub rate: u32,
 }
 
-/// Interleaved stereo signed-16 PCM for the WebAssembly projectM renderer.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProjectMPcmEvent {
-    pub samples: Vec<i16>,
-}
-
 /// Emitted when a track crosses the "played" threshold and its counter is bumped.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayRecorded {
@@ -95,6 +111,7 @@ pub struct PlayerHandle {
     tx: Sender<Cmd>,
     shared: Arc<Mutex<PlayerState>>,
     queue_shared: Arc<Mutex<Vec<i64>>>,
+    projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
 }
 
 impl PlayerHandle {
@@ -106,6 +123,20 @@ impl PlayerHandle {
     }
     pub fn queue_ids(&self) -> Vec<i64> {
         self.queue_shared.lock().expect("queue state poisoned").clone()
+    }
+    /// Drain the small bounded PCM handoff queue. The Tauri command returns
+    /// this as an ArrayBuffer, avoiding JSON number-array serialization.
+    pub fn take_projectm_pcm(&self) -> Vec<u8> {
+        let mut chunks = self
+            .projectm_pcm
+            .lock()
+            .expect("projectM PCM queue poisoned");
+        let len = chunks.iter().map(Vec::len).sum();
+        let mut out = Vec::with_capacity(len);
+        for chunk in chunks.drain(..) {
+            out.extend_from_slice(&chunk);
+        }
+        out
     }
 }
 
@@ -124,12 +155,18 @@ pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
         stop_after_current: false,
     }));
     let queue_shared = Arc::new(Mutex::new(Vec::new()));
+    let projectm_pcm = Arc::new(Mutex::new(VecDeque::new()));
 
-    let handle = PlayerHandle { tx, shared: shared.clone(), queue_shared: queue_shared.clone() };
+    let handle = PlayerHandle {
+        tx,
+        shared: shared.clone(),
+        queue_shared: queue_shared.clone(),
+        projectm_pcm: projectm_pcm.clone(),
+    };
     std::thread::Builder::new()
         .name("player".into())
         .spawn(move || {
-            if let Err(e) = run_player(app, db, rx, shared, queue_shared) {
+            if let Err(e) = run_player(app, db, rx, shared, queue_shared, projectm_pcm) {
                 log::error!("player thread died: {e}");
             }
         })?;
@@ -143,6 +180,7 @@ struct Engine {
     spectrum: gstreamer::Element,
     /// The appsink callback reads this without touching the player thread.
     projectm_enabled: Arc<AtomicBool>,
+    projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
     app: AppHandle,
     db: Arc<Db>,
     queue: Arc<Mutex<PlayQueue>>,
@@ -174,6 +212,7 @@ fn run_player(
     rx: Receiver<Cmd>,
     shared: Arc<Mutex<PlayerState>>,
     queue_shared: Arc<Mutex<Vec<i64>>>,
+    projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
 ) -> anyhow::Result<()> {
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
 
@@ -185,33 +224,57 @@ fn run_player(
     // S16) and drops visualizer data if it ever fills, so this branch can never
     // stall the audible one. The appsink must remain clock-synchronized:
     // without `sync=true`, it consumes playbin's decode-ahead PCM roughly
-    // 1.5 seconds before the audio sink actually plays the same samples.
+    // 1.5 seconds before the audio sink actually plays the same samples. It
+    // must also use `async=false`: the gate starts closed, so an asynchronous
+    // appsink would wait forever for a preroll buffer and hold playbin in Ready.
+    // The gate is a buffer-only pad probe rather than a valve: flush, segment,
+    // and EOS events must continue downstream so seeks clear the leaky queue.
     let audio_filter = gstreamer::parse::bin_from_description(
         "tee name=visualizer_tee \
          visualizer_tee. ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 \
            ! spectrum name=spectrum bands=512 interval=33000000 threshold=-80 \
              post-messages=false multi-channel=false \
-         visualizer_tee. ! queue leaky=downstream max-size-buffers=0 \
+         visualizer_tee. ! identity name=projectm_gate \
+           ! queue leaky=downstream max-size-buffers=0 \
              max-size-bytes=0 max-size-time=3000000000 \
            ! audioconvert ! audioresample \
            ! audio/x-raw,format=S16LE,layout=interleaved,rate=44100,channels=2 \
-           ! appsink name=projectm_pcm sync=true max-buffers=2 drop=true",
+           ! appsink name=projectm_pcm sync=true async=false max-buffers=2 drop=true",
         true,
     )?;
     let spectrum = audio_filter
         .by_name("spectrum")
         .ok_or_else(|| anyhow::anyhow!("visualizer spectrum element is missing"))?;
+    let projectm_gate = audio_filter
+        .by_name("projectm_gate")
+        .ok_or_else(|| anyhow::anyhow!("projectM gate element is missing"))?;
     let pcm_sink = audio_filter
         .by_name("projectm_pcm")
         .ok_or_else(|| anyhow::anyhow!("projectM PCM appsink is missing"))?
         .downcast::<AppSink>()
         .map_err(|_| anyhow::anyhow!("projectM PCM element is not an appsink"))?;
     let projectm_enabled = Arc::new(AtomicBool::new(false));
+    projectm_gate
+        .static_pad("src")
+        .ok_or_else(|| anyhow::anyhow!("projectM gate source pad is missing"))?
+        .add_probe(
+            gstreamer::PadProbeType::BUFFER | gstreamer::PadProbeType::BUFFER_LIST,
+            {
+                let enabled = projectm_enabled.clone();
+                move |_pad, _info| {
+                    if enabled.load(Ordering::Relaxed) {
+                        gstreamer::PadProbeReturn::Ok
+                    } else {
+                        gstreamer::PadProbeReturn::Drop
+                    }
+                }
+            },
+        );
     pcm_sink.set_callbacks(
         AppSinkCallbacks::builder()
             .new_sample({
-                let app = app.clone();
                 let enabled = projectm_enabled.clone();
+                let pcm = projectm_pcm.clone();
                 move |sink| {
                     let sample = sink.pull_sample().map_err(|_| gstreamer::FlowError::Eos)?;
                     if !enabled.load(Ordering::Relaxed) {
@@ -221,14 +284,10 @@ fn run_player(
                     let map = buffer
                         .map_readable()
                         .map_err(|_| gstreamer::FlowError::Error)?;
-                    let samples: Vec<i16> = map
-                        .as_slice()
-                        .chunks_exact(2)
-                        .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
-                        .collect();
-                    if !samples.is_empty() {
-                        let _ = app.emit("player:projectm-pcm", ProjectMPcmEvent { samples });
-                    }
+                    // If the webview misses frames, discard the oldest visual
+                    // data rather than building latency or memory.
+                    let mut chunks = pcm.lock().map_err(|_| gstreamer::FlowError::Error)?;
+                    enqueue_projectm_pcm(&mut chunks, map.as_slice());
                     Ok(gstreamer::FlowSuccess::Ok)
                 }
             })
@@ -270,6 +329,7 @@ fn run_player(
         playbin,
         spectrum,
         projectm_enabled,
+        projectm_pcm,
         app,
         db,
         queue,
@@ -314,6 +374,30 @@ fn run_player(
             engine.max_position_ms = engine.max_position_ms.max(engine.position_ms());
             engine.emit_position();
         }
+    }
+}
+
+#[cfg(test)]
+mod projectm_pcm_tests {
+    use super::{enqueue_projectm_pcm, MAX_PROJECTM_PCM_BYTES};
+    use std::collections::VecDeque;
+
+    #[test]
+    fn pcm_handoff_is_byte_bounded_and_keeps_newest_data() {
+        let mut chunks = VecDeque::new();
+        enqueue_projectm_pcm(&mut chunks, &vec![1; 48 * 1024]);
+        enqueue_projectm_pcm(&mut chunks, &vec![2; 48 * 1024]);
+        enqueue_projectm_pcm(&mut chunks, &vec![3; 48 * 1024]);
+        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), 96 * 1024);
+        assert_eq!(chunks.front().unwrap()[0], 2);
+
+        let oversized: Vec<u8> = (0..MAX_PROJECTM_PCM_BYTES + 8)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        enqueue_projectm_pcm(&mut chunks, &oversized);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), MAX_PROJECTM_PCM_BYTES);
+        assert_eq!(chunks[0], oversized[8..]);
     }
 }
 
@@ -416,6 +500,12 @@ impl Engine {
             }
             Cmd::SetProjectMEnabled(on) => {
                 self.projectm_enabled.store(on, Ordering::Relaxed);
+                if !on {
+                    self.projectm_pcm
+                        .lock()
+                        .expect("projectM PCM queue poisoned")
+                        .clear();
+                }
             }
             Cmd::QueueAdd(ids) => {
                 self.queue.lock().expect("queue poisoned").queue_add(&ids);

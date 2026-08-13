@@ -16,6 +16,55 @@ fn main() -> anyhow::Result<()> {
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
     playbin.set_property("volume", 0.02f64); // barely audible test volume
 
+    // Keep this playback smoke test wired through the production visualizer
+    // filter shape. In particular, a closed projectM gate must not prevent
+    // playbin from prerolling while projectM is inactive, and non-buffer
+    // events must still pass through it so flush seeks clear the side queue.
+    let audio_filter = gstreamer::parse::bin_from_description(
+        "tee name=visualizer_tee \
+         visualizer_tee. ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 \
+           ! spectrum bands=512 interval=33000000 threshold=-80 \
+             post-messages=false multi-channel=false \
+         visualizer_tee. ! identity name=projectm_gate \
+           ! queue name=projectm_queue leaky=downstream max-size-buffers=0 \
+             max-size-bytes=0 max-size-time=3000000000 \
+           ! audioconvert ! audioresample \
+           ! audio/x-raw,format=S16LE,layout=interleaved,rate=44100,channels=2 \
+           ! appsink name=projectm_pcm sync=true async=false max-buffers=2 drop=true",
+        true,
+    )?;
+    let projectm_gate = audio_filter
+        .by_name("projectm_gate")
+        .ok_or_else(|| anyhow::anyhow!("projectM gate element is missing"))?;
+    projectm_gate
+        .static_pad("src")
+        .ok_or_else(|| anyhow::anyhow!("projectM gate source pad is missing"))?
+        .add_probe(
+            gstreamer::PadProbeType::BUFFER | gstreamer::PadProbeType::BUFFER_LIST,
+            |_pad, _info| gstreamer::PadProbeReturn::Drop,
+        );
+    let flush_stops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    audio_filter
+        .by_name("projectm_queue")
+        .ok_or_else(|| anyhow::anyhow!("projectM queue element is missing"))?
+        .static_pad("sink")
+        .ok_or_else(|| anyhow::anyhow!("projectM queue sink pad is missing"))?
+        .add_probe(
+            gstreamer::PadProbeType::EVENT_DOWNSTREAM | gstreamer::PadProbeType::EVENT_FLUSH,
+            {
+                let flush_stops = flush_stops.clone();
+                move |_pad, info| {
+                    if let Some(gstreamer::PadProbeData::Event(event)) = info.data.as_ref() {
+                        if event.type_() == gstreamer::EventType::FlushStop {
+                            flush_stops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    gstreamer::PadProbeReturn::Ok
+                }
+            },
+        );
+    playbin.set_property("audio-filter", &audio_filter);
+
     for path in &files {
         let uri = gstreamer::glib::filename_to_uri(path, None)?;
         playbin.set_state(gstreamer::State::Ready)?;
@@ -60,6 +109,8 @@ fn main() -> anyhow::Result<()> {
         // Seek to 80% and confirm the position lands there.
         if let Some(dur) = playbin.query_duration::<gstreamer::ClockTime>() {
             let target = dur.mseconds() * 8 / 10;
+            let flush_stops_before =
+                flush_stops.load(std::sync::atomic::Ordering::Relaxed);
             playbin.seek_simple(
                 gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
                 gstreamer::ClockTime::from_mseconds(target),
@@ -70,6 +121,10 @@ fn main() -> anyhow::Result<()> {
                 .map(|p| p.mseconds())
                 .unwrap_or(0);
             let diff = pos2 as i64 - target as i64;
+            anyhow::ensure!(
+                flush_stops.load(std::sync::atomic::Ordering::Relaxed) > flush_stops_before,
+                "{path}: flush seek did not reach the inactive projectM queue"
+            );
             anyhow::ensure!(
                 (-500..3000).contains(&diff),
                 "{path}: seek landed at {pos2}ms, wanted ~{target}ms"

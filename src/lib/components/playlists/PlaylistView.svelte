@@ -45,13 +45,16 @@
         longer the same as `index`. */
     playlistId: number;
     position: number;
+    /** Contiguous ordinal among the tracks currently visible after filtering.
+        Row striping follows this instead of the playback-context index. */
+    visibleIndex: number;
   }
   type Row = PlaylistRow | HeaderRow | TrackRow;
 
   /** Every selected playlist's tracks, back to back, each row carrying both
       of its numbers. */
   const entries = $derived.by(() => {
-    const out: Omit<TrackRow, "type">[] = [];
+    const out: Omit<TrackRow, "type" | "visibleIndex">[] = [];
     let index = 0;
     for (const g of playlists.groups) {
       g.tracks.forEach((track, position) => {
@@ -82,6 +85,7 @@
     let band: PlaylistRow | null = null;
     let currentKey: string | null = null;
     let header: HeaderRow | null = null;
+    let visibleIndex = 0;
     for (const { track, index, playlistId, position } of filtered) {
       if (playlistId !== currentPlaylist) {
         currentPlaylist = playlistId;
@@ -121,7 +125,7 @@
         band.durationMs += track.duration_ms;
         band.count += 1;
       }
-      out.push({ type: "track", track, index, playlistId, position });
+      out.push({ type: "track", track, index, playlistId, position, visibleIndex: visibleIndex++ });
     }
     return out;
   });
@@ -227,7 +231,7 @@
     {@const detail2 = formatTitle(prefs.values.track_detail_format_2, r.track)}
     <button
       class="trow"
-      class:alt={r.index % 2 === 1}
+      class:alt={r.visibleIndex % 2 === 1}
       class:playing={player.track?.id === r.track.id}
       class:missing={r.track.missing}
       ondblclick={() => playAt(r.index)}

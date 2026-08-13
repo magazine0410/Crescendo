@@ -16,6 +16,11 @@
   import SearchHelp from "$lib/components/SearchHelp.svelte";
 
   let settingsOpen = $state(false);
+  let visualizerMounted = $state(false);
+
+  $effect(() => {
+    if (ui.activeTab === "visualizer") visualizerMounted = true;
+  });
 
   onMount(async () => {
     await prefs.load();
@@ -41,7 +46,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (settingsOpen) return;
+    if (settingsOpen || document.querySelector('[aria-modal="true"]')) return;
     if (e.key === "/" && !isTypingTarget(e)) {
       e.preventDefault();
       document.querySelector<HTMLInputElement>(".search input")?.focus();
@@ -75,8 +80,11 @@
       <PlaylistsTab />
     {:else if ui.activeTab === "nowplaying"}
       <NowPlayingTab />
-    {:else}
-      <VisualizerTab />
+    {/if}
+    {#if visualizerMounted}
+      <div class="visualizer-host" class:active={ui.activeTab === "visualizer"}>
+        <VisualizerTab active={ui.activeTab === "visualizer"} />
+      </div>
     {/if}
   </main>
   <BottomBar />
@@ -96,9 +104,20 @@
     overflow: hidden;
   }
   .content {
+    position: relative;
     flex: 1;
     min-height: 0;
     /* content scrolls beneath the translucent bottom bar; panels that must
        not be covered add padding-bottom: var(--bottombar-h) themselves */
+  }
+  .visualizer-host {
+    /* WebKitGTK can keep a visibility-hidden WebGL canvas composited and
+       clickable. display:none detaches that surface without unmounting it. */
+    display: none;
+    position: absolute;
+    inset: 0;
+  }
+  .visualizer-host.active {
+    display: block;
   }
 </style>

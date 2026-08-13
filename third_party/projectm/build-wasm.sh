@@ -27,6 +27,8 @@ emcmake cmake -S "$projectm_source" -B "$build_dir" -G Ninja \
   -DBUILD_DOCS=OFF
 cmake --build "$build_dir" --parallel
 
+(
+cd "$repo_root/static/projectm"
 em++ "$script_dir/wrapper.cpp" "$build_dir/src/libprojectM/libprojectM-4.a" \
   -I"$projectm_source/src/api/include" \
   -I"$build_dir/src/api/include" \
@@ -42,4 +44,5 @@ em++ "$script_dir/wrapper.cpp" "$build_dir/src/libprojectM/libprojectM-4.a" \
   -sEXPORTED_RUNTIME_METHODS=FS,UTF8ToString,HEAPU8,HEAP16 \
   --preload-file "$work_dir/crescendo-projectm-textures/textures@/textures/base" \
   --preload-file "$work_dir/crescendo-projectm-en-d/MD Episode 2 - out of Da club into da head/Textures@/textures/en-d" \
-  -o "$repo_root/static/projectm/projectm.js"
+  -o projectm.js
+)

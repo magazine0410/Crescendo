@@ -506,7 +506,11 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "player_set_spectrum_enabled":
     case "player_set_projectm_enabled":
       return undefined as T;
+    case "player_take_projectm_pcm":
+      return new ArrayBuffer(0) as T;
     case "projectm_import_folder":
+    case "projectm_load_preset":
+    case "projectm_load_asset":
       throw new Error("Importing projectM presets needs the desktop app");
     case "waveform_get": {
       // Synthetic loudness envelope so the waveform is visible in `npm run dev`.

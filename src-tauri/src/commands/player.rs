@@ -1,11 +1,33 @@
 use crate::player::{Cmd, PlayerState};
 use crate::state::AppState;
-use base64::Engine as _;
 use crescendo_core::model::{PlayContext, Track};
 use serde::Serialize;
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 use tauri::State;
 use walkdir::WalkDir;
+
+#[derive(Debug, Serialize)]
+pub struct ProjectMPresetEntry {
+    pub id: String,
+    pub name: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectMAssetEntry {
+    pub id: String,
+    pub name: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectMImport {
+    pub folder_name: String,
+    pub presets: Vec<ProjectMPresetEntry>,
+    pub assets: Vec<ProjectMAssetEntry>,
+    pub warnings: Vec<String>,
+}
 
 #[derive(Debug, Serialize)]
 pub struct ProjectMPresetFile {
@@ -14,18 +36,11 @@ pub struct ProjectMPresetFile {
     pub data: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ProjectMAssetFile {
-    pub name: String,
-    pub data_base64: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ProjectMImport {
-    pub folder_name: String,
-    pub presets: Vec<ProjectMPresetFile>,
-    pub assets: Vec<ProjectMAssetFile>,
-}
+const MAX_PRESETS: usize = 20_000;
+const MAX_PRESET_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_ASSETS: usize = 2_048;
+const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_TOTAL_ASSET_BYTES: u64 = 16 * 1024 * 1024;
 
 #[tauri::command]
 pub async fn player_play_context(
@@ -125,9 +140,19 @@ pub async fn player_set_projectm_enabled(
     Ok(())
 }
 
-/// Read a user-selected MilkDrop folder. Presets are text; supported image
-/// assets are returned alongside them so the WebAssembly filesystem can make
-/// texture-dependent presets work too. Nothing is copied into the library.
+/// Return all PCM accumulated since the previous pull as raw bytes. The
+/// player-side queue is tiny and drops its oldest chunks under pressure, so a
+/// delayed webview can neither grow memory nor add visual latency.
+#[tauri::command]
+pub async fn player_take_projectm_pcm(
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(state.player.take_projectm_pcm()))
+}
+
+/// Index a user-selected MilkDrop folder without reading preset or image
+/// contents. The selected preset and its bounded texture set are loaded later
+/// through separate commands, avoiding one enormous JSON response.
 #[tauri::command]
 pub async fn projectm_import_folder(path: String) -> Result<ProjectMImport, String> {
     tauri::async_runtime::spawn_blocking(move || import_projectm_folder(&path))
@@ -136,9 +161,6 @@ pub async fn projectm_import_folder(path: String) -> Result<ProjectMImport, Stri
 }
 
 fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
-    const MAX_ASSET_BYTES: u64 = 16 * 1024 * 1024;
-    const MAX_TOTAL_ASSET_BYTES: u64 = 64 * 1024 * 1024;
-
     let root = Path::new(path);
     if !root.is_dir() {
         return Err("The selected projectM preset folder no longer exists".into());
@@ -146,12 +168,22 @@ fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
 
     let mut presets = Vec::new();
     let mut assets = Vec::new();
+    let mut warnings = Vec::new();
     let mut asset_bytes = 0u64;
-    for entry in WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
+    let mut asset_names = HashSet::new();
+    let mut skipped_large_presets = 0usize;
+    let mut skipped_extra_presets = 0usize;
+    let mut skipped_assets = 0usize;
+    let mut skipped_duplicate_assets = 0usize;
+    let mut unreadable_entries = 0usize;
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                unreadable_entries += 1;
+                continue;
+            }
+        };
         if !entry.file_type().is_file() {
             continue;
         }
@@ -162,7 +194,21 @@ fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
             .unwrap_or("")
             .to_ascii_lowercase();
         if ext == "milk" {
-            let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let size = match entry.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(_) => {
+                    unreadable_entries += 1;
+                    continue;
+                }
+            };
+            if size > MAX_PRESET_BYTES {
+                skipped_large_presets += 1;
+                continue;
+            }
+            if presets.len() >= MAX_PRESETS {
+                skipped_extra_presets += 1;
+                continue;
+            }
             let relative = file
                 .strip_prefix(root)
                 .unwrap_or(file)
@@ -173,23 +219,44 @@ fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("Unnamed preset")
                 .to_owned();
-            presets.push(ProjectMPresetFile {
+            presets.push(ProjectMPresetEntry {
                 id: relative,
                 name,
-                data: String::from_utf8_lossy(&bytes).into_owned(),
+                bytes: size,
             });
         } else if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "bmp" | "tga" | "dds") {
-            let size = entry.metadata().map_err(|e| e.to_string())?.len();
-            if size > MAX_ASSET_BYTES || asset_bytes.saturating_add(size) > MAX_TOTAL_ASSET_BYTES {
+            let size = match entry.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(_) => {
+                    unreadable_entries += 1;
+                    continue;
+                }
+            };
+            if assets.len() >= MAX_ASSETS
+                || size > MAX_ASSET_BYTES
+                || asset_bytes.saturating_add(size) > MAX_TOTAL_ASSET_BYTES
+            {
+                skipped_assets += 1;
                 continue;
             }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // projectM texture references are basename-based, and the WASM
+            // filesystem flattens imports into one directory. Keep the first
+            // duplicate instead of silently overwriting it later.
+            if !asset_names.insert(name.to_lowercase()) {
+                skipped_duplicate_assets += 1;
+                continue;
+            }
+            let relative = file
+                .strip_prefix(root)
+                .unwrap_or(file)
+                .to_string_lossy()
+                .into_owned();
             asset_bytes += size;
-            let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
-            assets.push(ProjectMAssetFile {
-                // MilkDrop texture references are basename-based. Flattening
-                // also avoids exposing the user's absolute path in the webview.
-                name: entry.file_name().to_string_lossy().into_owned(),
-                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            assets.push(ProjectMAssetEntry {
+                id: relative,
+                name,
+                bytes: size,
             });
         }
     }
@@ -197,6 +264,31 @@ fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
     presets.sort_by_cached_key(|preset| preset.name.to_lowercase());
     if presets.is_empty() {
         return Err("No .milk presets were found in that folder".into());
+    }
+    if skipped_large_presets > 0 {
+        warnings.push(format!(
+            "Skipped {skipped_large_presets} preset(s) larger than 2 MiB"
+        ));
+    }
+    if skipped_extra_presets > 0 {
+        warnings.push(format!(
+            "Loaded the first {MAX_PRESETS} presets and skipped {skipped_extra_presets} more"
+        ));
+    }
+    if skipped_assets > 0 {
+        warnings.push(format!(
+            "Skipped {skipped_assets} texture(s) beyond the 8 MiB per-file, 16 MiB total, or {MAX_ASSETS}-file limits"
+        ));
+    }
+    if skipped_duplicate_assets > 0 {
+        warnings.push(format!(
+            "Skipped {skipped_duplicate_assets} texture(s) whose filename duplicated an earlier texture"
+        ));
+    }
+    if unreadable_entries > 0 {
+        warnings.push(format!(
+            "Skipped {unreadable_entries} file(s) or folder(s) that could not be read"
+        ));
     }
     Ok(ProjectMImport {
         folder_name: root
@@ -206,12 +298,126 @@ fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
             .to_owned(),
         presets,
         assets,
+        warnings,
     })
+}
+
+#[tauri::command]
+pub async fn projectm_load_preset(path: String, id: String) -> Result<ProjectMPresetFile, String> {
+    tauri::async_runtime::spawn_blocking(move || load_projectm_preset(&path, &id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn projectm_load_asset(path: String, id: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let file = resolve_import_file(&path, &id, &["jpg", "jpeg", "png", "bmp", "tga", "dds"])?;
+        let size = file.metadata().map_err(|e| e.to_string())?.len();
+        if size > MAX_ASSET_BYTES {
+            return Err("The selected projectM texture is larger than 8 MiB".into());
+        }
+        std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+fn load_projectm_preset(path: &str, id: &str) -> Result<ProjectMPresetFile, String> {
+    let file = resolve_import_file(path, id, &["milk"])?;
+    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    if size > MAX_PRESET_BYTES {
+        return Err("The selected projectM preset is larger than 2 MiB".into());
+    }
+    let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(ProjectMPresetFile {
+        id: id.to_owned(),
+        name: file
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Unnamed preset")
+            .to_owned(),
+        data: decode_milk_text(&bytes),
+    })
+}
+
+fn resolve_import_file(path: &str, id: &str, extensions: &[&str]) -> Result<PathBuf, String> {
+    let relative = Path::new(id);
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err("Invalid projectM import path".into());
+    }
+    let root = Path::new(path)
+        .canonicalize()
+        .map_err(|_| "The selected projectM preset folder no longer exists".to_string())?;
+    let file = root
+        .join(relative)
+        .canonicalize()
+        .map_err(|_| "The selected projectM import file no longer exists".to_string())?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return Err("Invalid projectM import path".into());
+    }
+    let extension = file
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !extensions.contains(&extension.as_str()) {
+        return Err("Unsupported projectM import file".into());
+    }
+    Ok(file)
+}
+
+/// MilkDrop packs commonly contain Windows-1252 text. Preserve valid UTF-8,
+/// otherwise decode the single-byte Windows code page instead of inserting
+/// replacement characters through `from_utf8_lossy`.
+fn decode_milk_text(bytes: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    bytes
+        .iter()
+        .map(|byte| match byte {
+            0x80 => '\u{20ac}',
+            0x82 => '\u{201a}',
+            0x83 => '\u{0192}',
+            0x84 => '\u{201e}',
+            0x85 => '\u{2026}',
+            0x86 => '\u{2020}',
+            0x87 => '\u{2021}',
+            0x88 => '\u{02c6}',
+            0x89 => '\u{2030}',
+            0x8a => '\u{0160}',
+            0x8b => '\u{2039}',
+            0x8c => '\u{0152}',
+            0x8e => '\u{017d}',
+            0x91 => '\u{2018}',
+            0x92 => '\u{2019}',
+            0x93 => '\u{201c}',
+            0x94 => '\u{201d}',
+            0x95 => '\u{2022}',
+            0x96 => '\u{2013}',
+            0x97 => '\u{2014}',
+            0x98 => '\u{02dc}',
+            0x99 => '\u{2122}',
+            0x9a => '\u{0161}',
+            0x9b => '\u{203a}',
+            0x9c => '\u{0153}',
+            0x9e => '\u{017e}',
+            0x9f => '\u{0178}',
+            0x81 | 0x8d | 0x8f | 0x90 | 0x9d => '\u{fffd}',
+            byte => char::from(*byte),
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod projectm_import_tests {
-    use super::import_projectm_folder;
+    use super::{decode_milk_text, import_projectm_folder, load_projectm_preset};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -238,7 +444,56 @@ mod projectm_import_tests {
         assert!(imported.presets[0].id.ends_with("nested/alpha.MILK"));
         assert_eq!(imported.assets.len(), 1);
         assert_eq!(imported.assets[0].name, "cloud.png");
-        assert_eq!(imported.assets[0].data_base64, "iVBORw==");
+        assert_eq!(imported.assets[0].bytes, 4);
+        assert!(imported.warnings.is_empty());
+
+        let preset = load_projectm_preset(root.to_str().unwrap(), &imported.presets[0].id).unwrap();
+        assert_eq!(preset.name, "alpha");
+        assert!(preset.data.contains("fRating=5"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn decodes_windows_1252_preset_text() {
+        assert_eq!(
+            decode_milk_text(b"name=Martin\x92s \x93preset\x94"),
+            "name=Martin’s “preset”"
+        );
+    }
+
+    #[test]
+    fn bounds_large_import_files_and_rejects_traversal() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "crescendo-projectm-bounds-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("valid.milk"), "[preset00]").unwrap();
+        std::fs::File::create(root.join("huge.milk"))
+            .unwrap()
+            .set_len(2 * 1024 * 1024 + 1)
+            .unwrap();
+        std::fs::File::create(root.join("huge.png"))
+            .unwrap()
+            .set_len(8 * 1024 * 1024 + 1)
+            .unwrap();
+
+        let imported = import_projectm_folder(root.to_str().unwrap()).unwrap();
+        assert_eq!(imported.presets.len(), 1);
+        assert!(imported
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("preset")));
+        assert!(imported
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("texture")));
+        assert!(load_projectm_preset(root.to_str().unwrap(), "../valid.milk").is_err());
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
-  import { call, isTauri, type ProjectMAssetFile, type ProjectMPresetFile } from "$lib/api";
+  import { call, isTauri, type ProjectMAssetEntry, type ProjectMPresetFile } from "$lib/api";
 
   interface Props {
     preset: ProjectMPresetFile | null;
-    assets?: ProjectMAssetFile[];
+    assets?: ProjectMAssetEntry[];
+    assetRoot?: string;
+    active?: boolean;
     onready?: () => void;
+    onerror?: (message: string) => void;
   }
 
   interface ProjectMModule {
@@ -22,16 +24,33 @@
     _malloc(bytes: number): number;
     _free(pointer: number): void;
     _crescendo_projectm_last_error(): number;
-    _crescendo_projectm_init(width: number, height: number): number;
+    _crescendo_projectm_init(
+      width: number,
+      height: number,
+      drawableWidth: number,
+      drawableHeight: number,
+    ): number;
     _crescendo_projectm_destroy(): void;
-    _crescendo_projectm_resize(width: number, height: number): void;
+    _crescendo_projectm_resize(
+      width: number,
+      height: number,
+      drawableWidth: number,
+      drawableHeight: number,
+    ): void;
     _crescendo_projectm_render(): void;
     _crescendo_projectm_add_pcm(samples: number, frames: number): void;
     _crescendo_projectm_load_preset(data: number, smooth: number): void;
     _crescendo_projectm_refresh_textures(): void;
   }
 
-  let { preset, assets = [], onready }: Props = $props();
+  let {
+    preset,
+    assets = [],
+    assetRoot = "",
+    active = true,
+    onready,
+    onerror,
+  }: Props = $props();
 
   let host: HTMLDivElement;
   let canvas: HTMLCanvasElement;
@@ -42,12 +61,15 @@
   let disposed = false;
   let raf = 0;
   let resizeObserver: ResizeObserver | null = null;
-  let unlisten: (() => void) | null = null;
   let pcmPointer = 0;
   let pcmCapacity = 0;
   let mockPhase = 0;
   let loadedPresetId = "";
   let installedAssetKey = "";
+  let selectionGeneration = 0;
+  let pcmPulling = false;
+  let cssWidth = 0;
+  let cssHeight = 0;
 
   function runtimeFile(path: string): string {
     if (path.endsWith(".wasm")) return "/projectm/projectm.wasm";
@@ -56,10 +78,9 @@
   }
 
   function dimensions(): [number, number] {
-    const dpr = window.devicePixelRatio || 1;
     return [
-      Math.max(1, Math.round(host.clientWidth * dpr)),
-      Math.max(1, Math.round(host.clientHeight * dpr)),
+      Math.max(1, Math.round(host.clientWidth)),
+      Math.max(1, Math.round(host.clientHeight)),
     ];
   }
 
@@ -67,10 +88,17 @@
     const active = module;
     if (!active || status !== "ready") return;
     const [width, height] = dimensions();
-    if (canvas.width === width && canvas.height === height) return;
-    canvas.width = width;
-    canvas.height = height;
-    active._crescendo_projectm_resize(width, height);
+    if (cssWidth === width && cssHeight === height) return;
+    cssWidth = width;
+    cssHeight = height;
+    sizeCanvasBackingStore(width, height);
+    active._crescendo_projectm_resize(width, height, canvas.width, canvas.height);
+  }
+
+  function sizeCanvasBackingStore(width: number, height: number) {
+    const scale = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
   }
 
   function ensurePcmCapacity(sampleCount: number): number {
@@ -84,21 +112,21 @@
   }
 
   function addPcm(samples: number[] | Int16Array) {
-    const active = module;
-    if (!active || status !== "ready") return;
+    const runtime = module;
+    if (!runtime || status !== "ready" || !active) return;
     // Keep each copy bounded. GStreamer normally sends far fewer than this,
     // but imported/slow webview frames must not grow one giant WASM allocation.
     const maxSamples = 8192;
     for (let offset = 0; offset + 1 < samples.length; offset += maxSamples) {
       const count = Math.min(maxSamples, samples.length - offset) & ~1;
       const pointer = ensurePcmCapacity(count);
-      active.HEAP16.set(
+      runtime.HEAP16.set(
         samples instanceof Int16Array
           ? samples.subarray(offset, offset + count)
           : samples.slice(offset, offset + count),
         pointer >> 1,
       );
-      active._crescendo_projectm_add_pcm(pointer, count / 2);
+      runtime._crescendo_projectm_add_pcm(pointer, count / 2);
     }
   }
 
@@ -122,34 +150,39 @@
   function render() {
     if (disposed) return;
     raf = requestAnimationFrame(render);
-    const active = module;
-    if (!active || status !== "ready") return;
+    const runtime = module;
+    if (!runtime || status !== "ready" || !active) return;
     if (!isTauri) feedPreviewAudio();
-    active._crescendo_projectm_render();
-  }
-
-  function decodeBase64(value: string): Uint8Array {
-    const binary = atob(value);
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-    return out;
+    else void pullPcm();
+    runtime._crescendo_projectm_render();
   }
 
   function safeAssetName(name: string): string {
     return name.replaceAll("\\", "_").replaceAll("/", "_").replaceAll("..", "_");
   }
 
-  function installAssets(active: ProjectMModule, next: ProjectMAssetFile[]) {
-    const key = next.map((asset) => `${asset.name}:${asset.data_base64.length}`).join("|");
+  async function installAssets(
+    runtime: ProjectMModule,
+    next: ProjectMAssetEntry[],
+    root: string,
+    generation: number,
+  ) {
+    const key = `${root}|${next.map((asset) => `${asset.id}:${asset.bytes}`).join("|")}`;
     if (key === installedAssetKey) return;
-    active.FS.mkdirTree("/imports");
-    for (const old of active.FS.readdir("/imports")) {
-      if (old !== "." && old !== "..") active.FS.unlink(`/imports/${old}`);
+    runtime.FS.mkdirTree("/imports");
+    for (const old of runtime.FS.readdir("/imports")) {
+      if (old !== "." && old !== "..") runtime.FS.unlink(`/imports/${old}`);
     }
     for (const asset of next) {
-      active.FS.writeFile(`/imports/${safeAssetName(asset.name)}`, decodeBase64(asset.data_base64));
+      if (!root || disposed || generation !== selectionGeneration) return;
+      const response = await call<ArrayBuffer>("projectm_load_asset", {
+        path: root,
+        id: asset.id,
+      });
+      if (disposed || generation !== selectionGeneration) return;
+      runtime.FS.writeFile(`/imports/${safeAssetName(asset.name)}`, new Uint8Array(response));
     }
-    active._crescendo_projectm_refresh_textures();
+    runtime._crescendo_projectm_refresh_textures();
     installedAssetKey = key;
   }
 
@@ -163,6 +196,45 @@
     loadedPresetId = next.id;
   }
 
+  async function applySelection(
+    runtime: ProjectMModule,
+    nextPreset: ProjectMPresetFile | null,
+    nextAssets: ProjectMAssetEntry[],
+    root: string,
+  ) {
+    const generation = ++selectionGeneration;
+    try {
+      // Texture lookup happens while a preset is parsed, so imported assets
+      // must enter the virtual filesystem before that preset is loaded.
+      await installAssets(runtime, nextAssets, root, generation);
+      if (!disposed && generation === selectionGeneration && nextPreset) {
+        loadPreset(runtime, nextPreset);
+      }
+    } catch (cause) {
+      fail(cause);
+    }
+  }
+
+  async function pullPcm() {
+    if (pcmPulling || !active || status !== "ready") return;
+    pcmPulling = true;
+    try {
+      const response = await call<ArrayBuffer>("player_take_projectm_pcm");
+      if (active && response.byteLength >= 4) addPcm(new Int16Array(response));
+    } catch {
+      // A transient IPC failure should not tear down a working renderer.
+    } finally {
+      pcmPulling = false;
+    }
+  }
+
+  function fail(cause: unknown) {
+    console.error(cause);
+    error = cause instanceof Error ? cause.message : String(cause);
+    status = "error";
+    onerror?.(error);
+  }
+
   async function initialise() {
     try {
       // Keep the prebuilt Emscripten module in `static/`; a variable prevents
@@ -171,60 +243,60 @@
       const imported = await import(/* @vite-ignore */ moduleUrl);
       if (disposed) return;
       const [width, height] = dimensions();
-      canvas.width = width;
-      canvas.height = height;
-      const active = (await imported.default({
+      cssWidth = width;
+      cssHeight = height;
+      // SDL's Emscripten backend treats an existing canvas as externally
+      // sized and does not initialize its default 300×150 backing store.
+      // Size it physically here while still passing CSS pixels to SDL below,
+      // avoiding both an undersized canvas and double DPR multiplication.
+      sizeCanvasBackingStore(width, height);
+      const runtime = (await imported.default({
         canvas,
         locateFile: runtimeFile,
         printErr: (message: unknown) => console.error("projectM:", message),
       })) as ProjectMModule;
       if (disposed) {
-        active._crescendo_projectm_destroy();
+        runtime._crescendo_projectm_destroy();
         return;
       }
-      module = active;
-      active.FS.mkdirTree("/imports");
-      if (!active._crescendo_projectm_init(width, height)) {
+      module = runtime;
+      runtime.FS.mkdirTree("/imports");
+      if (!runtime._crescendo_projectm_init(width, height, canvas.width, canvas.height)) {
         throw new Error(
-          active.UTF8ToString(active._crescendo_projectm_last_error()) ||
+          runtime.UTF8ToString(runtime._crescendo_projectm_last_error()) ||
             "projectM could not initialize",
         );
       }
+      await applySelection(runtime, preset, assets, assetRoot);
+      if (status === "error") return;
       status = "ready";
-      installAssets(active, assets);
-      if (preset) loadPreset(active, preset);
       resizeObserver = new ResizeObserver(resize);
       resizeObserver.observe(host);
       onready?.();
     } catch (cause) {
-      console.error(cause);
-      error = cause instanceof Error ? cause.message : String(cause);
-      status = "error";
+      fail(cause);
     }
   }
 
   $effect(() => {
-    const active = module;
+    const runtime = module;
     const nextPreset = preset;
     const nextAssets = assets;
-    if (active && status === "ready") {
-      // Texture lookup happens while a preset is parsed, so imported assets
-      // must enter the virtual filesystem before that preset is loaded.
-      installAssets(active, nextAssets);
-      if (nextPreset) loadPreset(active, nextPreset);
+    const nextRoot = assetRoot;
+    if (runtime && status === "ready") {
+      void applySelection(runtime, nextPreset, nextAssets, nextRoot);
     }
   });
 
+  $effect(() => {
+    const enabled = isTauri && active && status === "ready";
+    if (isTauri) call("player_set_projectm_enabled", { on: enabled }).catch(() => {});
+    return () => {
+      if (enabled) call("player_set_projectm_enabled", { on: false }).catch(() => {});
+    };
+  });
+
   onMount(() => {
-    if (isTauri) {
-      call("player_set_projectm_enabled", { on: true }).catch(() => {});
-      listen<{ samples: number[] }>("player:projectm-pcm", (event) => addPcm(event.payload.samples))
-        .then((stop) => {
-          if (disposed) stop();
-          else unlisten = stop;
-        })
-        .catch(() => {});
-    }
     raf = requestAnimationFrame(render);
     void initialise();
   });
@@ -233,11 +305,10 @@
     disposed = true;
     cancelAnimationFrame(raf);
     resizeObserver?.disconnect();
-    unlisten?.();
-    const active = module;
-    if (active) {
-      if (pcmPointer) active._free(pcmPointer);
-      active._crescendo_projectm_destroy();
+    const runtime = module;
+    if (runtime) {
+      if (pcmPointer) runtime._free(pcmPointer);
+      runtime._crescendo_projectm_destroy();
     }
     if (isTauri) call("player_set_projectm_enabled", { on: false }).catch(() => {});
   });

@@ -20,6 +20,7 @@ int fail(const char* message) {
     last_error = message ? message : "Unknown projectM error";
     return 0;
 }
+
 }
 
 extern "C" {
@@ -28,7 +29,12 @@ EMSCRIPTEN_KEEPALIVE const char* crescendo_projectm_last_error() {
     return last_error.c_str();
 }
 
-EMSCRIPTEN_KEEPALIVE int crescendo_projectm_init(int width, int height) {
+EMSCRIPTEN_KEEPALIVE int crescendo_projectm_init(
+    int width,
+    int height,
+    int drawable_width,
+    int drawable_height
+) {
     if (instance) {
         return 1;
     }
@@ -79,7 +85,10 @@ EMSCRIPTEN_KEEPALIVE int crescendo_projectm_init(int width, int height) {
 
     const char* texture_paths[] = {"/textures", "/imports"};
     projectm_set_texture_search_paths(instance, texture_paths, 2);
-    projectm_set_window_size(instance, width, height);
+    // SDL window dimensions are CSS pixels. The webview supplies the physical
+    // canvas backing dimensions explicitly because SDL's externally-sized
+    // Emscripten canvas path does not reliably report them here.
+    projectm_set_window_size(instance, drawable_width, drawable_height);
     projectm_set_mesh_size(instance, 48, 32);
     projectm_set_fps(instance, 60);
     projectm_set_aspect_correction(instance, true);
@@ -105,12 +114,17 @@ EMSCRIPTEN_KEEPALIVE void crescendo_projectm_destroy() {
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
 }
 
-EMSCRIPTEN_KEEPALIVE void crescendo_projectm_resize(int width, int height) {
-    if (!instance || !window || width < 1 || height < 1) {
+EMSCRIPTEN_KEEPALIVE void crescendo_projectm_resize(
+    int width,
+    int height,
+    int drawable_width,
+    int drawable_height
+) {
+    if (!instance || !window || width < 1 || height < 1 || drawable_width < 1 || drawable_height < 1) {
         return;
     }
     SDL_SetWindowSize(window, width, height);
-    projectm_set_window_size(instance, width, height);
+    projectm_set_window_size(instance, drawable_width, drawable_height);
 }
 
 EMSCRIPTEN_KEEPALIVE void crescendo_projectm_render() {

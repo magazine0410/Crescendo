@@ -6,6 +6,11 @@
   import { clamp, hexToRgba } from "$lib/color";
   import ColorPicker from "../common/ColorPicker.svelte";
 
+  interface Props {
+    active?: boolean;
+  }
+  let { active = true }: Props = $props();
+
   // --- tuning constants (visual only) ---
   const BLOCKS = 28; // vertical blocks per bar
   const BAR_MIN_PX = 24; // min bar footprint -> derives bar count from width
@@ -98,7 +103,7 @@
 
   function frame() {
     raf = requestAnimationFrame(frame);
-    if (!ctx) return;
+    if (!ctx || !active) return;
     resizeCanvas();
     const n = barCount();
     ensureArrays(n);
@@ -193,7 +198,6 @@
     raf = requestAnimationFrame(frame);
 
     if (isTauri) {
-      call("player_set_spectrum_enabled", { on: true }).catch(() => {});
       listen<{ bands: number[]; rate: number }>("player:spectrum", (e) => {
         rawBands = e.payload.bands;
         if (e.payload.rate > 0) sampleRate = e.payload.rate;
@@ -206,6 +210,14 @@
     cancelAnimationFrame(raf);
     unlisten?.();
     if (isTauri) call("player_set_spectrum_enabled", { on: false }).catch(() => {});
+  });
+
+  $effect(() => {
+    if (!isTauri) return;
+    call("player_set_spectrum_enabled", { on: active }).catch(() => {});
+    return () => {
+      if (active) call("player_set_spectrum_enabled", { on: false }).catch(() => {});
+    };
   });
 
   function onColor(hex: string) {

@@ -167,15 +167,23 @@ export interface ProjectMPresetFile {
   data: string;
 }
 
-export interface ProjectMAssetFile {
+export interface ProjectMPresetEntry {
+  id: string;
   name: string;
-  data_base64: string;
+  bytes: number;
+}
+
+export interface ProjectMAssetEntry {
+  id: string;
+  name: string;
+  bytes: number;
 }
 
 export interface ProjectMImport {
   folder_name: string;
-  presets: ProjectMPresetFile[];
-  assets: ProjectMAssetFile[];
+  presets: ProjectMPresetEntry[];
+  assets: ProjectMAssetEntry[];
+  warnings: string[];
 }
 
 /** The left-panel filter category. `custom` is a user-defined single-tag filter
