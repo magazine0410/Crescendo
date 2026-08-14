@@ -35,6 +35,17 @@ impl Db {
         )
     }
 
+    /// The frontend's "Look up lyrics online" tick box (default on). When off,
+    /// the Now Playing panel shows lyrics from local sources only (sidecar
+    /// files and embedded tags); nothing is sent to VocaDB or LRCLIB. Read it
+    /// like `prefer_romanized` — never from inside a `with` closure.
+    pub fn lyrics_online(&self) -> bool {
+        !matches!(
+            self.prefs_get("lyrics_online").ok().flatten().as_deref(),
+            Some("false")
+        )
+    }
+
     pub fn prefs_set(&self, key: &str, value: &str) -> Result<()> {
         self.with(|conn| {
             conn.execute(

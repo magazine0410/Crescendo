@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -87,6 +87,12 @@ pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
               json TEXT NOT NULL,
               fetched_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS lyrics_cache (
+              track_id INTEGER PRIMARY KEY,
+              text TEXT NOT NULL,
+              source TEXT NOT NULL,
+              fetched_at INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS prefs (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL
@@ -128,6 +134,18 @@ pub fn migrate(conn: &Connection) -> anyhow::Result<()> {
                collapsed INTEGER NOT NULL DEFAULT 0
              );
              ALTER TABLE playlists ADD COLUMN collection_id INTEGER;",
+        )?;
+    }
+    if version < 5 && version >= 1 {
+        // v5: cached online lyrics lookups (VocaDB/LRCLIB), keyed by track.
+        // Fresh databases get the table from the CREATE block above.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS lyrics_cache (
+               track_id INTEGER PRIMARY KEY,
+               text TEXT NOT NULL,
+               source TEXT NOT NULL,
+               fetched_at INTEGER NOT NULL
+             );",
         )?;
     }
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

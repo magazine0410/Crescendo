@@ -1,6 +1,7 @@
 <script lang="ts">
   import { prefs, type CollectionsPlacement } from "$lib/stores/prefs.svelte";
   import { library } from "$lib/stores/library.svelte";
+  import { ui } from "$lib/stores/ui.svelte";
   import { call, isTauri } from "$lib/api";
   import { formatLongDuration } from "$lib/format";
 
@@ -22,6 +23,13 @@
     await library.loadValues();
     await library.loadAlbums();
     await library.reloadTrackView(prefs.values.track_separators);
+  }
+
+  /** Same shape as setPreferRomanized: lyrics_for_track reads the pref from
+      the DB, so the write has to land before the Now playing pane asks again. */
+  async function setLyricsOnline(on: boolean) {
+    await prefs.set("lyrics_online", on);
+    ui.lyricsEpoch++;
   }
 
   // Reflect the actual on-disk autostart state whenever the dialog opens.
@@ -299,6 +307,20 @@
         {#if keyTest === "ok"}<p class="ok">Key works.</p>{/if}
         {#if keyTest === "bad"}<p class="bad">Key rejected by Last.fm.</p>{/if}
         <p class="hint">Without a key, Now Playing falls back to local tags.</p>
+
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={prefs.values.lyrics_online}
+            onchange={(e) => setLyricsOnline(e.currentTarget.checked)}
+          />
+          Look up lyrics online
+        </label>
+        <p class="hint">
+          Sends the playing track's title, artist, album and duration to VocaDB and
+          LRCLIB when there is no sidecar .lrc/.txt file or embedded lyrics tag. Off
+          keeps lyrics to those local sources only.
+        </p>
       </section>
 
       <section>

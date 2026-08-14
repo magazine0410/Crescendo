@@ -1,5 +1,6 @@
 use crate::state::AppState;
 use crescendo_core::lastfm::{AlbumInfo, ArtistInfo};
+use crescendo_core::lyrics::LyricsResult;
 use std::collections::HashMap;
 use tauri::{AppHandle, Manager, State, WebviewUrl};
 use tokio::sync::Semaphore;
@@ -20,6 +21,11 @@ pub struct AboutInfo {
 /// Bound concurrent waveform decodes (each fully decodes a track). Skipping
 /// tracks quickly could otherwise stack several CPU-heavy decodes at once.
 static WAVEFORM_PERMITS: Semaphore = Semaphore::const_new(2);
+
+/// Bound concurrent lyrics lookups: each can run up to three VocaDB/LRCLIB
+/// requests with 15 s timeouts, so skipping through a track list must not be
+/// able to stack an unbounded number of blocking threads on the network.
+static LYRICS_PERMITS: Semaphore = Semaphore::const_new(2);
 
 #[tauri::command]
 pub async fn prefs_get_all(state: State<'_, AppState>) -> Result<HashMap<String, String>, String> {
@@ -155,6 +161,25 @@ pub async fn lastfm_album_info(
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crescendo_core::lastfm::album_info(&db, &key, &artist, &album).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Static lyrics for the Now Playing panel: sidecar `.lrc`/`.txt`, embedded
+/// tag, then VocaDB/LRCLIB (cached). Local sources are read live on each call.
+#[tauri::command]
+pub async fn lyrics_for_track(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<Option<LyricsResult>, String> {
+    let _permit = LYRICS_PERMITS.acquire().await.map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(track) = db.track_by_id(track_id).map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        crescendo_core::lyrics::for_track(&db, &track).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

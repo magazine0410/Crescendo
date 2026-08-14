@@ -576,6 +576,51 @@ impl Db {
             Ok(())
         })
     }
+
+    /// The cached online-lyrics row for a track, as `(text, source, age in
+    /// seconds)`. An empty `text` records a previous miss so unknown tracks
+    /// are not re-queried; the caller applies the age limit, because a miss
+    /// caused by a failed request expires far sooner than a real one (see
+    /// `lyrics::for_track`).
+    pub fn lyrics_cache_get(&self, track_id: i64) -> Result<Option<(String, String, i64)>> {
+        self.with(|conn| {
+            let now = now_unix();
+            Ok(conn
+                .query_row(
+                    "SELECT text, source, fetched_at FROM lyrics_cache WHERE track_id = ?1",
+                    rusqlite::params![track_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, now - r.get::<_, i64>(2)?)),
+                )
+                .ok())
+        })
+    }
+
+    /// Drop lyrics cache rows past their useful life. Anything this deletes
+    /// would be re-fetched and overwritten on the track's next play anyway,
+    /// so the table stays bounded by "tracks played recently" rather than by
+    /// the size of the library.
+    pub fn lyrics_cache_prune(&self, max_age_secs: i64) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "DELETE FROM lyrics_cache WHERE fetched_at < ?1",
+                rusqlite::params![now_unix() - max_age_secs],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn lyrics_cache_put(&self, track_id: i64, text: &str, source: &str) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO lyrics_cache(track_id, text, source, fetched_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(track_id) DO UPDATE SET text = excluded.text, \
+                 source = excluded.source, fetched_at = excluded.fetched_at",
+                rusqlite::params![track_id, text, source, now_unix()],
+            )?;
+            Ok(())
+        })
+    }
 }
 
 fn collect_ids(conn: &Connection, sql: &str, params: Vec<Value>) -> Result<Vec<i64>> {

@@ -23,7 +23,11 @@ impl Db {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Self::open_conn(path)?;
-        Ok(Self { conn: Mutex::new(conn), path: path.to_path_buf() })
+        let db = Self { conn: Mutex::new(conn), path: path.to_path_buf() };
+        // Once per process, not in `open_conn` — the scanner's side connection
+        // must not repeat it.
+        db.lyrics_cache_prune(crate::lyrics::CACHE_TTL_SECS)?;
+        Ok(db)
     }
 
     /// A second connection to the same database (for the scanner writer).

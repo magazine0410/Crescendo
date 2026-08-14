@@ -150,6 +150,11 @@ export interface AlbumInfo {
   url: string | null;
 }
 
+export interface LyricsResult {
+  text: string;
+  source: string;
+}
+
 export interface AboutDependency {
   name: string;
   version: string;

@@ -202,6 +202,11 @@ function libSort(a: Track, b: Track): number {
     current; the dev backend stores nothing else. */
 let preferRomanized = true;
 
+/** Mirrors the backend `lyrics_online` pref (default on). The mock track has
+    no sidecar file or embedded tag, so switching it off leaves it with no
+    lyrics at all — same as the real backend would. */
+let lyricsOnline = true;
+
 /** Sort key of a title: the romanized tag only while it is what the row shows. */
 function titleKey(t: Track): string {
   return (preferRomanized ? t.titlesort || t.title : t.title) || "";
@@ -478,6 +483,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return {} as T;
     case "prefs_set":
       if (args.key === "prefer_romanized") preferRomanized = args.value !== "false";
+      if (args.key === "lyrics_online") lyricsOnline = args.value !== "false";
       return undefined as T;
     case "about_info":
       return {
@@ -525,6 +531,12 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "lastfm_artist_info":
     case "lastfm_album_info":
       return null as T;
+    case "lyrics_for_track":
+      if (!lyricsOnline) return null as T;
+      return {
+        text: "Sukoshi no kaze ni fukare\nSukoshi no ame ni utare\nToki no sugiyuku mama ni\nIkiru koto no imi o shiru",
+        source: "Mock",
+      } as T;
     case "autostart_get":
       return false as T;
     case "autostart_set":

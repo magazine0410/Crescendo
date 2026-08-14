@@ -13,6 +13,10 @@ class UiStore {
   playlistSidebarW = $state(230);
   queuePanelW = $state(260);
   libraryValueListW = $state(230);
+  /** Bumped once a setting that changes how lyrics resolve has finished
+      saving, so the Now playing pane re-looks-them-up straight away instead
+      of waiting for the next track. */
+  lyricsEpoch = $state(0);
 }
 
 export const ui = new UiStore();

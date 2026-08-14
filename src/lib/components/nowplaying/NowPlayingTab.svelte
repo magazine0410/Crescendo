@@ -1,11 +1,20 @@
 <script lang="ts">
   import { player } from "$lib/stores/player.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import { call, artUrl, isTauri, type Album, type ArtistInfo, type AlbumInfo } from "$lib/api";
+  import { call, artUrl, isTauri, type Album, type ArtistInfo, type AlbumInfo, type LyricsResult } from "$lib/api";
   import { formatTime, displayOriginalTitle, displayAlbumartist, latinTitleSort } from "$lib/format";
 
   let artistInfo = $state<ArtistInfo | null>(null);
   let albumInfo = $state<AlbumInfo | null>(null);
+  let lyrics = $state<LyricsResult | null>(null);
+  let lyricsLoading = $state(false);
+  /** Track id and ui.lyricsEpoch the lyrics (or their absence) belong to;
+      guards the async calls from refiring on every player:state event, which
+      hands out a new Track object each time (volume, mute, pause, shuffle,
+      …). Plain `let`, not $state: nothing renders them, and making the effect
+      depend on what it writes would just cost it a second pass. */
+  let lyricsFor: number | null = null;
+  let lyricsEpoch = -1;
   let localAlbum = $state<Album | null>(null);
   let loadedFor = $state<string>("");
   let groupingClipped = $state(false);
@@ -46,6 +55,31 @@
         })
         .catch(() => {});
     }
+  });
+
+  $effect(() => {
+    const t = player.track;
+    const epoch = ui.lyricsEpoch;
+    if (!t) {
+      lyrics = null;
+      lyricsLoading = false;
+      lyricsFor = null;
+      return;
+    }
+    if (t.id === lyricsFor && epoch === lyricsEpoch) return;
+    lyricsFor = t.id;
+    lyricsEpoch = epoch;
+    lyrics = null;
+    lyricsLoading = true;
+    call<LyricsResult | null>("lyrics_for_track", { trackId: t.id })
+      .then((r) => {
+        if (lyricsFor !== t.id || lyricsEpoch !== epoch) return;
+        lyrics = r;
+        lyricsLoading = false;
+      })
+      .catch(() => {
+        if (lyricsFor === t.id && lyricsEpoch === epoch) lyricsLoading = false;
+      });
   });
 
   const track = $derived(player.track);
@@ -163,6 +197,17 @@
         </p>
       {/if}
     </div>
+    {#if lyrics}
+      <div class="lyrics-pane">
+        <h3>Lyrics · {lyrics.source}</h3>
+        <p class="lyrics">{lyrics.text}</p>
+      </div>
+    {:else if lyricsLoading}
+      <div class="lyrics-pane">
+        <h3>Lyrics</h3>
+        <p class="lyrics searching">Searching…</p>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -188,9 +233,16 @@
     overflow-y: auto;
   }
   .local,
-  .right {
+  .right,
+  .lyrics-pane {
     user-select: text;
     cursor: text;
+  }
+  .lyrics-pane {
+    flex: none;
+    width: 340px;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .left {
     flex: none;
@@ -291,6 +343,16 @@
     white-space: pre-line;
     user-select: text;
     cursor: text;
+  }
+  .lyrics {
+    line-height: 1.65;
+    white-space: pre-line;
+    user-select: text;
+    cursor: text;
+  }
+  .lyrics.searching {
+    color: var(--txt-faded);
+    font-style: italic;
   }
   .stats {
     margin-top: 8px;

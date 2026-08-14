@@ -14,6 +14,10 @@ export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "pro
 export interface Prefs {
   library_path: string;
   lastfm_api_key: string;
+  /** Send the playing track's title/artist/album/duration to VocaDB and
+      LRCLIB when no local lyrics exist (Now Playing). Off keeps lyrics to
+      sidecar files and embedded tags only. */
+  lyrics_online: boolean;
   /** Substitute the romanized *sort tag wherever a title or artist that
       contains CJK text renders (see format.ts). Off shows the original tags. */
   prefer_romanized: boolean;
@@ -57,6 +61,7 @@ export interface Prefs {
 const DEFAULTS: Prefs = {
   library_path: "/mnt/Mythic_Meme/Music/",
   lastfm_api_key: "",
+  lyrics_online: true,
   prefer_romanized: true,
   titlebar_format: "%albumartist% - %title%",
   track_detail_format: "",
@@ -96,6 +101,7 @@ class PrefsStore {
     const v: Prefs = { ...DEFAULTS };
     if (raw.library_path) v.library_path = raw.library_path;
     if (raw.lastfm_api_key) v.lastfm_api_key = raw.lastfm_api_key;
+    if (raw.lyrics_online) v.lyrics_online = raw.lyrics_online === "true";
     if (raw.prefer_romanized) v.prefer_romanized = raw.prefer_romanized === "true";
     // %title_display% and friends became the prefer_romanized toggle: fold any
     // stored pattern back onto the plain tags, which now follow that toggle.

@@ -109,6 +109,7 @@ pub fn run() {
             commands::misc::lastfm_artist_info,
             commands::misc::lastfm_album_info,
             commands::misc::lastfm_test_key,
+            commands::misc::lyrics_for_track,
             commands::misc::autostart_get,
             commands::misc::autostart_set,
             commands::misc::open_cover_window,
