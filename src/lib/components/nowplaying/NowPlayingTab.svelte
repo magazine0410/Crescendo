@@ -71,6 +71,7 @@
     lyricsEpoch = epoch;
     lyrics = null;
     lyricsLoading = true;
+    followUntil = 0;
     call<LyricsResult | null>("lyrics_for_track", { trackId: t.id })
       .then((r) => {
         if (lyricsFor !== t.id || lyricsEpoch !== epoch) return;
@@ -80,6 +81,49 @@
       .catch(() => {
         if (lyricsFor === t.id && lyricsEpoch === epoch) lyricsLoading = false;
       });
+  });
+
+  /** Index of the line being sung, or -1 before the first one. */
+  const activeLine = $derived.by(() => {
+    const lines = lyrics?.lines;
+    if (!lines?.length) return -1;
+    const ms = player.positionMs;
+    let lo = 0;
+    let hi = lines.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (lines[mid].ms <= ms) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return found;
+  });
+
+  let lyricsBox = $state<HTMLElement | null>(null);
+  /** Auto-scroll stands down until this time, so following the song never
+      fights someone reading ahead. Plain `let`: only the effect below reads
+      it, and it must not re-run when it changes. */
+  let followUntil = 0;
+
+  function pauseFollow() {
+    followUntil = Date.now() + 6000;
+  }
+
+  // Keep the line being sung in the middle of the pane.
+  $effect(() => {
+    const i = activeLine;
+    const box = lyricsBox;
+    if (!box || i < 0 || Date.now() < followUntil) return;
+    const el = box.children[i] as HTMLElement | undefined;
+    if (!el) return;
+    box.scrollTo({
+      top: Math.max(0, el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2),
+      behavior: "smooth",
+    });
   });
 
   const track = $derived(player.track);
@@ -199,8 +243,22 @@
     </div>
     {#if lyrics}
       <div class="lyrics-pane">
-        <h3>Lyrics · {lyrics.source}</h3>
-        <p class="lyrics">{lyrics.text}</p>
+        <h3>Lyrics · {lyrics.source}{lyrics.lines.length ? " · synced" : ""}</h3>
+        {#if lyrics.lines.length}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="lyrics-scroll synced"
+            bind:this={lyricsBox}
+            onwheel={pauseFollow}
+            onpointerdown={pauseFollow}
+          >
+            {#each lyrics.lines as line, i}
+              <p class="line" class:active={i === activeLine}>{line.text}</p>
+            {/each}
+          </div>
+        {:else}
+          <div class="lyrics-scroll"><p class="lyrics">{lyrics.text}</p></div>
+        {/if}
       </div>
     {:else if lyricsLoading}
       <div class="lyrics-pane">
@@ -243,6 +301,19 @@
     width: 340px;
     min-width: 0;
     overflow-wrap: anywhere;
+    /* Capped at the tab height and scrolled internally, so long lyrics never
+       stretch the row; sticky keeps them in view while .np scrolls. */
+    align-self: flex-start;
+    position: sticky;
+    top: 0;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .lyrics-scroll {
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 8px;
   }
   .left {
     flex: none;
@@ -353,6 +424,18 @@
   .lyrics.searching {
     color: var(--txt-faded);
     font-style: italic;
+  }
+  /* Synced view: every line dim, the one being sung in the now-playing
+     orange, same signal the track list uses. */
+  .synced .line {
+    line-height: 1.5;
+    padding: 3px 0;
+    min-height: 1.5em;
+    color: var(--txt-semifaded);
+    transition: color 120ms linear;
+  }
+  .synced .line.active {
+    color: var(--accent);
   }
   .stats {
     margin-top: 8px;

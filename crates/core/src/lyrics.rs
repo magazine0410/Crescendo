@@ -1,16 +1,24 @@
-//! Static lyrics for the Now Playing panel.
+//! Lyrics for the Now Playing panel, synced to the track where the source
+//! carries timings.
 //!
 //! Resolution order, first hit wins:
-//!   1. sidecar `.lrc` next to the audio file (timestamps stripped for now),
+//!   1. sidecar `.lrc` next to the audio file,
 //!   2. sidecar `.txt`,
 //!   3. embedded `LYRICS`/`UNSYNCEDLYRICS` tag,
 //!   4. VocaDB (romanized preferred, then original, then translation),
-//!   5. LRCLIB `plainLyrics`.
+//!   5. LRCLIB (`syncedLyrics`, falling back to `plainLyrics`).
+//!
+//! Every source runs through the same LRC parser, so what decides whether the
+//! lyrics are synced is the text itself, never the extension it arrived under:
+//! a `.txt` holding timestamps is synced, an `.lrc` without them is not. The
+//! result always carries a plain-text rendering; `lines` is non-empty only
+//! when there were timestamps to keep.
 //!
 //! Local sources are read live on every track change — they are single small
 //! file opens. Only the online lookups (VocaDB/LRCLIB) are cached, per track,
-//! so a rescan or a newly dropped sidecar file is picked up immediately.
-//! Online lookups can be switched off with the `lyrics_online` pref.
+//! and cached *raw* so the timing survives; a rescan or a newly dropped
+//! sidecar file is picked up immediately. Online lookups can be switched off
+//! with the `lyrics_online` pref.
 
 use crate::db::Db;
 use crate::model::Track;
@@ -34,47 +42,69 @@ const VOCADB_ROOT: &str = "https://vocadb.net/api/";
 const LRCLIB_ROOT: &str = "https://lrclib.net/api/";
 const USER_AGENT: &str = concat!("Crescendo/", env!("CARGO_PKG_VERSION"), " (lyrics lookup)");
 
-/// `[mm:ss.xx]` line tags and enhanced-LRC `<mm:ss.xx>` word tags.
+/// A leading `[mm:ss.xx]` line tag. Minutes are not capped at two digits:
+/// long tracks do run past `[99:59]`.
 static LINE_TAG: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\[[0-9]{1,2}:[0-9]{1,2}(?:[.:][0-9]{1,3})?\]").unwrap());
+    LazyLock::new(|| regex::Regex::new(r"^\[([0-9]{1,3}):([0-9]{1,2})(?:[.:]([0-9]{1,3}))?\]").unwrap());
+/// A leading `[ar:…]`-style ID tag. The letters are what separates it from a
+/// timestamp, and the colon from a lyric line that opens with "[Chorus]".
+static ID_TAG: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^\[([a-zA-Z#]+):([^\]]*)\]").unwrap());
+/// Enhanced-LRC `<mm:ss.xx>` word tags, anywhere in the line.
 static WORD_TAG: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"<[0-9]{1,2}:[0-9]{1,2}(?:[.:][0-9]{1,3})?>").unwrap());
+    LazyLock::new(|| regex::Regex::new(r"<[0-9]{1,3}:[0-9]{1,2}(?:[.:][0-9]{1,3})?>").unwrap());
+
+/// One timed line of an LRC file.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LyricLine {
+    /// Milliseconds from the start of the track.
+    pub ms: i64,
+    /// The line itself, with any enhanced-LRC word timings removed. Empty for
+    /// the blank lines an LRC file uses to mark an instrumental gap.
+    pub text: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LyricsResult {
+    /// The lyrics as plain text — all a source without timestamps carries,
+    /// and the fallback rendering for one that has them.
     pub text: String,
+    /// Timed lines in time order, empty when the source had no timestamps.
+    pub lines: Vec<LyricLine>,
     pub source: String,
 }
 
-/// Outcome of one online lookup: found lyrics, a definitive "no lyrics for
-/// this track" answer, or a transport/server failure that means nothing at
-/// all can be concluded. Only `NotFound` may be cached as a miss.
+/// Outcome of one online lookup: the raw lyrics as the service returned them
+/// (LRC included, so the timing survives into the cache), a definitive "no
+/// lyrics for this track" answer, or a transport/server failure that means
+/// nothing at all can be concluded. Only `NotFound` may be cached as a miss.
 enum OnlineResult {
-    Found(LyricsResult),
+    Found { raw: String, source: String },
     NotFound,
     Failed,
 }
 
 pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
-    if let Some((text, ext)) = read_sidecar(&track.path) {
-        return Ok(Some(LyricsResult {
-            text: if ext == "lrc" { strip_lrc_timestamps(&text) } else { text },
-            source: "Sidecar".into(),
-        }));
+    // Every local source goes through the LRC parser: whether the lyrics are
+    // synced is decided by what the text contains, not by where it came from
+    // or what the file is called.
+    if let Some(raw) = read_sidecar(&track.path) {
+        if let Some(result) = parse_lyrics(&raw, "Sidecar") {
+            return Ok(Some(result));
+        }
     }
-    if let Some(text) = embedded_lyrics(&track.path) {
-        return Ok(Some(LyricsResult {
-            text,
-            source: "Embedded tag".into(),
-        }));
+    if let Some(raw) = embedded_lyrics(&track.path) {
+        if let Some(result) = parse_lyrics(&raw, "Embedded tag") {
+            return Ok(Some(result));
+        }
     }
 
     if !db.lyrics_online() {
         return Ok(None);
     }
-    if let Some((text, source, age)) = db.lyrics_cache_get(track.id)? {
+    if let Some((raw, source, age)) = db.lyrics_cache_get(track.id)? {
         if age < cache_ttl(&source) {
-            return Ok((!text.is_empty()).then(|| LyricsResult { text, source }));
+            return Ok(parse_lyrics(&raw, &source));
         }
     }
 
@@ -82,8 +112,8 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
     let mut found = None;
     for fetch in [vocadb_lyrics, lrclib_lyrics] {
         match fetch(track) {
-            OnlineResult::Found(lyrics) => {
-                found = Some(lyrics);
+            OnlineResult::Found { raw, source } => {
+                found = Some((raw, source));
                 break;
             }
             OnlineResult::NotFound => {}
@@ -91,9 +121,9 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
         }
     }
     match found {
-        Some(lyrics) => {
-            db.lyrics_cache_put(track.id, &lyrics.text, &lyrics.source)?;
-            Ok(Some(lyrics))
+        Some((raw, source)) => {
+            db.lyrics_cache_put(track.id, &raw, &source)?;
+            Ok(parse_lyrics(&raw, &source))
         }
         // A failed lookup proves nothing, so it must not mark the track as
         // having no lyrics for a month — but it is still worth remembering
@@ -110,31 +140,32 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
     }
 }
 
-/// A sidecar lyrics file next to the audio, returned with the extension it
-/// was found under. Both the `song.<ext>` and the `song.flac.<ext>` name are
-/// tried, `.lrc` before `.txt`, and each is matched case-insensitively.
+/// A sidecar lyrics file next to the audio. Both the `song.<ext>` and the
+/// `song.flac.<ext>` name are tried, `.lrc` before `.txt`, and each is
+/// matched case-insensitively. What comes back is the file as written —
+/// whether it is synced is for the parser to decide.
 ///
 /// Most tracks have no sidecar at all, so the cheap exact-name opens all run
 /// first and the case-insensitive fallback is a *single* directory pass over
 /// every candidate — this runs on every track change, on an HDD.
-fn read_sidecar(audio_path: &str) -> Option<(String, &'static str)> {
+fn read_sidecar(audio_path: &str) -> Option<String> {
     let path = Path::new(audio_path);
     let parent = path.parent()?;
     let file_name = path.file_name()?.to_string_lossy().into_owned();
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
 
     // In precedence order: song.lrc, song.flac.lrc, song.txt, song.flac.txt.
-    let mut names: Vec<(String, &'static str)> = Vec::with_capacity(4);
+    let mut names: Vec<String> = Vec::with_capacity(4);
     for ext in ["lrc", "txt"] {
         if let Some(stem) = stem.as_deref() {
-            names.push((format!("{stem}.{ext}"), ext));
+            names.push(format!("{stem}.{ext}"));
         }
-        names.push((format!("{file_name}.{ext}"), ext));
+        names.push(format!("{file_name}.{ext}"));
     }
 
     let mut hits: Vec<Option<std::path::PathBuf>> = names
         .iter()
-        .map(|(name, _)| {
+        .map(|name| {
             let path = parent.join(name);
             path.is_file().then_some(path)
         })
@@ -146,7 +177,7 @@ fn read_sidecar(audio_path: &str) -> Option<(String, &'static str)> {
     let best = hits.iter().position(Option::is_some).unwrap_or(names.len());
     if best > 0 {
         // `song.LRC` and friends, e.g. files copied off a Windows share.
-        let wanted: Vec<String> = names[..best].iter().map(|(n, _)| n.to_lowercase()).collect();
+        let wanted: Vec<String> = names[..best].iter().map(|n| n.to_lowercase()).collect();
         if let Ok(entries) = std::fs::read_dir(parent) {
             for entry in entries.flatten() {
                 let lower = entry.file_name().to_string_lossy().to_lowercase();
@@ -158,9 +189,7 @@ fn read_sidecar(audio_path: &str) -> Option<(String, &'static str)> {
     }
 
     // Keep the name precedence above rather than directory order.
-    hits.into_iter()
-        .zip(&names)
-        .find_map(|(hit, (_, ext))| Some((read_lyrics_file(&hit?)?, *ext)))
+    hits.into_iter().find_map(|hit| read_lyrics_file(&hit?))
 }
 
 /// How long a cache row stays authoritative, given its `source`.
@@ -245,10 +274,10 @@ fn vocadb_lyrics(track: &Track) -> OnlineResult {
     if text.is_empty() {
         return OnlineResult::NotFound;
     }
-    OnlineResult::Found(LyricsResult {
-        text: text.to_string(),
+    OnlineResult::Found {
+        raw: text.to_string(),
         source: format!("VocaDB · {}", best["translationType"].as_str().unwrap_or("lyrics")),
-    })
+    }
 }
 
 fn find_vocadb_song(track: &Track) -> Result<Option<i64>, ()> {
@@ -338,20 +367,23 @@ fn lrclib_lyrics(track: &Track) -> OnlineResult {
     if json["instrumental"].as_bool() == Some(true) {
         return OnlineResult::NotFound;
     }
-    let Some(text) = json["plainLyrics"]
+    // Synced first: the timing is the point, and the parser derives the plain
+    // rendering from it anyway.
+    let Some(text) = json["syncedLyrics"]
         .as_str()
-        .or_else(|| json["syncedLyrics"].as_str())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| json["plainLyrics"].as_str())
     else {
         return OnlineResult::NotFound;
     };
-    let text = strip_lrc_timestamps(text.trim());
+    let text = text.trim();
     if text.is_empty() {
         return OnlineResult::NotFound;
     }
-    OnlineResult::Found(LyricsResult {
-        text,
+    OnlineResult::Found {
+        raw: text.to_string(),
         source: "LRCLIB".into(),
-    })
+    }
 }
 
 enum Fetch {
@@ -442,30 +474,100 @@ fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-/// Strip LRC timestamps so a synced file can render as plain text: leading
-/// `[mm:ss.xx]` line tags and enhanced-LRC `<mm:ss.xx>` word tags are dropped
-/// and the remaining text keeps its line breaks.
-fn strip_lrc_timestamps(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for line in s.lines() {
-        let line = WORD_TAG.replace_all(line, "");
-        let line = LINE_TAG.replace_all(&line, "");
-        let line = line.trim();
-        if !line.is_empty() {
-            out.push_str(line);
-            out.push('\n');
+/// Parse lyrics into a plain-text rendering plus, when the text carries
+/// timestamps, the timed lines behind it. Text with no timestamps parses to
+/// itself and no lines, so plain lyrics need no separate path.
+fn parse_lyrics(raw: &str, source: &str) -> Option<LyricsResult> {
+    let (text, lines) = parse_lrc(raw);
+    (!text.is_empty()).then(|| LyricsResult { text, lines, source: source.to_string() })
+}
+
+/// The LRC format: `[mm:ss.xx]` line tags, `[ar:…]`-style ID tags, enhanced
+/// `<mm:ss.xx>` word tags, and a line repeated at several times by carrying
+/// several tags at once.
+fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
+    let mut lines: Vec<LyricLine> = Vec::new();
+    let mut plain = String::with_capacity(s.len());
+    let mut offset_ms = 0i64;
+
+    for raw in s.lines() {
+        let mut rest = raw.trim_start();
+        let mut stamps: Vec<i64> = Vec::new();
+        loop {
+            if let Some(end) = LINE_TAG.captures(rest).map(|c| {
+                let min: i64 = c[1].parse().unwrap_or(0);
+                let sec: i64 = c[2].parse().unwrap_or(0);
+                // Two fraction digits are centiseconds, three milliseconds,
+                // one tenths — all three spellings are in the wild.
+                let frac = c.get(3).map_or(0, |f| {
+                    let n: i64 = f.as_str().parse().unwrap_or(0);
+                    match f.as_str().len() {
+                        1 => n * 100,
+                        2 => n * 10,
+                        _ => n,
+                    }
+                });
+                stamps.push(min * 60_000 + sec * 1000 + frac);
+                c[0].len()
+            }) {
+                rest = &rest[end..];
+                continue;
+            }
+            // ID tags only lead a line, never trail a timestamp.
+            if stamps.is_empty() {
+                if let Some(end) = ID_TAG.captures(rest).map(|c| {
+                    if c[1].eq_ignore_ascii_case("offset") {
+                        offset_ms = c[2].trim().parse().unwrap_or(0);
+                    }
+                    c[0].len()
+                }) {
+                    rest = &rest[end..];
+                    continue;
+                }
+            }
+            break;
+        }
+
+        let text = WORD_TAG.replace_all(rest, "");
+        let text = text.trim();
+        for ms in stamps {
+            lines.push(LyricLine { ms, text: text.to_string() });
+        }
+        if !text.is_empty() {
+            plain.push_str(text);
+            plain.push('\n');
         }
     }
-    out.trim_end().to_string()
+
+    // `[offset:+n]` means the lyrics run n ms ahead of the audio, so the times
+    // move back by it.
+    if offset_ms != 0 {
+        for line in &mut lines {
+            line.ms = (line.ms - offset_ms).max(0);
+        }
+    }
+    lines.sort_by_key(|l| l.ms);
+    (plain.trim_end().to_string(), lines)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        artist_name_matches, artist_string_matches, cache_ttl, norm, read_sidecar,
-        strip_lrc_timestamps, CACHE_TTL_SECS, FAILED_MARKER, FAILED_TTL_SECS,
+        artist_name_matches, artist_string_matches, cache_ttl, norm, parse_lrc, read_sidecar,
+        CACHE_TTL_SECS, FAILED_MARKER, FAILED_TTL_SECS,
     };
     use crate::model::Track;
+
+    /// The plain-text half of the parse, which is what a source without
+    /// timestamps renders as.
+    fn plain(s: &str) -> String {
+        parse_lrc(s).0
+    }
+
+    /// The timed half, as `(ms, text)` pairs.
+    fn timed(s: &str) -> Vec<(i64, String)> {
+        parse_lrc(s).1.into_iter().map(|l| (l.ms, l.text)).collect()
+    }
 
     fn track_with_artist(artist: &str) -> Track {
         Track {
@@ -493,24 +595,104 @@ mod tests {
     }
 
     #[test]
-    fn strips_basic_lrc_timestamps() {
-        let lrc = "[00:12.34] first line\n[01:02.03]second line\nplain third";
+    fn parses_timestamps_into_timed_lines() {
+        let lrc = "[00:12.34] first line\n[01:02.03]second line";
         assert_eq!(
-            strip_lrc_timestamps(lrc),
-            "first line\nsecond line\nplain third"
+            timed(lrc),
+            [(12_340, "first line".into()), (62_030, "second line".into())]
+        );
+        assert_eq!(plain(lrc), "first line\nsecond line");
+    }
+
+    #[test]
+    fn fraction_digits_are_tenths_centis_or_millis() {
+        assert_eq!(timed("[00:01.5]a")[0].0, 1_500);
+        assert_eq!(timed("[00:01.05]a")[0].0, 1_050);
+        assert_eq!(timed("[00:01.005]a")[0].0, 1_005);
+        // Some writers separate the fraction with a colon, and long tracks
+        // run past [99:59].
+        assert_eq!(timed("[00:01:50]a")[0].0, 1_500);
+        assert_eq!(timed("[100:00.00]a")[0].0, 6_000_000);
+        // No fraction at all is still a timestamp.
+        assert_eq!(timed("[02:03]a")[0].0, 123_000);
+    }
+
+    #[test]
+    fn text_with_no_timestamps_is_plain() {
+        let txt = "first line\nsecond line";
+        assert!(timed(txt).is_empty());
+        assert_eq!(plain(txt), txt);
+    }
+
+    #[test]
+    fn id_tags_are_dropped_from_both_halves() {
+        let lrc = "[ti:Title]\n[ar:Artist]\n[length:03:24]\n[00:12.34]keep";
+        assert_eq!(plain(lrc), "keep");
+        assert_eq!(timed(lrc), [(12_340, "keep".into())]);
+    }
+
+    #[test]
+    fn a_bracketed_lyric_line_is_not_an_id_tag() {
+        // No colon, so "[Chorus]" is text, not metadata.
+        assert_eq!(plain("[Chorus]\n[00:12.34]la"), "[Chorus]\nla");
+    }
+
+    #[test]
+    fn offset_shifts_every_line_and_never_below_zero() {
+        assert_eq!(timed("[offset:+500]\n[00:12.34]a")[0].0, 11_840);
+        assert_eq!(timed("[offset:-500]\n[00:12.34]a")[0].0, 12_840);
+        assert_eq!(timed("[offset:+5000]\n[00:01.00]a")[0].0, 0);
+    }
+
+    #[test]
+    fn one_line_can_carry_several_timestamps() {
+        // The chorus, sung three times.
+        assert_eq!(
+            timed("[00:20.00][01:40.00][02:30.00]chorus"),
+            [
+                (20_000, "chorus".into()),
+                (100_000, "chorus".into()),
+                (150_000, "chorus".into())
+            ]
+        );
+        // ...but it reads once in the plain rendering.
+        assert_eq!(plain("[00:20.00][01:40.00]chorus"), "chorus");
+    }
+
+    #[test]
+    fn lines_come_back_in_time_order() {
+        assert_eq!(
+            timed("[00:30.00]third\n[00:10.00]first\n[00:20.00]second"),
+            [
+                (10_000, "first".into()),
+                (20_000, "second".into()),
+                (30_000, "third".into())
+            ]
         );
     }
 
     #[test]
     fn strips_enhanced_word_timestamps() {
         let lrc = "[00:12.34] hel<00:12.34>lo wor<00:13.00>ld";
-        assert_eq!(strip_lrc_timestamps(lrc), "hello world");
+        assert_eq!(timed(lrc), [(12_340, "hello world".into())]);
+        assert_eq!(plain(lrc), "hello world");
     }
 
     #[test]
-    fn drops_blank_and_tag_only_lines() {
-        let lrc = "[00:12.34] keep\n[00:15.00]\n\n[00:20.00] next";
-        assert_eq!(strip_lrc_timestamps(lrc), "keep\nnext");
+    fn blank_lines_stay_timed_but_leave_the_plain_text() {
+        // An empty timed line is an instrumental gap: worth keeping in the
+        // synced view so the highlight moves off the last line, worth
+        // dropping from a plain block of text.
+        let lrc = "[00:12.34]keep\n[00:15.00]\n\n[00:20.00]next";
+        assert_eq!(
+            timed(lrc),
+            [
+                (12_340, "keep".into()),
+                (15_000, String::new()),
+                (20_000, "next".into())
+            ]
+        );
+        assert_eq!(plain(lrc), "keep\nnext");
     }
 
     #[test]
@@ -590,19 +772,27 @@ mod tests {
 
         // A `.txt` is used when no `.lrc` exists...
         std::fs::write(dir.path().join("01 Song.txt"), "from txt").unwrap();
-        assert_eq!(read_sidecar(&audio), Some(("from txt".into(), "txt")));
+        assert_eq!(read_sidecar(&audio).as_deref(), Some("from txt"));
 
-        // ...and loses to a `.lrc` found only by a case-insensitive match,
-        // whose timestamps for_track then strips.
+        // ...and loses to a `.lrc` found only by a case-insensitive match.
+        // The file comes back as written; parsing decides what it is.
         std::fs::write(dir.path().join("01 Song.LRC"), "[00:01.00] from lrc").unwrap();
-        assert_eq!(
-            read_sidecar(&audio),
-            Some(("[00:01.00] from lrc".into(), "lrc"))
-        );
+        assert_eq!(read_sidecar(&audio).as_deref(), Some("[00:01.00] from lrc"));
 
         // The exact `song.lrc` name still wins over the `song.flac.lrc` form.
         std::fs::write(dir.path().join("01 Song.flac.lrc"), "from double").unwrap();
         std::fs::write(dir.path().join("01 Song.lrc"), "from exact").unwrap();
-        assert_eq!(read_sidecar(&audio), Some(("from exact".into(), "lrc")));
+        assert_eq!(read_sidecar(&audio).as_deref(), Some("from exact"));
+    }
+
+    #[test]
+    fn a_txt_sidecar_holding_lrc_is_still_synced() {
+        // The extension does not decide; the content does.
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("01 Song.flac");
+        std::fs::write(&audio, b"").unwrap();
+        std::fs::write(dir.path().join("01 Song.txt"), "[00:05.00]synced anyway").unwrap();
+        let raw = read_sidecar(&audio.to_string_lossy()).unwrap();
+        assert_eq!(timed(&raw), [(5_000, "synced anyway".into())]);
     }
 }

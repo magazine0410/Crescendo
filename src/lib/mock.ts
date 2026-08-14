@@ -531,12 +531,24 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "lastfm_artist_info":
     case "lastfm_album_info":
       return null as T;
-    case "lyrics_for_track":
+    case "lyrics_for_track": {
       if (!lyricsOnline) return null as T;
-      return {
-        text: "Sukoshi no kaze ni fukare\nSukoshi no ame ni utare\nToki no sugiyuku mama ni\nIkiru koto no imi o shiru",
-        source: "Mock",
-      } as T;
+      // Long enough to scroll, and timed across the mock track's 3:04 so the
+      // synced view actually follows along in the browser preview.
+      const verse = [
+        "Sukoshi no kaze ni fukare",
+        "Sukoshi no ame ni utare",
+        "Toki no sugiyuku mama ni",
+        "Ikiru koto no imi o shiru",
+        "",
+        "Yagate yoru ga akete",
+        "Asahi ga mado o terasu",
+      ];
+      const lines = Array.from({ length: 4 }, (_, verseNo) =>
+        verse.map((text, i) => ({ ms: (verseNo * verse.length + i) * 6000, text })),
+      ).flat();
+      return { text: lines.map((l) => l.text).join("\n").trim(), lines, source: "Mock" } as T;
+    }
     case "autostart_get":
       return false as T;
     case "autostart_set":

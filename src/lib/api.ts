@@ -150,8 +150,18 @@ export interface AlbumInfo {
   url: string | null;
 }
 
-export interface LyricsResult {
+/** One timed line of an LRC source. */
+export interface LyricLine {
+  ms: number;
+  /** Empty for the blank lines that mark an instrumental gap. */
   text: string;
+}
+
+export interface LyricsResult {
+  /** Plain-text rendering; all an unsynced source carries. */
+  text: string;
+  /** Timed lines in time order, empty when the source had no timestamps. */
+  lines: LyricLine[];
   source: string;
 }
 
