@@ -20,3 +20,6 @@ vite.config.ts.timestamp-*
 # Local release notes scratchpad — source for GitHub Release descriptions,
 # not part of the tracked codebase.
 /CHANGELOG.md
+
+# Local tool state (SQLite db + WAL), not part of the project.
+/.freebuff/
