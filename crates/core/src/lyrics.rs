@@ -5,7 +5,8 @@
 //!   1. sidecar `.lrc` next to the audio file,
 //!   2. sidecar `.txt`,
 //!   3. embedded `LYRICS`/`UNSYNCEDLYRICS` tag,
-//!   4. VocaDB (romanized preferred, then original, then translation),
+//!   4. TouhouDB, then VocaDB, then UtaiteDB — one client for all three, each
+//!      preferring romanized, then the original, then a translation,
 //!   5. LRCLIB (`syncedLyrics`, falling back to `plainLyrics`).
 //!
 //! Every source runs through the same LRC parser, so what decides whether the
@@ -38,7 +39,15 @@ const FAILED_TTL_SECS: i64 = 10 * 60;
 /// Cache `source` marking a row as "the lookup failed", as opposed to the
 /// empty source of a real "this track has no lyrics" miss.
 const FAILED_MARKER: &str = "\u{1f}failed";
-const VOCADB_ROOT: &str = "https://vocadb.net/api/";
+/// The VocaDB-family databases, in the order they are asked. All three run
+/// the same software behind the same API, so one client covers them: only the
+/// host and the name that lands in `source` differ. TouhouDB leads because
+/// this library is doujin-heavy, then VocaDB, then UtaiteDB for covers.
+const VOCADB_SITES: [(&str, &str); 3] = [
+    ("https://touhoudb.com/api/", "TouhouDB"),
+    ("https://vocadb.net/api/", "VocaDB"),
+    ("https://utaitedb.net/api/", "UtaiteDB"),
+];
 const LRCLIB_ROOT: &str = "https://lrclib.net/api/";
 const USER_AGENT: &str = concat!("Crescendo/", env!("CARGO_PKG_VERSION"), " (lyrics lookup)");
 
@@ -110,15 +119,13 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
 
     let mut any_failed = false;
     let mut found = None;
-    for fetch in [vocadb_lyrics, lrclib_lyrics] {
-        match fetch(track) {
-            OnlineResult::Found { raw, source } => {
-                found = Some((raw, source));
-                break;
-            }
-            OnlineResult::NotFound => {}
-            OnlineResult::Failed => any_failed = true,
+    for (root, name) in VOCADB_SITES {
+        if take(vocadb_lyrics(track, root, name), &mut found, &mut any_failed) {
+            break;
         }
+    }
+    if found.is_none() {
+        take(lrclib_lyrics(track), &mut found, &mut any_failed);
     }
     match found {
         Some((raw, source)) => {
@@ -136,6 +143,23 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
         None => {
             db.lyrics_cache_put(track.id, "", "")?;
             Ok(None)
+        }
+    }
+}
+
+/// Fold one lookup into the running outcome. Returns true once something has
+/// been found, so the remaining sources can be skipped; a failure is only
+/// remembered, because another source may still answer.
+fn take(result: OnlineResult, found: &mut Option<(String, String)>, any_failed: &mut bool) -> bool {
+    match result {
+        OnlineResult::Found { raw, source } => {
+            *found = Some((raw, source));
+            true
+        }
+        OnlineResult::NotFound => false,
+        OnlineResult::Failed => {
+            *any_failed = true;
+            false
         }
     }
 }
@@ -237,13 +261,15 @@ fn non_empty(s: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-fn vocadb_lyrics(track: &Track) -> OnlineResult {
-    let song_id = match find_vocadb_song(track) {
+/// One VocaDB-family database. `root` is its API base, `name` the label that
+/// ends up in the result's `source`.
+fn vocadb_lyrics(track: &Track, root: &str, name: &str) -> OnlineResult {
+    let song_id = match find_vocadb_song(track, root) {
         Ok(Some(id)) => id,
         Ok(None) => return OnlineResult::NotFound,
         Err(()) => return OnlineResult::Failed,
     };
-    let details = match vocadb_get(&format!("songs/{song_id}/details"), &[]) {
+    let details = match vocadb_get(root, &format!("songs/{song_id}/details"), &[]) {
         Fetch::Ok(v) => v,
         Fetch::NotFound => return OnlineResult::NotFound,
         Fetch::Failed => return OnlineResult::Failed,
@@ -263,7 +289,7 @@ fn vocadb_lyrics(track: &Track) -> OnlineResult {
         return OnlineResult::Failed;
     };
 
-    let full = match vocadb_get(&format!("songs/lyrics/{lyrics_id}"), &[]) {
+    let full = match vocadb_get(root, &format!("songs/lyrics/{lyrics_id}"), &[]) {
         Fetch::Ok(v) => v,
         Fetch::NotFound => return OnlineResult::NotFound,
         Fetch::Failed => return OnlineResult::Failed,
@@ -276,11 +302,11 @@ fn vocadb_lyrics(track: &Track) -> OnlineResult {
     }
     OnlineResult::Found {
         raw: text.to_string(),
-        source: format!("VocaDB · {}", best["translationType"].as_str().unwrap_or("lyrics")),
+        source: format!("{name} · {}", best["translationType"].as_str().unwrap_or("lyrics")),
     }
 }
 
-fn find_vocadb_song(track: &Track) -> Result<Option<i64>, ()> {
+fn find_vocadb_song(track: &Track, root: &str) -> Result<Option<i64>, ()> {
     let duration = track.duration_ms / 1000;
     let mut queries: Vec<&str> = Vec::with_capacity(2);
     if let Some(t) = track.title.as_deref() {
@@ -294,6 +320,7 @@ fn find_vocadb_song(track: &Track) -> Result<Option<i64>, ()> {
 
     for query in queries {
         let json = match vocadb_get(
+            root,
             "songs",
             &[
                 ("query", query),
@@ -392,8 +419,8 @@ enum Fetch {
     Failed,
 }
 
-fn vocadb_get(path: &str, query: &[(&str, &str)]) -> Fetch {
-    let mut req = ureq::get(&format!("{VOCADB_ROOT}{path}"))
+fn vocadb_get(root: &str, path: &str, query: &[(&str, &str)]) -> Fetch {
+    let mut req = ureq::get(&format!("{root}{path}"))
         .set("User-Agent", USER_AGENT)
         .timeout(std::time::Duration::from_secs(15));
     for (k, v) in query {
@@ -403,13 +430,13 @@ fn vocadb_get(path: &str, query: &[(&str, &str)]) -> Fetch {
         Ok(r) => match r.into_json() {
             Ok(v) => Fetch::Ok(v),
             Err(e) => {
-                log::warn!("VocaDB returned unreadable JSON ({path}): {e}");
+                log::warn!("{root}{path} returned unreadable JSON: {e}");
                 Fetch::Failed
             }
         },
         Err(ureq::Error::Status(404, _)) => Fetch::NotFound,
         Err(e) => {
-            log::warn!("VocaDB request failed ({path}): {e}");
+            log::warn!("{root}{path} request failed: {e}");
             Fetch::Failed
         }
     }
@@ -554,7 +581,7 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
 mod tests {
     use super::{
         artist_name_matches, artist_string_matches, cache_ttl, norm, parse_lrc, read_sidecar,
-        CACHE_TTL_SECS, FAILED_MARKER, FAILED_TTL_SECS,
+        CACHE_TTL_SECS, FAILED_MARKER, FAILED_TTL_SECS, VOCADB_SITES,
     };
     use crate::model::Track;
 
@@ -747,6 +774,19 @@ mod tests {
     #[test]
     fn norm_lowercases_and_collapses_whitespace() {
         assert_eq!(norm("  黒うさP   feat.   Miku "), "黒うさp feat. miku");
+    }
+
+    #[test]
+    fn vocadb_family_is_asked_touhou_first() {
+        // Order is a deliberate fit to a doujin-heavy library, not incidental.
+        let names: Vec<&str> = VOCADB_SITES.iter().map(|(_, name)| *name).collect();
+        assert_eq!(names, ["TouhouDB", "VocaDB", "UtaiteDB"]);
+        // All three run the same software, so the paths the client builds must
+        // hang off a root that ends in the API prefix.
+        for (root, _) in VOCADB_SITES {
+            assert!(root.starts_with("https://"), "{root} must be https");
+            assert!(root.ends_with("/api/"), "{root} must end in /api/");
+        }
     }
 
     #[test]
