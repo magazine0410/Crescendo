@@ -7,7 +7,8 @@
 //!   3. embedded `LYRICS`/`UNSYNCEDLYRICS` tag,
 //!   4. TouhouDB, then VocaDB, then UtaiteDB — one client for all three, each
 //!      preferring romanized, then the original, then a translation,
-//!   5. LRCLIB (`syncedLyrics`, falling back to `plainLyrics`).
+//!   5. LyricsTouHou (THBWiki), which serves synced LRC keyed on the title,
+//!   6. LRCLIB (`syncedLyrics`, falling back to `plainLyrics`).
 //!
 //! Every source runs through the same LRC parser, so what decides whether the
 //! lyrics are synced is the text itself, never the extension it arrived under:
@@ -48,6 +49,9 @@ const VOCADB_SITES: [(&str, &str); 3] = [
     ("https://vocadb.net/api/", "VocaDB"),
     ("https://utaitedb.net/api/", "UtaiteDB"),
 ];
+/// LyricsTouHou (THBWiki), asked after the VocaDB family. Touhou-only, and
+/// synced: entries are LRC files served straight off the title, `<title>.lrc`.
+const THWIKI_ROOT: &str = "https://lyrics.thwiki.cc/";
 const LRCLIB_ROOT: &str = "https://lrclib.net/api/";
 /// How far a candidate's length may sit from the track's before it is treated
 /// as a different recording rather than the same one. The API caps a search
@@ -129,6 +133,9 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
         if take(vocadb_lyrics(track, root, name), &mut found, &mut any_failed) {
             break;
         }
+    }
+    if found.is_none() {
+        take(thwiki_lyrics(track), &mut found, &mut any_failed);
     }
     if found.is_none() {
         take(lrclib_lyrics(track), &mut found, &mut any_failed);
@@ -379,6 +386,135 @@ fn find_vocadb_song(track: &Track, root: &str) -> Result<Option<i64>, ()> {
     Ok(None)
 }
 
+/// LyricsTouHou keys entries on the title alone — there is no artist
+/// parameter to narrow a search with. The entry it serves is therefore
+/// verified after the fact against the `[ti:]` and `[ar:]` tags the file
+/// carries, so a title several circles have used cannot quietly return the
+/// wrong circle's words.
+fn thwiki_lyrics(track: &Track) -> OnlineResult {
+    let mut queries: Vec<&str> = Vec::with_capacity(2);
+    if let Some(t) = track.title.as_deref() {
+        queries.push(t);
+    }
+    if let Some(t) = track.titlesort.as_deref() {
+        if !queries.contains(&t) {
+            queries.push(t);
+        }
+    }
+
+    let mut any_failed = false;
+    for query in queries {
+        let url = format!("{THWIKI_ROOT}{}.lrc", percent_encode(query));
+        let raw = match ureq::get(&url)
+            .set("User-Agent", USER_AGENT)
+            .timeout(std::time::Duration::from_secs(15))
+            .call()
+        {
+            Ok(r) => match r.into_string() {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("LyricsTouHou returned unreadable text ({query}): {e}");
+                    any_failed = true;
+                    continue;
+                }
+            },
+            Err(ureq::Error::Status(404, _)) => continue,
+            Err(e) => {
+                log::warn!("LyricsTouHou request failed ({query}): {e}");
+                any_failed = true;
+                continue;
+            }
+        };
+
+        if !thwiki_entry_matches(track, &raw) {
+            continue;
+        }
+        let raw = strip_thwiki_translation(&raw);
+        if raw.trim().is_empty() {
+            continue;
+        }
+        return OnlineResult::Found { raw, source: "LyricsTouHou".into() };
+    }
+    if any_failed {
+        OnlineResult::Failed
+    } else {
+        OnlineResult::NotFound
+    }
+}
+
+/// The title and circle the served file names must both line up with the
+/// track. `artist_name_matches` does the comparing for either: it is the same
+/// "one name is a whole-token subset of the other" test, which lets a bare
+/// "Bad Apple!!" match an entry titled "Bad Apple!! feat. nomico" while
+/// refusing an unrelated song from the same album.
+fn thwiki_entry_matches(track: &Track, raw: &str) -> bool {
+    let Some(served_title) = lrc_id_tag(raw, "ti") else {
+        return false;
+    };
+    let title_ok = [track.title.as_deref(), track.titlesort.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|t| artist_name_matches(&norm(&served_title), &norm(t)));
+    if !title_ok {
+        return false;
+    }
+    // Not every entry names a circle. The database is Touhou-only and the
+    // title already lined up, so a missing `[ar:]` is not cause to reject.
+    match lrc_id_tag(raw, "ar") {
+        Some(artist) => artist_string_matches(track, &artist),
+        None => true,
+    }
+}
+
+/// The value of an `[xx:…]` ID tag, if the file carries one.
+fn lrc_id_tag(raw: &str, key: &str) -> Option<String> {
+    for line in raw.lines() {
+        if let Some(c) = ID_TAG.captures(line.trim_start()) {
+            if c[1].eq_ignore_ascii_case(key) {
+                let value = c[2].trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// LyricsTouHou puts the original and a Chinese translation on one line,
+/// split by " // ". Keep the original half — the pane is one column, and the
+/// rest of the pipeline has no concept of a second language. Entries without
+/// a translation carry no separator and pass through untouched.
+fn strip_thwiki_translation(raw: &str) -> String {
+    raw.lines()
+        .map(|line| {
+            // Only timed lines carry translations. Leaving other lines alone
+            // keeps the "//" inside a `[re:https://…]` URL out of it.
+            if LINE_TAG.is_match(line.trim_start()) {
+                line.split(" // ").next().unwrap_or(line).trim_end()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Percent-encode a title for use as a URL path segment. Titles here are
+/// Japanese far more often than not, so almost every byte needs escaping.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 fn lrclib_lyrics(track: &Track) -> OnlineResult {
     let (Some(title), Some(artist)) = (track.title.as_deref(), track.artist.as_deref()) else {
         return OnlineResult::NotFound;
@@ -593,7 +729,8 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        artist_name_matches, artist_string_matches, cache_ttl, norm, parse_lrc, read_sidecar,
+        artist_name_matches, artist_string_matches, cache_ttl, lrc_id_tag, norm, parse_lrc,
+        percent_encode, read_sidecar, strip_thwiki_translation, thwiki_entry_matches,
         CACHE_TTL_SECS, FAILED_MARKER, FAILED_TTL_SECS, VOCADB_SITES,
     };
     use crate::model::Track;
@@ -787,6 +924,83 @@ mod tests {
     #[test]
     fn norm_lowercases_and_collapses_whitespace() {
         assert_eq!(norm("  黒うさP   feat.   Miku "), "黒うさp feat. miku");
+    }
+
+    /// A LyricsTouHou file, shortened but shaped exactly like the real thing.
+    fn thwiki_file() -> String {
+        [
+            "[ti:Bad Apple!! feat. nomico]",
+            "[al:Lovelight]",
+            "[ar:Alstroemeria Records]",
+            "[re:LyricsTouHou: https://lyrics.thwiki.cc/Bad_Apple!!.1.all.lrc]",
+            "[00:57.02]流れてく 時の中ででも // 即便身处流逝的时光之中",
+            "[01:10.73]",
+            "[01:11.09]自分から 動くこともなく // 就算自己什么也不做",
+        ]
+        .join("\n")
+    }
+
+    fn track_named(title: &str, artist: &str) -> Track {
+        let mut t = track_with_artist(artist);
+        t.title = Some(title.into());
+        t
+    }
+
+    #[test]
+    fn thwiki_translation_is_dropped_but_the_original_kept() {
+        let out = strip_thwiki_translation(&thwiki_file());
+        assert!(out.contains("[00:57.02]流れてく 時の中ででも"));
+        assert!(!out.contains("即便身处流逝的时光之中"));
+        // A blank gap line survives, and a URL holding "//" is not a
+        // translation separator.
+        assert!(out.contains("[01:10.73]"));
+        assert!(out.contains("https://lyrics.thwiki.cc/"));
+        // An entry with no translation passes through untouched.
+        let plain = "[ti:X]\n[00:00.00]終わることない祭典";
+        assert_eq!(strip_thwiki_translation(plain), plain);
+    }
+
+    #[test]
+    fn thwiki_id_tags_are_readable() {
+        let raw = thwiki_file();
+        assert_eq!(lrc_id_tag(&raw, "ti").as_deref(), Some("Bad Apple!! feat. nomico"));
+        assert_eq!(lrc_id_tag(&raw, "ar").as_deref(), Some("Alstroemeria Records"));
+        assert_eq!(lrc_id_tag(&raw, "zz"), None);
+    }
+
+    #[test]
+    fn thwiki_entry_is_verified_against_its_own_tags() {
+        let raw = thwiki_file();
+        // The served title may be longer than the tag we searched with.
+        assert!(thwiki_entry_matches(
+            &track_named("Bad Apple!!", "Alstroemeria Records"),
+            &raw
+        ));
+        // Right circle, wrong song — the site serving a neighbour off the same
+        // album must not be accepted.
+        assert!(!thwiki_entry_matches(
+            &track_named("すごいえーりん・その１", "Alstroemeria Records"),
+            &raw
+        ));
+        // Right title, wrong circle.
+        assert!(!thwiki_entry_matches(
+            &track_named("Bad Apple!!", "COOL&CREATE"),
+            &raw
+        ));
+        // No `[ar:]` to check leaves the title match standing alone.
+        let untagged = "[ti:Bad Apple!!]\n[00:01.00]x";
+        assert!(thwiki_entry_matches(
+            &track_named("Bad Apple!!", "Anyone At All"),
+            untagged
+        ));
+    }
+
+    #[test]
+    fn titles_are_percent_encoded_for_the_url() {
+        assert_eq!(percent_encode("Bad Apple!!"), "Bad%20Apple%21%21");
+        assert_eq!(percent_encode("a-z_0.9~"), "a-z_0.9~");
+        // Japanese titles are the common case: every byte escapes.
+        assert_eq!(percent_encode("東方"), "%E6%9D%B1%E6%96%B9");
     }
 
     #[test]
