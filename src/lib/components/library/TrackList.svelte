@@ -188,6 +188,7 @@
       count={library.trackListRowCount}
       itemHeight={ROW_H}
       initialScrollTop={library.trackScroll}
+      scrollResetKey={library.scrollResetKey}
       onScrollChange={(y) => (library.trackScroll = y)}
       onVisibleRange={(f, l) => {
         visFirst = f;

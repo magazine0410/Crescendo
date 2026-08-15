@@ -751,12 +751,12 @@ impl Engine {
         self.commit_play();
         let Ok(Some(track)) = self.db.track_by_id(track_id) else {
             log::error!("track {track_id} vanished from the library");
-            self.finish_manual_transition();
+            self.stop();
             return;
         };
         let Ok(uri) = gstreamer::glib::filename_to_uri(&track.path, None) else {
             log::error!("cannot build uri for {}", track.path);
-            self.finish_manual_transition();
+            self.stop();
             return;
         };
         let _ = self.playbin.set_state(gstreamer::State::Ready);
@@ -840,20 +840,25 @@ impl Engine {
     }
 
     fn publish_state(&self) {
-        let q = self.queue.lock().expect("queue poisoned");
-        let track = q.current().and_then(|id| self.db.track_by_id(id).ok().flatten());
+        // Snapshot the cheap queue fields first. A DB lookup may wait behind an
+        // import, and holding the queue during that wait can make the streaming
+        // thread miss its gapless handoff deadline.
+        let (track_id, context_index, context_len, shuffle, repeat) = {
+            let q = self.queue.lock().expect("queue poisoned");
+            (q.current(), q.context_index(), q.context_len(), q.shuffle, q.repeat)
+        };
+        let track = track_id.and_then(|id| self.db.track_by_id(id).ok().flatten());
         let state = PlayerState {
             status: self.status,
-            context_index: q.context_index(),
-            context_len: q.context_len(),
-            shuffle: q.shuffle,
-            repeat: q.repeat,
+            context_index,
+            context_len,
+            shuffle,
+            repeat,
             volume: self.volume,
             muted: self.muted,
             stop_after_current: self.stop_after_current.load(Ordering::SeqCst),
             track,
         };
-        drop(q);
         *self.shared.lock().expect("player state poisoned") = state.clone();
         let _ = self.app.emit("player:state", state);
     }

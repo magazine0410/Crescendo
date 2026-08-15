@@ -55,6 +55,7 @@
     cellWidth={CELL_W}
     cellHeight={CELL_H}
     initialScrollTop={library.wallScroll}
+    scrollResetKey={library.scrollResetKey}
     onScrollChange={(y) => (library.wallScroll = y)}
     cell={cellSnippet}
   />

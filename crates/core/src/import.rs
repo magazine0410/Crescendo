@@ -35,7 +35,12 @@ pub fn add_paths_to_playlist(
     paths: &[PathBuf],
 ) -> Result<DropImportResult> {
     let exists = db.with(|conn| {
-        Ok(conn.query_row("SELECT 1 FROM playlists WHERE id = ?1", [playlist_id], |_| Ok(()))
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM playlists WHERE id = ?1",
+                [playlist_id],
+                |_| Ok(()),
+            )
             .is_ok())
     })?;
     if !exists {
@@ -48,7 +53,8 @@ pub fn add_paths_to_playlist(
 
     // Dedupe against the playlist's current members and against the drop.
     let existing: HashSet<i64> = db.with(|conn| {
-        let mut stmt = conn.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1")?;
         let set = stmt
             .query_map([playlist_id], |r| r.get::<_, i64>(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -101,10 +107,16 @@ fn expand(paths: &[PathBuf]) -> Vec<Group> {
             // filesystem hands them over.
             files.sort();
             if !files.is_empty() {
-                groups.push(Group { from_folder: true, files });
+                groups.push(Group {
+                    from_folder: true,
+                    files,
+                });
             }
         } else if scanner::is_audio_file(path) && seen.insert(path.clone()) {
-            groups.push(Group { from_folder: false, files: vec![path.clone()] });
+            groups.push(Group {
+                from_folder: false,
+                files: vec![path.clone()],
+            });
         }
     }
     groups
@@ -124,6 +136,16 @@ struct Resolved<'a> {
 /// disc and track number.
 type Row = (i64, i64, String, String, i64, i64);
 
+/// File-system and tag data collected without holding the shared DB mutex.
+struct PendingImport {
+    path: String,
+    dir: String,
+    filename: String,
+    mtime: i64,
+    size: i64,
+    meta: tags::TrackMeta,
+}
+
 const LOOKUP: &str = "SELECT id, missing, COALESCE(albumartist, artist, ''), COALESCE(album, ''), \
                       COALESCE(disc_no, 0), COALESCE(track_no, 0) \
                       FROM tracks WHERE path = ?1";
@@ -132,61 +154,65 @@ const LOOKUP: &str = "SELECT id, missing, COALESCE(albumartist, artist, ''), COA
 /// Files from a folder come back album by album, each album in disc/track
 /// order.
 fn resolve(db: &Db, groups: &[Group], result: &mut DropImportResult) -> Result<Vec<i64>> {
-    db.with(|conn| {
-        let mut lookup = conn.prepare(LOOKUP)?;
-        let mut read = |path: &str| -> Option<Row> {
-            lookup
-                .query_row([path], |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                    ))
-                })
-                .ok()
-        };
-        let mut upsert = conn.prepare(scanner::UPSERT_TRACK)?;
-        let mut out = Vec::new();
+    let mut out = Vec::new();
 
-        for group in groups {
-            let mut resolved: Vec<Resolved> = Vec::new();
-            for file in &group.files {
-                let Some(path_str) = file.to_str() else {
-                    log::warn!("skipping non-UTF-8 path: {}", file.display());
-                    result.failed.push(file.display().to_string());
-                    continue;
-                };
-                let mut row = read(path_str);
-                // Unknown, or known but marked missing and back on disk.
-                if row.as_ref().is_none_or(|(_, missing, ..)| *missing != 0) {
-                    if let Err(e) = import_file(&mut upsert, file, path_str) {
+    for group in groups {
+        let mut resolved: Vec<Resolved> = Vec::new();
+        for file in &group.files {
+            let Some(path_str) = file.to_str() else {
+                log::warn!("skipping non-UTF-8 path: {}", file.display());
+                result.failed.push(file.display().to_string());
+                continue;
+            };
+            let mut row = lookup(db, path_str)?;
+            // Unknown, or known but marked missing and back on disk. Metadata
+            // and tag reads can hit a slow HDD, so do all of that before
+            // briefly reacquiring the connection to write the finished row.
+            if row.as_ref().is_none_or(|(_, missing, ..)| *missing != 0) {
+                let pending = match read_import_file(file, path_str) {
+                    Ok(pending) => pending,
+                    Err(e) => {
                         log::warn!("cannot import {path_str}: {e}");
                         result.failed.push(path_str.to_string());
                         continue;
                     }
-                    result.imported += 1;
-                    row = read(path_str);
-                }
-                match row {
-                    Some((id, _, albumartist, album, disc, track)) => resolved.push(Resolved {
-                        album: (albumartist, album),
-                        disc,
-                        track,
-                        path: file.as_path(),
-                        id,
-                    }),
-                    None => result.failed.push(path_str.to_string()),
-                }
+                };
+                row = Some(write_import(db, &pending)?);
+                result.imported += 1;
             }
-            if group.from_folder {
-                sort_by_album(&mut resolved);
+            match row {
+                Some((id, _, albumartist, album, disc, track)) => resolved.push(Resolved {
+                    album: (albumartist, album),
+                    disc,
+                    track,
+                    path: file.as_path(),
+                    id,
+                }),
+                None => result.failed.push(path_str.to_string()),
             }
-            out.extend(resolved.iter().map(|r| r.id));
         }
-        Ok(out)
+        if group.from_folder {
+            sort_by_album(&mut resolved);
+        }
+        out.extend(resolved.iter().map(|r| r.id));
+    }
+    Ok(out)
+}
+
+fn lookup(db: &Db, path: &str) -> Result<Option<Row>> {
+    db.with(|conn| {
+        Ok(conn
+            .query_row(LOOKUP, [path], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })
+            .ok())
     })
 }
 
@@ -206,19 +232,19 @@ fn sort_by_album(resolved: &mut [Resolved]) {
         first_seen.entry(r.album.clone()).or_insert(next);
     }
     resolved.sort_by(|a, b| {
-        (first_seen[&a.album], a.disc, a.track, a.path)
-            .cmp(&(first_seen[&b.album], b.disc, b.track, b.path))
+        (first_seen[&a.album], a.disc, a.track, a.path).cmp(&(
+            first_seen[&b.album],
+            b.disc,
+            b.track,
+            b.path,
+        ))
     });
 }
 
 /// Read one file's tags and write its row. Mirrors the scanner's writer,
 /// including its fallback: a file with unreadable tags still enters the
 /// library under its filename, because GStreamer can usually play it anyway.
-fn import_file(
-    upsert: &mut rusqlite::Statement<'_>,
-    path: &Path,
-    path_str: &str,
-) -> Result<()> {
+fn read_import_file(path: &Path, path_str: &str) -> Result<PendingImport> {
     let md = std::fs::metadata(path)?;
     let mtime = md
         .modified()
@@ -230,8 +256,50 @@ fn import_file(
         log::warn!("tag read failed for {path_str} ({e}); using filename only");
         tags::fallback_meta(path)
     });
-    let dir = path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-    let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-    scanner::upsert_row(upsert, path_str, &dir, &filename, mtime, md.len() as i64, &meta)?;
-    Ok(())
+    let dir = path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let filename = path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Ok(PendingImport {
+        path: path_str.to_string(),
+        dir,
+        filename,
+        mtime,
+        size: md.len() as i64,
+        meta,
+    })
+}
+
+fn write_import(db: &Db, pending: &PendingImport) -> Result<Row> {
+    db.with(|conn| {
+        let tx = conn.transaction()?;
+        {
+            let mut upsert = tx.prepare(scanner::UPSERT_TRACK)?;
+            scanner::upsert_row(
+                &mut upsert,
+                &pending.path,
+                &pending.dir,
+                &pending.filename,
+                pending.mtime,
+                pending.size,
+                &pending.meta,
+            )?;
+        }
+        let row = tx.query_row(LOOKUP, [&pending.path], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?;
+        tx.commit()?;
+        Ok(row)
+    })
 }

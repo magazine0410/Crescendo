@@ -54,13 +54,25 @@ impl Db {
     }
 }
 
-/// Unicode-aware helpers SQLite lacks: `ucontains(haystack, needle)` does a
-/// case-folded substring test (SQLite's LIKE/lower() are ASCII-only, which
-/// breaks matching in a heavily Japanese library), and `regexp(pattern, text)`
-/// backs the `tag=/re/` query syntax.
+/// Unicode-aware helpers SQLite lacks: `ulower(text)` supplies deterministic
+/// Unicode lowercasing for persisted identity keys, `ucontains(haystack,
+/// needle)` does a lowercased substring test, and `regexp(pattern, text)` backs
+/// the `tag=/re/` query syntax.
 fn register_udfs(conn: &Connection) -> Result<()> {
     use rusqlite::functions::FunctionFlags;
     use std::sync::Arc;
+
+    conn.create_scalar_function(
+        "ulower",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let value = ctx.get_raw(0).as_str_or_null().map_err(|e| {
+                rusqlite::Error::UserFunctionError(Box::new(e))
+            })?;
+            Ok(value.map(str::to_lowercase))
+        },
+    )?;
 
     conn.create_scalar_function(
         "ucontains",

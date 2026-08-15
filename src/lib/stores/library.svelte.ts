@@ -127,6 +127,9 @@ class LibraryStore {
       merely remounts after an album, which is what makes restoration work. */
   wallScroll = $state(0);
   trackScroll = $state(0);
+  /** Changes only for a genuine filter reset; virtual lists use it to
+      distinguish "scroll changed while browsing" from "scroll to top now". */
+  scrollResetKey = $state(0);
   stats = $state<LibraryStats | null>(null);
   query = $state<string | null>(null);
 
@@ -141,6 +144,9 @@ class LibraryStore {
   trackModel = $state<RowModel | null>(null);
   private pagePromises = new Map<number, Promise<void>>();
   private trackReqId = 0;
+  private valuesReqId = 0;
+  private albumsReqId = 0;
+  private albumTracksReqId = 0;
 
   /** Track-list selection, by (flat) track index. `selectionAnchor` is the
       base row for Shift-range selects. Reset whenever the view reloads. */
@@ -346,20 +352,23 @@ class LibraryStore {
   resetScroll() {
     this.wallScroll = 0;
     this.trackScroll = 0;
+    this.scrollResetKey += 1;
   }
 
   async loadValues() {
+    const request = ++this.valuesReqId;
     // Custom tab with no single valid tag set → empty value list ("show nothing").
     if (this.mode === "custom" && this.customTagName === null) {
-      this.values = [];
+      if (request === this.valuesReqId) this.values = [];
       return;
     }
     try {
-      this.values = await call<[string, number, string][]>("browse_values", {
+      const values = await call<[string, number, string][]>("browse_values", {
         mode: this.wireMode,
         query: this.query,
         collapse: this.groupingCollapse,
       });
+      if (request === this.valuesReqId) this.values = values;
     } catch (e) {
       // invalid search query mid-typing — keep the previous list
       console.debug("browse_values failed:", e);
@@ -405,21 +414,33 @@ class LibraryStore {
   }
 
   async loadAlbums() {
+    const request = ++this.albumsReqId;
     try {
-      this.albums = await call<Album[]>("browse_albums", {
+      const albums = await call<Album[]>("browse_albums", {
         mode: this.wireMode,
         values: this.selectedValues,
         query: this.query,
         collapse: this.groupingCollapse,
       });
+      if (request === this.albumsReqId) this.albums = albums;
     } catch (e) {
       console.debug("browse_albums failed:", e);
     }
   }
 
   async selectAlbum(a: Album | null) {
+    const request = ++this.albumTracksReqId;
     this.selectedAlbum = a;
-    this.albumTracks = a ? await call<Track[]>("album_tracks", { albumId: a.id }) : [];
+    this.albumTracks = [];
+    if (!a) return;
+    try {
+      const tracks = await call<Track[]>("album_tracks", { albumId: a.id });
+      if (request === this.albumTracksReqId && this.selectedAlbum?.id === a.id) {
+        this.albumTracks = tracks;
+      }
+    } catch (e) {
+      if (request === this.albumTracksReqId) console.debug("album_tracks failed:", e);
+    }
   }
 
   /** Patch a track's play counter in the loaded views so the "Plays: N" line

@@ -10,6 +10,7 @@
     padBottom?: number;
     cell: Snippet<[number]>;
     initialScrollTop?: number;
+    scrollResetKey?: number;
     onScrollChange?: (scrollTop: number) => void;
   }
   let {
@@ -20,6 +21,7 @@
     padBottom = 0,
     cell,
     initialScrollTop = 0,
+    scrollResetKey = 0,
     onScrollChange,
   }: Props = $props();
 
@@ -35,6 +37,7 @@
     itemHeight={cellHeight + gap}
     {padBottom}
     {initialScrollTop}
+    {scrollResetKey}
     {onScrollChange}
     row={gridRow}
   />

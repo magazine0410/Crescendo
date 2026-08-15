@@ -15,6 +15,8 @@
     onVisibleRange?: (first: number, last: number) => void;
     /** Restore the viewport to this scroll offset (px) on mount. */
     initialScrollTop?: number;
+    /** Bump to explicitly re-apply `initialScrollTop`, including zero. */
+    scrollResetKey?: number;
     /** Fires on every scroll with the current offset (px), for persistence. */
     onScrollChange?: (scrollTop: number) => void;
   }
@@ -27,6 +29,7 @@
     onNearEnd,
     onVisibleRange,
     initialScrollTop = 0,
+    scrollResetKey = 0,
     onScrollChange,
   }: Props = $props();
 
@@ -34,18 +37,17 @@
   let scrollTop = $state(0);
   let viewportH = $state(0);
 
-  // Restore the saved offset once, as soon as the viewport is mounted. The
-  // spacer height is set from props, so the viewport is scrollable immediately;
-  // and since the content width is unchanged from when the offset was saved, the
-  // target is always within range (never clamped short).
-  let restored = false;
+  // Restore on mount, then only when the caller explicitly bumps its reset key.
+  // `initialScrollTop` itself changes on every normal scroll, so it cannot be
+  // used as the reset signal without making the viewport fight the user.
+  let appliedResetKey: number | null = null;
   $effect(() => {
-    if (viewport && !restored) {
-      restored = true;
-      if (initialScrollTop > 0) {
-        viewport.scrollTop = initialScrollTop;
-        scrollTop = viewport.scrollTop;
-      }
+    const target = viewport;
+    const key = scrollResetKey;
+    if (target && appliedResetKey !== key) {
+      appliedResetKey = key;
+      target.scrollTop = Math.max(0, initialScrollTop);
+      scrollTop = target.scrollTop;
     }
   });
 

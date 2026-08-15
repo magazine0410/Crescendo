@@ -2,14 +2,26 @@ use crate::state::AppState;
 use crescendo_core::model::{Album, BrowseMode, LibraryStats, Track, TrackGroup, TrackSort};
 use crescendo_core::scanner::{scan, ScanOptions};
 use crescendo_core::search::SearchFilter;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
+
+/// Clears the process-wide scan latch on every exit path, including unwinding
+/// from a scanner panic and failure to create the scanner thread (which drops
+/// the still-captured closure).
+struct ScanningGuard(Arc<AtomicBool>);
+
+impl Drop for ScanningGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 fn filter_for(query: Option<&str>) -> Result<Option<SearchFilter>, String> {
     match query {
-        Some(q) if !q.trim().is_empty() => {
-            crescendo_core::search::compile(q).map(Some).map_err(|e| e.to_string())
-        }
+        Some(q) if !q.trim().is_empty() => crescendo_core::search::compile(q)
+            .map(Some)
+            .map_err(|e| e.to_string()),
         _ => Ok(None),
     }
 }
@@ -27,6 +39,7 @@ pub async fn scan_start(
 
     let db = state.db.clone();
     let scanning = state.scanning.clone();
+    let art = state.art.clone();
     let cancel = state.scan_cancel.clone();
     let root = db
         .prefs_get("library_path")
@@ -39,11 +52,17 @@ pub async fn scan_start(
         .flatten()
         .and_then(|s| s.parse().ok())
         .unwrap_or(4);
+    let scanning_guard = ScanningGuard(scanning);
 
     std::thread::Builder::new()
         .name("scanner".into())
         .spawn(move || {
-            let opts = ScanOptions { root: root.into(), threads, full };
+            let scanning_guard = scanning_guard;
+            let opts = ScanOptions {
+                root: root.into(),
+                threads,
+                full,
+            };
             let progress_app = app.clone();
             let outcome = scan(
                 &db,
@@ -53,7 +72,14 @@ pub async fn scan_start(
                 },
                 &cancel,
             );
-            scanning.store(false, Ordering::SeqCst);
+            if outcome.is_ok() {
+                if let Err(e) = art.invalidate_stale(&db) {
+                    log::warn!("cover cache invalidation failed after scan: {e}");
+                }
+            }
+            // Match the old event ordering: observers of done/error should
+            // already be able to start another scan.
+            drop(scanning_guard);
             match outcome {
                 Ok(p) => {
                     let _ = app.emit("scan:done", &p);
@@ -75,6 +101,22 @@ pub async fn scan_cancel(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::ScanningGuard;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn scanning_guard_clears_the_latch_when_dropped() {
+        let scanning = Arc::new(AtomicBool::new(true));
+        {
+            let _guard = ScanningGuard(scanning.clone());
+        }
+        assert!(!scanning.load(Ordering::SeqCst));
+    }
+}
+
 #[tauri::command]
 pub async fn library_stats(state: State<'_, AppState>) -> Result<LibraryStats, String> {
     let stats = state.db.library_stats().map_err(|e| e.to_string())?;
@@ -90,7 +132,10 @@ pub async fn browse_values(
     collapse: bool,
 ) -> Result<Vec<(String, i64, String)>, String> {
     let filter = filter_for(query.as_deref())?;
-    state.db.browse_values(mode, filter.as_ref(), collapse).map_err(|e| e.to_string())
+    state
+        .db
+        .browse_values(mode, filter.as_ref(), collapse)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -167,7 +212,14 @@ pub async fn track_index(
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .track_index(filter.as_ref(), mode, &values.unwrap_or_default(), collapse, sort, track_id)
+        .track_index(
+            filter.as_ref(),
+            mode,
+            &values.unwrap_or_default(),
+            collapse,
+            sort,
+            track_id,
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -183,7 +235,13 @@ pub async fn track_groups(
     let filter = filter_for(query.as_deref())?;
     state
         .db
-        .track_groups(filter.as_ref(), mode, &values.unwrap_or_default(), collapse, sort)
+        .track_groups(
+            filter.as_ref(),
+            mode,
+            &values.unwrap_or_default(),
+            collapse,
+            sort,
+        )
         .map_err(|e| e.to_string())
 }
 

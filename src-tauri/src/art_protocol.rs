@@ -12,7 +12,11 @@ use tokio::sync::Semaphore;
 /// source reads hit the library HDD).
 static GEN_PERMITS: Semaphore = Semaphore::const_new(4);
 
-pub fn handle(ctx: UriSchemeContext<'_, tauri::Wry>, request: tauri::http::Request<Vec<u8>>, responder: UriSchemeResponder) {
+pub fn handle(
+    ctx: UriSchemeContext<'_, tauri::Wry>,
+    request: tauri::http::Request<Vec<u8>>,
+    responder: UriSchemeResponder,
+) {
     let app = ctx.app_handle().clone();
     let uri = request.uri().clone();
     tauri::async_runtime::spawn(async move {
@@ -27,7 +31,9 @@ pub fn handle(ctx: UriSchemeContext<'_, tauri::Wry>, request: tauri::http::Reque
                 let resp = Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, mime)
-                    .header(header::CACHE_CONTROL, "max-age=86400")
+                    // Disk-side source fingerprints keep thumbnails fresh; do
+                    // not let the webview pin an older response for a day.
+                    .header(header::CACHE_CONTROL, "no-cache")
                     .body(bytes)
                     .unwrap_or_else(|_| Response::new(Vec::new()));
                 responder.respond(resp);

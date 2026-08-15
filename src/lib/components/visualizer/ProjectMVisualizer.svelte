@@ -105,7 +105,7 @@
 
   function ensurePcmCapacity(sampleCount: number): number {
     const active = module;
-    if (!active) return 0;
+    if (disposed || !active) return 0;
     if (sampleCount <= pcmCapacity) return pcmPointer;
     if (pcmPointer) active._free(pcmPointer);
     pcmCapacity = Math.max(sampleCount, 4096);
@@ -115,7 +115,7 @@
 
   function addPcm(samples: Int16Array) {
     const runtime = module;
-    if (!runtime || status !== "ready" || !active) return;
+    if (disposed || !runtime || status !== "ready" || !active) return;
     // Keep each copy bounded: one pull can carry up to MAX_PROJECTM_PCM_BYTES
     // (128 KiB, so 65,536 samples), which must not grow one giant allocation.
     // `enqueue_projectm_pcm` only ever hands back whole stereo frames, so both
@@ -124,6 +124,7 @@
     for (let offset = 0; offset < samples.length; offset += maxSamples) {
       const count = Math.min(maxSamples, samples.length - offset);
       const pointer = ensurePcmCapacity(count);
+      if (!pointer || disposed) return;
       runtime.HEAP16.set(samples.subarray(offset, offset + count), pointer >> 1);
       runtime._crescendo_projectm_add_pcm(pointer, count / 2);
     }
@@ -230,11 +231,11 @@
   }
 
   async function pullPcm() {
-    if (pcmPulling || !active || status !== "ready") return;
+    if (disposed || pcmPulling || !active || status !== "ready") return;
     pcmPulling = true;
     try {
       const response = await call<ArrayBuffer>("player_take_projectm_pcm");
-      if (active && response.byteLength >= 4) addPcm(new Int16Array(response));
+      if (!disposed && active && response.byteLength >= 4) addPcm(new Int16Array(response));
     } catch {
       // A transient IPC failure should not tear down a working renderer.
     } finally {
@@ -319,8 +320,11 @@
     cancelAnimationFrame(raf);
     resizeObserver?.disconnect();
     const runtime = module;
+    module = null;
     if (runtime) {
       if (pcmPointer) runtime._free(pcmPointer);
+      pcmPointer = 0;
+      pcmCapacity = 0;
       runtime._crescendo_projectm_destroy();
     }
     if (isTauri) call("player_set_projectm_enabled", { on: false }).catch(() => {});

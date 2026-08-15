@@ -9,12 +9,14 @@ use anyhow::{anyhow, Result};
 use crescendo_core::db::Db;
 use gstreamer::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Number of peak buckets in a waveform (one drawn bar each).
 const BUCKETS: usize = 500;
 /// Decode/downsample rate. A waveform needs only a coarse loudness envelope, so
 /// we resample hard to keep the sample count (and CPU) small.
 const RATE: i32 = 8000;
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct WaveformStore {
     dir: PathBuf,
@@ -35,7 +37,7 @@ impl WaveformStore {
     pub fn get_or_generate(&self, db: &Db, track_id: i64) -> Result<Vec<u8>> {
         let cached = self.path(track_id);
         if let Ok(bytes) = std::fs::read(&cached) {
-            if !bytes.is_empty() {
+            if bytes.len() == BUCKETS {
                 return Ok(bytes);
             }
         }
@@ -43,11 +45,22 @@ impl WaveformStore {
             .track_by_id(track_id)?
             .ok_or_else(|| anyhow!("track {track_id} not found"))?;
         let peaks = decode_peaks(&track.path, track.duration_ms)?;
-        let tmp = cached.with_extension("bin.tmp");
-        std::fs::write(&tmp, &peaks)?;
-        std::fs::rename(&tmp, &cached)?;
+        let tmp = unique_temp_path(&cached);
+        if let Err(e) = std::fs::write(&tmp, &peaks).and_then(|_| std::fs::rename(&tmp, &cached)) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
         Ok(peaks)
     }
+}
+
+fn unique_temp_path(destination: &Path) -> PathBuf {
+    let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let name = destination
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("waveform");
+    destination.with_file_name(format!("{name}.{}.{}.tmp", std::process::id(), id))
 }
 
 /// Decode an audio file to a `BUCKETS`-long peak envelope normalized to `0..=255`.
@@ -113,7 +126,8 @@ pub fn decode_peaks(path: &str, duration_ms: i64) -> Result<Vec<u8>> {
                         for chunk in map.as_slice().chunks_exact(2) {
                             let amp = (i16::from_le_bytes([chunk[0], chunk[1]]) as f32).abs();
                             let b = ((sample_index * BUCKETS as u64) / total_samples)
-                                .min(BUCKETS as u64 - 1) as usize;
+                                .min(BUCKETS as u64 - 1)
+                                as usize;
                             if amp > buckets[b] {
                                 buckets[b] = amp;
                             }

@@ -50,15 +50,20 @@
     visibleIndex: number;
   }
   type Row = PlaylistRow | HeaderRow | TrackRow;
+  type PlaylistEntry = Omit<TrackRow, "type" | "visibleIndex"> & { searchBlob: string };
 
   /** Every selected playlist's tracks, back to back, each row carrying both
       of its numbers. */
   const entries = $derived.by(() => {
-    const out: Omit<TrackRow, "type" | "visibleIndex">[] = [];
+    const out: PlaylistEntry[] = [];
     let index = 0;
     for (const g of playlists.groups) {
       g.tracks.forEach((track, position) => {
-        out.push({ track, index: index++, playlistId: g.playlist_id, position });
+        const searchBlob = [track.title, track.artist, track.album, track.albumartist, track.genre]
+          .filter((field): field is string => Boolean(field))
+          .join("\u001f")
+          .toLowerCase();
+        out.push({ track, index: index++, playlistId: g.playlist_id, position, searchBlob });
       });
     }
     return out;
@@ -66,16 +71,24 @@
 
   const multi = $derived(playlists.selectedIds.length > 1);
 
-  /** Filter by the active search (plain substring; full query filtering runs
-      against the library — playlist views filter client-side). */
+  // Playlist views remain client-side, but wait for typing to settle before an
+  // O(n) row rebuild. Clearing the query is immediate.
+  let filterQuery = $state("");
+  $effect(() => {
+    const query = ui.searchQuery.trim().toLowerCase();
+    if (!query) {
+      filterQuery = "";
+      return;
+    }
+    const timer = setTimeout(() => (filterQuery = query), 200);
+    return () => clearTimeout(timer);
+  });
+
+  /** Filter by the active search using text pre-lowercased when tracks change. */
   const filtered = $derived.by(() => {
-    const q = ui.searchQuery.trim().toLowerCase();
+    const q = filterQuery;
     if (!q) return entries;
-    return entries.filter(({ track }) =>
-      [track.title, track.artist, track.album, track.albumartist, track.genre].some((f) =>
-        f?.toLowerCase().includes(q),
-      ),
-    );
+    return entries.filter(({ searchBlob }) => searchBlob.includes(q));
   });
 
   /** Flatten into album-grouped rows (consecutive same-album runs share a header). */
