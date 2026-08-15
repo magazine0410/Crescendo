@@ -59,7 +59,7 @@
     role="presentation"
     onclick={(e) => e.target === e.currentTarget && close()}
   >
-    <div class="dialog" role="dialog" aria-label="Set collection">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="Set collection">
       <header>
         <span>Set collection</span>
         <button class="x" type="button" onclick={close}>✕</button>

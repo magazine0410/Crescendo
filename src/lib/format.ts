@@ -164,7 +164,10 @@ function renderSection(src: string, track: Track): { text: string; any: boolean 
         else if (src[j] === "]") depth--;
         j++;
       }
-      const inner = renderSection(src.slice(i + 1, j - 1), track);
+      // A matched section ends just before `]`; an unterminated user pattern
+      // runs to the end and must not silently lose its final character.
+      const innerEnd = depth === 0 ? j - 1 : j;
+      const inner = renderSection(src.slice(i + 1, innerEnd), track);
       if (inner.any) out += inner.text;
       i = j;
     } else {

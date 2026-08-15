@@ -53,6 +53,18 @@ fn set_reuses_a_collection_of_the_same_name() {
     assert_eq!(db.collection_list().unwrap().len(), 1);
 }
 
+#[test]
+fn set_reuses_a_collection_with_unicode_case_variants() {
+    let (_d, db) = test_db();
+    let a = db.playlist_create("A").unwrap();
+    let b = db.playlist_create("B").unwrap();
+
+    let first = db.collection_set(&[a], "Écho").unwrap().unwrap();
+    let second = db.collection_set(&[b], "éCHO").unwrap().unwrap();
+    assert_eq!(first, second);
+    assert_eq!(db.collection_list().unwrap().len(), 1);
+}
+
 /// Counts are a plain sum of the members: a track in two member playlists
 /// counts twice.
 #[test]
@@ -125,6 +137,22 @@ fn rename_and_collapse_persist() {
 
     db.collection_set_collapsed(id, false).unwrap();
     assert!(!db.collection_list().unwrap()[0].collapsed);
+}
+
+#[test]
+fn rename_rejects_a_unicode_case_insensitive_duplicate() {
+    let (_d, db) = test_db();
+    let a = db.playlist_create("A").unwrap();
+    let b = db.playlist_create("B").unwrap();
+    let first = db.collection_set(&[a], "Écho").unwrap().unwrap();
+    let second = db.collection_set(&[b], "Other").unwrap().unwrap();
+
+    let error = db.collection_rename(second, "éCHO").unwrap_err();
+    assert!(error.to_string().contains("already exists"));
+    let collections = db.collection_list().unwrap();
+    assert_eq!(collections.len(), 2);
+    assert_eq!(collections.iter().find(|c| c.id == first).unwrap().name, "Écho");
+    assert_eq!(collections.iter().find(|c| c.id == second).unwrap().name, "Other");
 }
 
 /// A database written before collections existed must gain the table and the

@@ -29,7 +29,11 @@ static LYRICS_PERMITS: Semaphore = Semaphore::const_new(2);
 
 #[tauri::command]
 pub async fn prefs_get_all(state: State<'_, AppState>) -> Result<HashMap<String, String>, String> {
-    state.db.prefs_get_all().map_err(|e| e.to_string())
+    let mut prefs = state.db.prefs_get_all().map_err(|e| e.to_string())?;
+    // The visualizer restores this only inside the trusted backend command;
+    // the webview has no reason to receive a filesystem path it cannot use.
+    prefs.remove("visualizer_import_path");
+    Ok(prefs)
 }
 
 #[tauri::command]
@@ -38,6 +42,9 @@ pub async fn prefs_set(
     key: String,
     value: String,
 ) -> Result<(), String> {
+    if key == "visualizer_import_path" {
+        return Err("that preference is managed by the projectM folder chooser".into());
+    }
     state.db.prefs_set(&key, &value).map_err(|e| e.to_string())
 }
 

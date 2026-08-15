@@ -7,11 +7,19 @@
 
 use crate::db::Db;
 use anyhow::{anyhow, Result};
+use rusqlite::OptionalExtension;
+use std::collections::HashSet;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 pub const THUMB_SIZE: u32 = 256;
+const MAX_COVER_DIMENSION: u32 = 8192;
+const MAX_COVER_DECODE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_COVER_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_EMBEDDED_ART_BYTES: usize = 32 * 1024 * 1024;
 
 const FOLDER_NAMES: &[&str] = &[
     "folder.jpg",
@@ -29,6 +37,10 @@ static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct ArtStore {
     thumb_dir: PathBuf,
+    /// Failed sources keyed by source + file size + mtime. A corrupt preferred
+    /// folder image is skipped for the rest of the process, but replacing it
+    /// changes the signature and makes it eligible immediately.
+    invalid_sources: Mutex<HashSet<String>>,
 }
 
 pub enum ArtData {
@@ -38,11 +50,17 @@ pub enum ArtData {
     Bytes(Vec<u8>),
 }
 
+struct ResolvedArt {
+    data: ArtData,
+    image: image::DynamicImage,
+    signature: String,
+}
+
 impl ArtStore {
     pub fn new(cache_dir: &Path) -> Result<Self> {
         let thumb_dir = cache_dir.join("thumbs");
         std::fs::create_dir_all(&thumb_dir)?;
-        Ok(Self { thumb_dir })
+        Ok(Self { thumb_dir, invalid_sources: Mutex::new(HashSet::new()) })
     }
 
     pub fn thumb_path(&self, album_id: i64) -> PathBuf {
@@ -65,13 +83,9 @@ impl ArtStore {
         {
             return Ok(cached);
         }
-        let full = self.album_full(db, album_id)?;
-        let generated_signature = self.thumb_signature(db, album_id)?;
-        let img = match &full {
-            ArtData::File(p) => image::open(p)?,
-            ArtData::Bytes(b) => image::load_from_memory(b)?,
-        };
-        let thumb = img.thumbnail(THUMB_SIZE, THUMB_SIZE);
+        let resolved = self.resolve_album_art(db, album_id)?;
+        let generated_signature = resolved.signature;
+        let thumb = resolved.image.thumbnail(THUMB_SIZE, THUMB_SIZE);
         let rgb = image::DynamicImage::ImageRgb8(thumb.to_rgb8());
         let tmp = unique_temp_path(&cached);
         if let Err(e) = rgb.save_with_format(&tmp, image::ImageFormat::Jpeg) {
@@ -84,15 +98,13 @@ impl ArtStore {
         }
         // Write the source marker only after the image is complete. Legacy or
         // interrupted cache entries have no matching marker and regenerate.
-        if let Some(signature) = generated_signature {
-            let source_path = self.thumb_source_path(album_id);
-            let source_tmp = unique_temp_path(&source_path);
-            if let Err(e) = std::fs::write(&source_tmp, signature)
-                .and_then(|_| std::fs::rename(&source_tmp, &source_path))
-            {
-                let _ = std::fs::remove_file(&source_tmp);
-                return Err(e.into());
-            }
+        let source_path = self.thumb_source_path(album_id);
+        let source_tmp = unique_temp_path(&source_path);
+        if let Err(e) = std::fs::write(&source_tmp, generated_signature)
+            .and_then(|_| std::fs::rename(&source_tmp, &source_path))
+        {
+            let _ = std::fs::remove_file(&source_tmp);
+            return Err(e.into());
         }
         Ok(cached)
     }
@@ -101,44 +113,97 @@ impl ArtStore {
     /// from one of its tracks). Resolution result is cached in
     /// `albums.cover_source`.
     pub fn album_full(&self, db: &Db, album_id: i64) -> Result<ArtData> {
-        // Always re-check the album directory. This notices a newly added
-        // folder.jpg even when an older embedded-art choice was cached.
-        if let Some(path) = self.album_folder_image(db, album_id)? {
-            let source = format!("folder:{}", path.display());
-            self.remember_source(db, album_id, &source)?;
-            return Ok(ArtData::File(path));
-        }
-        if let Some(source) = self.cover_source(db, album_id)? {
-            if let Some(art) = self.load_embedded_source(db, album_id, &source) {
-                return Ok(art);
-            }
-            // stale cache entry (file moved) — re-resolve below
-        }
-        let source = self.resolve_embedded(db, album_id)?;
-        self.remember_source(db, album_id, &source)?;
-        self.load_embedded_source(db, album_id, &source)
-            .ok_or_else(|| anyhow!("no cover art for album {album_id}"))
+        Ok(self.resolve_album_art(db, album_id)?.data)
     }
 
-    fn load_embedded_source(&self, db: &Db, album_id: i64, source: &str) -> Option<ArtData> {
-        if let Some(id) = source.strip_prefix("embedded:") {
-            let track_id: i64 = id.parse().ok()?;
-            let path: String = db
-                .with(|conn| {
-                    Ok(conn
-                        .query_row(
-                            "SELECT path FROM tracks WHERE id = ?1 AND album_id = ?2 \
-                             AND missing = 0 AND has_embedded_art = 1",
-                            rusqlite::params![track_id, album_id],
-                            |r| r.get(0),
-                        )
-                        .ok())
-                })
-                .ok()
-                .flatten()?;
-            return embedded_art(Path::new(&path)).map(ArtData::Bytes);
+    fn resolve_album_art(&self, db: &Db, album_id: i64) -> Result<ResolvedArt> {
+        // Always re-check the album directory. A new valid folder.jpg replaces
+        // embedded art, while corrupt candidates fall through in name order.
+        for path in self.album_folder_images(db, album_id)? {
+            let source = format!("folder:{}", path.display());
+            let Some(signature) = file_signature(&source, &path) else { continue };
+            if self.is_invalid(&signature) {
+                continue;
+            }
+            let data = ArtData::File(path);
+            match decode_art(&data) {
+                Ok(image) => {
+                    self.remember_source(db, album_id, &source)?;
+                    return Ok(ResolvedArt { data, image, signature });
+                }
+                Err(error) => {
+                    log::warn!("ignoring invalid album cover {source}: {error}");
+                    self.mark_invalid(signature);
+                }
+            }
         }
-        None
+
+        if let Some(source) = self.cover_source(db, album_id)? {
+            if let Some(track_id) = source
+                .strip_prefix("embedded:")
+                .and_then(|id| id.parse::<i64>().ok())
+            {
+                if let Some(resolved) = self.resolve_embedded(db, album_id, track_id)? {
+                    self.remember_source(db, album_id, &source)?;
+                    return Ok(resolved);
+                }
+            }
+        }
+
+        let candidates: Vec<(i64, String)> = db.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, path FROM tracks WHERE album_id = ?1 AND missing = 0 \
+                 AND has_embedded_art = 1 ORDER BY disc_no, track_no LIMIT 3",
+            )?;
+            let rows = stmt.query_map([album_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.map(|r| Ok(r?)).collect()
+        })?;
+        for (track_id, _) in candidates {
+            if let Some(resolved) = self.resolve_embedded(db, album_id, track_id)? {
+                self.remember_source(db, album_id, &format!("embedded:{track_id}"))?;
+                return Ok(resolved);
+            }
+        }
+        self.clear_source(db, album_id)?;
+        Err(anyhow!("no decodable cover art found for album {album_id}"))
+    }
+
+    fn resolve_embedded(
+        &self,
+        db: &Db,
+        album_id: i64,
+        track_id: i64,
+    ) -> Result<Option<ResolvedArt>> {
+        let path: Option<String> = db.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT path FROM tracks WHERE id = ?1 AND album_id = ?2 \
+                     AND missing = 0 AND has_embedded_art = 1",
+                    rusqlite::params![track_id, album_id],
+                    |r| r.get(0),
+                )
+                .optional()?)
+        })?;
+        let Some(path) = path else { return Ok(None) };
+        let path = PathBuf::from(path);
+        let source = format!("embedded:{track_id}");
+        let Some(signature) = file_signature(&source, &path) else { return Ok(None) };
+        if self.is_invalid(&signature) {
+            return Ok(None);
+        }
+        let Some(bytes) = embedded_art(&path) else {
+            self.mark_invalid(signature);
+            return Ok(None);
+        };
+        let data = ArtData::Bytes(bytes);
+        match decode_art(&data) {
+            Ok(image) => Ok(Some(ResolvedArt { data, image, signature })),
+            Err(error) => {
+                log::warn!("ignoring invalid embedded cover in {}: {error}", path.display());
+                self.mark_invalid(signature);
+                Ok(None)
+            }
+        }
     }
 
     fn remember_source(&self, db: &Db, album_id: i64, source: &str) -> Result<()> {
@@ -152,6 +217,25 @@ impl ArtStore {
         })
     }
 
+    fn clear_source(&self, db: &Db, album_id: i64) -> Result<()> {
+        db.with(|conn| {
+            conn.execute("UPDATE albums SET cover_source = NULL WHERE id = ?1", [album_id])?;
+            Ok(())
+        })
+    }
+
+    fn is_invalid(&self, signature: &str) -> bool {
+        self.invalid_sources
+            .lock()
+            .is_ok_and(|invalid| invalid.contains(signature))
+    }
+
+    fn mark_invalid(&self, signature: String) {
+        if let Ok(mut invalid) = self.invalid_sources.lock() {
+            invalid.insert(signature);
+        }
+    }
+
     /// Art for a single track (embedded first, then its folder) — used when a
     /// track has no album row yet.
     pub fn track_art(&self, db: &Db, track_id: i64) -> Result<ArtData> {
@@ -163,10 +247,22 @@ impl ArtStore {
             )?)
         })?;
         if let Some(bytes) = embedded_art(Path::new(&path)) {
-            return Ok(ArtData::Bytes(bytes));
+            let data = ArtData::Bytes(bytes);
+            if decode_art(&data).is_ok() {
+                return Ok(data);
+            }
         }
-        if let Some(p) = folder_image(Path::new(&dir)) {
-            return Ok(ArtData::File(p));
+        for path in folder_images(Path::new(&dir)) {
+            let source = format!("folder:{}", path.display());
+            let Some(signature) = file_signature(&source, &path) else { continue };
+            if self.is_invalid(&signature) {
+                continue;
+            }
+            let data = ArtData::File(path);
+            if decode_art(&data).is_ok() {
+                return Ok(data);
+            }
+            self.mark_invalid(signature);
         }
         Err(anyhow!("no art for track {track_id}"))
     }
@@ -183,7 +279,7 @@ impl ArtStore {
         })
     }
 
-    fn album_folder_image(&self, db: &Db, album_id: i64) -> Result<Option<PathBuf>> {
+    fn album_folder_images(&self, db: &Db, album_id: i64) -> Result<Vec<PathBuf>> {
         let dir: Option<String> = db.with(|conn| {
             Ok(conn
                 .query_row("SELECT dir FROM albums WHERE id = ?1", [album_id], |r| {
@@ -191,25 +287,7 @@ impl ArtStore {
                 })
                 .ok())
         })?;
-        Ok(dir.and_then(|dir| folder_image(Path::new(&dir))))
-    }
-
-    fn resolve_embedded(&self, db: &Db, album_id: i64) -> Result<String> {
-        // Try embedded art from the album's tracks (first few, in order).
-        let candidates: Vec<(i64, String)> = db.with(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, path FROM tracks WHERE album_id = ?1 AND missing = 0 \
-                 AND has_embedded_art = 1 ORDER BY disc_no, track_no LIMIT 3",
-            )?;
-            let rows = stmt.query_map([album_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            rows.map(|r| Ok(r?)).collect()
-        })?;
-        for (track_id, path) in candidates {
-            if embedded_art(Path::new(&path)).is_some() {
-                return Ok(format!("embedded:{track_id}"));
-            }
-        }
-        Err(anyhow!("no cover art found for album {album_id}"))
+        Ok(dir.map(|dir| folder_images(Path::new(&dir))).unwrap_or_default())
     }
 
     /// Fingerprint the source selected for this album without decoding it.
@@ -217,8 +295,12 @@ impl ArtStore {
     /// an older embedded thumbnail. File size + nanosecond mtime catches normal
     /// in-place replacements while avoiding an image decode on every request.
     fn thumb_signature(&self, db: &Db, album_id: i64) -> Result<Option<String>> {
-        if let Some(path) = self.album_folder_image(db, album_id)? {
-            return Ok(file_signature(&format!("folder:{}", path.display()), &path));
+        for path in self.album_folder_images(db, album_id)? {
+            let source = format!("folder:{}", path.display());
+            let Some(signature) = file_signature(&source, &path) else { continue };
+            if !self.is_invalid(&signature) {
+                return Ok(Some(signature));
+            }
         }
         let Some(source) = self.cover_source(db, album_id)? else {
             return Ok(None);
@@ -239,7 +321,8 @@ impl ArtStore {
                 )
                 .ok())
         })?;
-        Ok(path.and_then(|path| file_signature(&source, Path::new(&path))))
+        let signature = path.and_then(|path| file_signature(&source, Path::new(&path)));
+        Ok(signature.filter(|signature| !self.is_invalid(signature)))
     }
 
     /// Remove only thumbnails whose selected source changed since generation.
@@ -295,14 +378,12 @@ fn unique_temp_path(destination: &Path) -> PathBuf {
     destination.with_file_name(format!("{name}.{}.{}.tmp", std::process::id(), id))
 }
 
-fn folder_image(dir: &Path) -> Option<PathBuf> {
-    for name in FOLDER_NAMES {
-        let p = dir.join(name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+fn folder_images(dir: &Path) -> Vec<PathBuf> {
+    FOLDER_NAMES
+        .iter()
+        .map(|name| dir.join(name))
+        .filter(|path| path.is_file())
+        .collect()
 }
 
 pub fn embedded_art(path: &Path) -> Option<Vec<u8>> {
@@ -310,12 +391,50 @@ pub fn embedded_art(path: &Path) -> Option<Vec<u8>> {
     use lofty::file::TaggedFileExt;
     let tag = file.primary_tag().or_else(|| file.first_tag())?;
     let pic = tag.pictures().first()?;
+    if pic.data().len() > MAX_EMBEDDED_ART_BYTES {
+        log::warn!("embedded cover in {} exceeds the 32 MiB limit", path.display());
+        return None;
+    }
     Some(pic.data().to_vec())
+}
+
+fn cover_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_COVER_DIMENSION);
+    limits.max_image_height = Some(MAX_COVER_DIMENSION);
+    limits.max_alloc = Some(MAX_COVER_DECODE_BYTES);
+    limits
+}
+
+fn decode_file(path: &Path) -> Result<image::DynamicImage> {
+    let size = std::fs::metadata(path)?.len();
+    if size > MAX_COVER_FILE_BYTES {
+        return Err(anyhow!("cover file exceeds the 64 MiB encoded-size limit"));
+    }
+    let mut reader = image::ImageReader::open(path)?.with_guessed_format()?;
+    reader.limits(cover_limits());
+    Ok(reader.decode()?)
+}
+
+fn decode_bytes(bytes: &[u8]) -> Result<image::DynamicImage> {
+    if bytes.len() > MAX_EMBEDDED_ART_BYTES {
+        return Err(anyhow!("embedded cover exceeds the 32 MiB encoded-size limit"));
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(cover_limits());
+    Ok(reader.decode()?)
+}
+
+fn decode_art(art: &ArtData) -> Result<image::DynamicImage> {
+    match art {
+        ArtData::File(path) => decode_file(path),
+        ArtData::Bytes(bytes) => decode_bytes(bytes),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{unique_temp_path, ArtStore};
+    use super::{decode_file, unique_temp_path, ArtStore, MAX_COVER_DIMENSION};
     use crate::db::Db;
 
     #[test]
@@ -359,5 +478,47 @@ mod tests {
     fn concurrent_writers_get_distinct_temp_paths() {
         let destination = std::path::Path::new("/tmp/1.jpg");
         assert_ne!(unique_temp_path(destination), unique_temp_path(destination));
+    }
+
+    #[test]
+    fn corrupt_preferred_folder_art_falls_through_to_a_valid_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let music = tmp.path().join("music");
+        std::fs::create_dir(&music).unwrap();
+        std::fs::write(music.join("folder.jpg"), b"not an image").unwrap();
+        let fallback = music.join("cover.png");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([10, 20, 30]))
+            .save(&fallback)
+            .unwrap();
+        let db = Db::open(&tmp.path().join("art.db")).unwrap();
+        db.with(|conn| {
+            conn.execute(
+                "INSERT INTO albums(id, key, dir) VALUES (1, 'album', ?1)",
+                [music.to_string_lossy().as_ref()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let store = ArtStore::new(tmp.path()).unwrap();
+        assert!(store.album_thumb(&db, 1).unwrap().is_file());
+        let source: String = db
+            .with(|conn| {
+                Ok(conn.query_row("SELECT cover_source FROM albums WHERE id = 1", [], |row| {
+                    row.get(0)
+                })?)
+            })
+            .unwrap();
+        assert!(source.ends_with("cover.png"));
+    }
+
+    #[test]
+    fn cover_dimensions_are_bounded_before_full_decode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wide.png");
+        image::RgbImage::new(MAX_COVER_DIMENSION + 1, 1)
+            .save(&path)
+            .unwrap();
+        assert!(decode_file(&path).is_err());
     }
 }

@@ -1,10 +1,11 @@
 use crate::player::{Cmd, PlayerState};
-use crate::state::AppState;
+use crate::state::{AppState, ProjectMGrants};
 use crescendo_core::model::{PlayContext, Track};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize)]
@@ -23,6 +24,7 @@ pub struct ProjectMAssetEntry {
 
 #[derive(Debug, Serialize)]
 pub struct ProjectMImport {
+    pub grant: String,
     pub folder_name: String,
     pub presets: Vec<ProjectMPresetEntry>,
     pub assets: Vec<ProjectMAssetEntry>,
@@ -48,69 +50,59 @@ pub async fn player_play_context(
     ctx: PlayContext,
     start_index: usize,
 ) -> Result<(), String> {
-    state.player.send(Cmd::PlayContext { ctx, start_index });
-    Ok(())
+    state.player.send(Cmd::PlayContext { ctx, start_index })
 }
 
 #[tauri::command]
 pub async fn player_jump_to(state: State<'_, AppState>, index: usize) -> Result<(), String> {
-    state.player.send(Cmd::JumpTo(index));
-    Ok(())
+    state.player.send(Cmd::JumpTo(index))
 }
 
 #[tauri::command]
 pub async fn player_toggle_pause(state: State<'_, AppState>) -> Result<(), String> {
-    state.player.send(Cmd::TogglePause);
-    Ok(())
+    state.player.send(Cmd::TogglePause)
 }
 
 #[tauri::command]
 pub async fn player_stop(state: State<'_, AppState>) -> Result<(), String> {
-    state.player.send(Cmd::Stop);
-    Ok(())
+    state.player.send(Cmd::Stop)
 }
 
 #[tauri::command]
 pub async fn player_next(state: State<'_, AppState>) -> Result<(), String> {
-    state.player.send(Cmd::Next);
-    Ok(())
+    state.player.send(Cmd::Next)
 }
 
 #[tauri::command]
 pub async fn player_prev(state: State<'_, AppState>) -> Result<(), String> {
-    state.player.send(Cmd::Prev);
-    Ok(())
+    state.player.send(Cmd::Prev)
 }
 
 #[tauri::command]
 pub async fn player_seek(state: State<'_, AppState>, ms: u64) -> Result<(), String> {
-    state.player.send(Cmd::Seek(ms));
-    Ok(())
+    state.player.send(Cmd::Seek(ms))
 }
 
 #[tauri::command]
 pub async fn player_set_volume(state: State<'_, AppState>, volume: f64) -> Result<(), String> {
-    state.player.send(Cmd::SetVolume(volume));
+    state.player.send(Cmd::SetVolume(volume))?;
     let _ = state.db.prefs_set("volume", &format!("{volume:.3}"));
     Ok(())
 }
 
 #[tauri::command]
 pub async fn player_set_muted(state: State<'_, AppState>, muted: bool) -> Result<(), String> {
-    state.player.send(Cmd::SetMuted(muted));
-    Ok(())
+    state.player.send(Cmd::SetMuted(muted))
 }
 
 #[tauri::command]
 pub async fn player_set_shuffle(state: State<'_, AppState>, shuffle: bool) -> Result<(), String> {
-    state.player.send(Cmd::SetShuffle(shuffle));
-    Ok(())
+    state.player.send(Cmd::SetShuffle(shuffle))
 }
 
 #[tauri::command]
 pub async fn player_cycle_repeat(state: State<'_, AppState>) -> Result<(), String> {
-    state.player.send(Cmd::CycleRepeat);
-    Ok(())
+    state.player.send(Cmd::CycleRepeat)
 }
 
 #[tauri::command]
@@ -118,8 +110,7 @@ pub async fn player_set_stop_after_current(
     state: State<'_, AppState>,
     on: bool,
 ) -> Result<(), String> {
-    state.player.send(Cmd::SetStopAfterCurrent(on));
-    Ok(())
+    state.player.send(Cmd::SetStopAfterCurrent(on))
 }
 
 #[tauri::command]
@@ -127,8 +118,7 @@ pub async fn player_set_spectrum_enabled(
     state: State<'_, AppState>,
     on: bool,
 ) -> Result<(), String> {
-    state.player.send(Cmd::SetSpectrumEnabled(on));
-    Ok(())
+    state.player.send(Cmd::SetSpectrumEnabled(on))
 }
 
 #[tauri::command]
@@ -136,8 +126,7 @@ pub async fn player_set_projectm_enabled(
     state: State<'_, AppState>,
     on: bool,
 ) -> Result<(), String> {
-    state.player.send(Cmd::SetProjectMEnabled(on));
-    Ok(())
+    state.player.send(Cmd::SetProjectMEnabled(on))
 }
 
 /// Return all PCM accumulated since the previous pull as raw bytes. The
@@ -147,21 +136,93 @@ pub async fn player_set_projectm_enabled(
 pub async fn player_take_projectm_pcm(
     state: State<'_, AppState>,
 ) -> Result<tauri::ipc::Response, String> {
-    Ok(tauri::ipc::Response::new(state.player.take_projectm_pcm()))
+    Ok(tauri::ipc::Response::new(state.player.take_projectm_pcm()?))
 }
 
-/// Index a user-selected MilkDrop folder without reading preset or image
-/// contents. The selected preset and its bounded texture set are loaded later
-/// through separate commands, avoiding one enormous JSON response.
+/// Open the trusted native folder chooser, index the selected MilkDrop pack,
+/// and replace the session's approved import root. The webview receives only
+/// an opaque grant, never authority to choose an arbitrary backend path.
 #[tauri::command]
-pub async fn projectm_import_folder(path: String) -> Result<ProjectMImport, String> {
-    tauri::async_runtime::spawn_blocking(move || import_projectm_folder(&path))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn projectm_choose_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<ProjectMImport>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Import projectM preset folder")
+        .pick_folder(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(selected) = receiver.await.map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+    let grants = state.projectm_grants.clone();
+    let imported = tauri::async_runtime::spawn_blocking(move || {
+        approve_projectm_folder(&db, &grants, path, true)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(Some(imported))
 }
 
-fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
-    let root = Path::new(path);
+/// Restore only the path the backend previously persisted after a trusted
+/// chooser selection. `prefs_set` cannot modify this sensitive preference.
+#[tauri::command]
+pub async fn projectm_restore_folder(
+    state: State<'_, AppState>,
+) -> Result<Option<ProjectMImport>, String> {
+    let Some(path) = state
+        .db
+        .prefs_get("visualizer_import_path")
+        .map_err(|e| e.to_string())?
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(None);
+    };
+    let db = state.db.clone();
+    let grants = state.projectm_grants.clone();
+    let imported = tauri::async_runtime::spawn_blocking(move || {
+        approve_projectm_folder(&db, &grants, PathBuf::from(path), false)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(Some(imported))
+}
+
+fn approve_projectm_folder(
+    db: &crescendo_core::db::Db,
+    grants: &std::sync::Mutex<ProjectMGrants>,
+    path: PathBuf,
+    persist: bool,
+) -> Result<ProjectMImport, String> {
+    let root = path
+        .canonicalize()
+        .map_err(|_| "The selected projectM preset folder no longer exists".to_string())?;
+    if !root.is_dir() {
+        return Err("The selected projectM preset folder no longer exists".into());
+    }
+    let mut imported = index_projectm_folder(&root)?;
+    if persist {
+        let path = root
+            .to_str()
+            .ok_or_else(|| "The selected projectM folder path is not valid UTF-8".to_string())?;
+        db.prefs_set("visualizer_import_path", path)
+            .map_err(|e| e.to_string())?;
+    }
+    // Do not revoke the currently working grant until indexing and any
+    // persistence have both succeeded.
+    let grant = grants
+        .lock()
+        .map_err(|_| "The projectM import grant store is unavailable".to_string())?
+        .register(root);
+    imported.grant = grant;
+    Ok(imported)
+}
+
+fn index_projectm_folder(root: &Path) -> Result<ProjectMImport, String> {
     if !root.is_dir() {
         return Err("The selected projectM preset folder no longer exists".into());
     }
@@ -291,6 +352,7 @@ fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
         ));
     }
     Ok(ProjectMImport {
+        grant: String::new(),
         folder_name: root
             .file_name()
             .and_then(|name| name.to_str())
@@ -303,16 +365,26 @@ fn import_projectm_folder(path: &str) -> Result<ProjectMImport, String> {
 }
 
 #[tauri::command]
-pub async fn projectm_load_preset(path: String, id: String) -> Result<ProjectMPresetFile, String> {
-    tauri::async_runtime::spawn_blocking(move || load_projectm_preset(&path, &id))
+pub async fn projectm_load_preset(
+    state: State<'_, AppState>,
+    grant: String,
+    id: String,
+) -> Result<ProjectMPresetFile, String> {
+    let root = resolve_projectm_grant(&state.projectm_grants, &grant)?;
+    tauri::async_runtime::spawn_blocking(move || load_projectm_preset(&root, &id))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn projectm_load_asset(path: String, id: String) -> Result<tauri::ipc::Response, String> {
+pub async fn projectm_load_asset(
+    state: State<'_, AppState>,
+    grant: String,
+    id: String,
+) -> Result<tauri::ipc::Response, String> {
+    let root = resolve_projectm_grant(&state.projectm_grants, &grant)?;
     let bytes = tauri::async_runtime::spawn_blocking(move || {
-        let file = resolve_import_file(&path, &id, &["jpg", "jpeg", "png", "bmp", "tga", "dds"])?;
+        let file = resolve_import_file(&root, &id, &["jpg", "jpeg", "png", "bmp", "tga", "dds"])?;
         let size = file.metadata().map_err(|e| e.to_string())?.len();
         if size > MAX_ASSET_BYTES {
             return Err("The selected projectM texture is larger than 8 MiB".into());
@@ -324,8 +396,19 @@ pub async fn projectm_load_asset(path: String, id: String) -> Result<tauri::ipc:
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-fn load_projectm_preset(path: &str, id: &str) -> Result<ProjectMPresetFile, String> {
-    let file = resolve_import_file(path, id, &["milk"])?;
+fn resolve_projectm_grant(
+    grants: &std::sync::Mutex<ProjectMGrants>,
+    grant: &str,
+) -> Result<PathBuf, String> {
+    grants
+        .lock()
+        .map_err(|_| "The projectM import grant store is unavailable".to_string())?
+        .resolve(grant)
+        .ok_or_else(|| "The projectM import grant has expired".to_string())
+}
+
+fn load_projectm_preset(root: &Path, id: &str) -> Result<ProjectMPresetFile, String> {
+    let file = resolve_import_file(root, id, &["milk"])?;
     let size = file.metadata().map_err(|e| e.to_string())?.len();
     if size > MAX_PRESET_BYTES {
         return Err("The selected projectM preset is larger than 2 MiB".into());
@@ -342,7 +425,7 @@ fn load_projectm_preset(path: &str, id: &str) -> Result<ProjectMPresetFile, Stri
     })
 }
 
-fn resolve_import_file(path: &str, id: &str, extensions: &[&str]) -> Result<PathBuf, String> {
+fn resolve_import_file(root: &Path, id: &str, extensions: &[&str]) -> Result<PathBuf, String> {
     let relative = Path::new(id);
     if relative.as_os_str().is_empty()
         || relative
@@ -351,9 +434,6 @@ fn resolve_import_file(path: &str, id: &str, extensions: &[&str]) -> Result<Path
     {
         return Err("Invalid projectM import path".into());
     }
-    let root = Path::new(path)
-        .canonicalize()
-        .map_err(|_| "The selected projectM preset folder no longer exists".to_string())?;
     let file = root
         .join(relative)
         .canonicalize()
@@ -417,7 +497,12 @@ fn decode_milk_text(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod projectm_import_tests {
-    use super::{decode_milk_text, import_projectm_folder, load_projectm_preset};
+    use super::{
+        decode_milk_text, index_projectm_folder, load_projectm_preset, resolve_projectm_grant,
+    };
+    use crate::state::ProjectMGrants;
+    use std::path::Path;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -437,7 +522,7 @@ mod projectm_import_tests {
         std::fs::write(nested.join("cloud.png"), [0x89, b'P', b'N', b'G']).unwrap();
         std::fs::write(root.join("ignored.txt"), "not a preset").unwrap();
 
-        let imported = import_projectm_folder(root.to_str().unwrap()).unwrap();
+        let imported = index_projectm_folder(&root).unwrap();
         assert_eq!(imported.presets.len(), 2);
         assert_eq!(imported.presets[0].name, "alpha");
         assert_eq!(imported.presets[1].name, "Zulu");
@@ -447,7 +532,7 @@ mod projectm_import_tests {
         assert_eq!(imported.assets[0].bytes, 4);
         assert!(imported.warnings.is_empty());
 
-        let preset = load_projectm_preset(root.to_str().unwrap(), &imported.presets[0].id).unwrap();
+        let preset = load_projectm_preset(&root, &imported.presets[0].id).unwrap();
         assert_eq!(preset.name, "alpha");
         assert!(preset.data.contains("fRating=5"));
 
@@ -483,7 +568,7 @@ mod projectm_import_tests {
             .set_len(8 * 1024 * 1024 + 1)
             .unwrap();
 
-        let imported = import_projectm_folder(root.to_str().unwrap()).unwrap();
+        let imported = index_projectm_folder(&root).unwrap();
         assert_eq!(imported.presets.len(), 1);
         assert!(imported
             .warnings
@@ -493,37 +578,44 @@ mod projectm_import_tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("texture")));
-        assert!(load_projectm_preset(root.to_str().unwrap(), "../valid.milk").is_err());
+        assert!(load_projectm_preset(&root, "../valid.milk").is_err());
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replacing_a_projectm_root_revokes_its_old_grant() {
+        let grants = Mutex::new(ProjectMGrants::default());
+        let first = grants.lock().unwrap().register("/first".into());
+        assert_eq!(resolve_projectm_grant(&grants, &first).unwrap(), Path::new("/first"));
+        let second = grants.lock().unwrap().register("/second".into());
+        assert!(resolve_projectm_grant(&grants, &first).is_err());
+        assert_eq!(resolve_projectm_grant(&grants, &second).unwrap(), Path::new("/second"));
     }
 }
 
 #[tauri::command]
 pub async fn player_get_state(state: State<'_, AppState>) -> Result<PlayerState, String> {
-    Ok(state.player.state())
+    state.player.state()
 }
 
 #[tauri::command]
 pub async fn queue_add(state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<(), String> {
-    state.player.send(Cmd::QueueAdd(track_ids));
-    Ok(())
+    state.player.send(Cmd::QueueAdd(track_ids))
 }
 
 #[tauri::command]
 pub async fn queue_remove(state: State<'_, AppState>, positions: Vec<usize>) -> Result<(), String> {
-    state.player.send(Cmd::QueueRemove(positions));
-    Ok(())
+    state.player.send(Cmd::QueueRemove(positions))
 }
 
 #[tauri::command]
 pub async fn queue_clear(state: State<'_, AppState>) -> Result<(), String> {
-    state.player.send(Cmd::QueueClear);
-    Ok(())
+    state.player.send(Cmd::QueueClear)
 }
 
 #[tauri::command]
 pub async fn queue_list(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
-    let ids = state.player.queue_ids();
+    let ids = state.player.queue_ids()?;
     state.db.tracks_by_ids(&ids).map_err(|e| e.to_string())
 }

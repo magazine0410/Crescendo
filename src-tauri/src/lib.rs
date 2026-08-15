@@ -34,7 +34,9 @@ pub fn run() {
             // Restore persisted volume before the first play.
             if let Ok(Some(v)) = db.prefs_get("volume") {
                 if let Ok(v) = v.parse::<f64>() {
-                    player.send(player::Cmd::SetVolume(v));
+                    if let Err(error) = player.send(player::Cmd::SetVolume(v)) {
+                        log::warn!("could not restore player volume: {error}");
+                    }
                 }
             }
 
@@ -43,6 +45,7 @@ pub fn run() {
                 art,
                 waveform,
                 player,
+                projectm_grants: Arc::new(std::sync::Mutex::new(Default::default())),
                 scanning: Arc::new(AtomicBool::new(false)),
                 scan_cancel: Arc::new(AtomicBool::new(false)),
             });
@@ -76,7 +79,8 @@ pub fn run() {
             commands::player::player_set_spectrum_enabled,
             commands::player::player_set_projectm_enabled,
             commands::player::player_take_projectm_pcm,
-            commands::player::projectm_import_folder,
+            commands::player::projectm_choose_folder,
+            commands::player::projectm_restore_folder,
             commands::player::projectm_load_preset,
             commands::player::projectm_load_asset,
             commands::player::player_get_state,

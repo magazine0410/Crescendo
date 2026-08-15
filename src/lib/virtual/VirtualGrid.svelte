@@ -27,7 +27,9 @@
 
   let containerW = $state(0);
 
-  const cols = $derived(Math.max(1, Math.floor((containerW + gap) / (cellWidth + gap))));
+  // Each row starts with one `gap` of left padding and then has a gap between
+  // cells, so N columns need exactly N * (cellWidth + gap) pixels.
+  const cols = $derived(Math.max(1, Math.floor(containerW / (cellWidth + gap))));
   const rows = $derived(Math.ceil(count / cols));
 </script>
 

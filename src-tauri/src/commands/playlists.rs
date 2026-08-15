@@ -174,8 +174,13 @@ pub async fn playlist_import_m3u(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<M3uImportResult, String> {
-    let result =
-        crescendo_core::m3u::import(&state.db, &PathBuf::from(path)).map_err(|e| e.to_string())?;
+    let db = state.db.clone();
+    let path = PathBuf::from(path);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crescendo_core::m3u::import(&db, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let _ = app.emit("playlist:changed", result.playlist_id);
     Ok(result)
 }

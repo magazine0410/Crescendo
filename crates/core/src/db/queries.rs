@@ -496,34 +496,22 @@ impl Db {
                 )
             }),
             // Missing files stay in: a playlist view shows them (marked), and
-            // dropping them here would shift every later row's index, so
-            // clicking a row would play a different track. The player skips a
-            // file it cannot open and moves on.
-            PlayContext::Playlist { id } => self.with(|conn| {
-                collect_ids(
-                    conn,
-                    "SELECT pt.track_id FROM playlist_tracks pt \
-                     JOIN tracks t ON t.id = pt.track_id \
-                     WHERE pt.playlist_id = ?1 ORDER BY pt.position",
-                    vec![Value::from(*id)],
-                )
+            // dropping them here would shift every later row's index. The
+            // player skips a file it cannot open and moves on.
+            PlayContext::Playlist { id } => {
+                self.with(|conn| collect_playlist_ids(conn, std::slice::from_ref(id), None))
+            }
+            PlayContext::FilteredPlaylist { id, query } => self.with(|conn| {
+                collect_playlist_ids(conn, std::slice::from_ref(id), Some(query))
             }),
             // Playlist by playlist, so the ids line up with the combined view
             // the user double-clicked in.
-            PlayContext::Playlists { ids } => self.with(|conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT pt.track_id FROM playlist_tracks pt \
-                     JOIN tracks t ON t.id = pt.track_id \
-                     WHERE pt.playlist_id = ?1 ORDER BY pt.position",
-                )?;
-                let mut out = Vec::new();
-                for id in ids {
-                    for row in stmt.query_map([id], |r| r.get::<_, i64>(0))? {
-                        out.push(row?);
-                    }
-                }
-                Ok(out)
-            }),
+            PlayContext::Playlists { ids } => {
+                self.with(|conn| collect_playlist_ids(conn, ids, None))
+            }
+            PlayContext::FilteredPlaylists { ids, query } => {
+                self.with(|conn| collect_playlist_ids(conn, ids, Some(query)))
+            }
             PlayContext::LibraryView { query, sort } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (where_sql, params) = track_where(filter.as_ref());
@@ -572,6 +560,27 @@ impl Db {
                  ON CONFLICT(key) DO UPDATE SET json = excluded.json, \
                  fetched_at = excluded.fetched_at",
                 rusqlite::params![key, json, now_unix()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Expired Last.fm responses are never read again, so remove them at app
+    /// startup instead of letting one row per viewed artist/album accumulate
+    /// for the lifetime of the library database.
+    pub fn lastfm_cache_prune(&self, max_age_secs: i64) -> Result<()> {
+        self.with(|conn| {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lastfm_cache')",
+                [],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Ok(());
+            }
+            conn.execute(
+                "DELETE FROM lastfm_cache WHERE fetched_at < ?1",
+                rusqlite::params![now_unix() - max_age_secs],
             )?;
             Ok(())
         })
@@ -627,6 +636,51 @@ fn collect_ids(conn: &Connection, sql: &str, params: Vec<Value>) -> Result<Vec<i
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params_from_iter(params.iter()), |r| r.get::<_, i64>(0))?;
     rows.map(|r| Ok(r?)).collect()
+}
+
+/// Resolve one or more playlists in the same concatenated order PlaylistView
+/// uses. Its filter is deliberately simple rather than the library's search
+/// language: a Unicode-insensitive substring over the five fields shown by
+/// that view's existing client-side filter.
+fn collect_playlist_ids(
+    conn: &Connection,
+    playlist_ids: &[i64],
+    query: Option<&str>,
+) -> Result<Vec<i64>> {
+    const UNFILTERED: &str =
+        "SELECT pt.track_id FROM playlist_tracks pt \
+         JOIN tracks t ON t.id = pt.track_id \
+         WHERE pt.playlist_id = ?1 ORDER BY pt.position";
+    const FILTERED: &str =
+        "SELECT pt.track_id FROM playlist_tracks pt \
+         JOIN tracks t ON t.id = pt.track_id \
+         WHERE pt.playlist_id = ?1 AND (\
+           ucontains(t.title, ?2) OR ucontains(t.artist, ?2) OR \
+           ucontains(t.album, ?2) OR ucontains(t.albumartist, ?2) OR \
+           ucontains(t.genre, ?2)\
+         ) ORDER BY pt.position";
+
+    let query = query.map(str::trim).filter(|query| !query.is_empty());
+    let mut out = Vec::new();
+    match query {
+        Some(query) => {
+            let mut stmt = conn.prepare(FILTERED)?;
+            for id in playlist_ids {
+                for row in stmt.query_map(rusqlite::params![id, query], |row| row.get(0))? {
+                    out.push(row?);
+                }
+            }
+        }
+        None => {
+            let mut stmt = conn.prepare(UNFILTERED)?;
+            for id in playlist_ids {
+                for row in stmt.query_map([id], |row| row.get(0))? {
+                    out.push(row?);
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn compile_optional_query(query: Option<&str>) -> Result<Option<SearchFilter>> {

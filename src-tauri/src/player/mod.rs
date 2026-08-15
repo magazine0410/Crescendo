@@ -10,6 +10,7 @@ use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -149,34 +150,88 @@ fn advance_for_transition(queue: &mut PlayQueue, gapless_pending: bool) -> Optio
 pub struct PlayerHandle {
     tx: Sender<Cmd>,
     shared: Arc<Mutex<PlayerState>>,
+    failure: Arc<Mutex<Option<String>>>,
     queue_shared: Arc<Mutex<Vec<i64>>>,
     projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
 }
 
 impl PlayerHandle {
-    pub fn send(&self, cmd: Cmd) {
-        let _ = self.tx.send(cmd);
+    pub fn send(&self, cmd: Cmd) -> Result<(), String> {
+        self.tx.send(cmd).map_err(|_| {
+            self.failure
+                .lock()
+                .ok()
+                .and_then(|failure| failure.clone())
+                .unwrap_or_else(|| "the player thread is unavailable".to_string())
+        })
     }
-    pub fn state(&self) -> PlayerState {
-        self.shared.lock().expect("player state poisoned").clone()
+    pub fn state(&self) -> Result<PlayerState, String> {
+        if let Some(failure) = self
+            .failure
+            .lock()
+            .map_err(|_| "the player failure state is unavailable".to_string())?
+            .clone()
+        {
+            return Err(failure);
+        }
+        self.shared
+            .lock()
+            .map(|state| state.clone())
+            .map_err(|_| "the player state is unavailable".to_string())
     }
-    pub fn queue_ids(&self) -> Vec<i64> {
-        self.queue_shared.lock().expect("queue state poisoned").clone()
+    pub fn queue_ids(&self) -> Result<Vec<i64>, String> {
+        self.queue_shared
+            .lock()
+            .map(|ids| ids.clone())
+            .map_err(|_| "the player queue is unavailable".to_string())
     }
     /// Drain the small bounded PCM handoff queue. The Tauri command returns
     /// this as an ArrayBuffer, avoiding JSON number-array serialization.
-    pub fn take_projectm_pcm(&self) -> Vec<u8> {
+    pub fn take_projectm_pcm(&self) -> Result<Vec<u8>, String> {
         let mut chunks = self
             .projectm_pcm
             .lock()
-            .expect("projectM PCM queue poisoned");
+            .map_err(|_| "the projectM PCM queue is unavailable".to_string())?;
         let len = chunks.iter().map(Vec::len).sum();
         let mut out = Vec::with_capacity(len);
         for chunk in chunks.drain(..) {
             out.extend_from_slice(&chunk);
         }
-        out
+        Ok(out)
     }
+}
+
+fn report_player_failure(
+    app: &AppHandle,
+    shared: &Mutex<PlayerState>,
+    failure: &Mutex<Option<String>>,
+    message: String,
+) {
+    log::error!("{message}");
+    *failure
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(message.clone());
+    // Recover only the UI snapshot, whose fields can be replaced with a known
+    // stopped state. Playback/queue locks are deliberately not recovered: a
+    // panic may have broken their invariants and the player thread is gone.
+    let final_state = {
+        let mut state = shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.status = Status::Stopped;
+        state.track = None;
+        state.context_index = None;
+        state.context_len = 0;
+        state.stop_after_current = false;
+        state.clone()
+    };
+    let _ = app.emit("player:state", final_state);
+    let _ = app.emit(
+        "player:position",
+        PositionEvent {
+            ms: 0,
+            duration_ms: 0,
+        },
+    );
+    let _ = app.emit("player:fatal", message);
 }
 
 pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
@@ -195,18 +250,43 @@ pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
     }));
     let queue_shared = Arc::new(Mutex::new(Vec::new()));
     let projectm_pcm = Arc::new(Mutex::new(VecDeque::new()));
+    let failure = Arc::new(Mutex::new(None));
 
     let handle = PlayerHandle {
         tx,
         shared: shared.clone(),
+        failure: failure.clone(),
         queue_shared: queue_shared.clone(),
         projectm_pcm: projectm_pcm.clone(),
     };
+    let failure_app = app.clone();
+    let failure_shared = shared.clone();
+    let failure_message = failure.clone();
     std::thread::Builder::new()
         .name("player".into())
         .spawn(move || {
-            if let Err(e) = run_player(app, db, rx, shared, queue_shared, projectm_pcm) {
-                log::error!("player thread died: {e}");
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                run_player(app, db, rx, shared, queue_shared, projectm_pcm)
+            }));
+            let failure = match outcome {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(format!("Player stopped unexpectedly: {error}")),
+                Err(payload) => {
+                    let detail = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    Some(format!("Player stopped unexpectedly: {detail}"))
+                }
+            };
+            if let Some(message) = failure {
+                report_player_failure(
+                    &failure_app,
+                    &failure_shared,
+                    &failure_message,
+                    message,
+                );
             }
         })?;
     Ok(handle)
@@ -444,10 +524,45 @@ fn run_player(
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_for_transition, enqueue_projectm_pcm, HandoffCoordinator, MAX_PROJECTM_PCM_BYTES,
+        advance_for_transition, enqueue_projectm_pcm, Cmd, HandoffCoordinator, PlayerHandle,
+        PlayerState, Status, MAX_PROJECTM_PCM_BYTES,
     };
-    use crescendo_core::playqueue::PlayQueue;
+    use crescendo_core::playqueue::{PlayQueue, RepeatMode};
     use std::collections::VecDeque;
+    use std::sync::{mpsc::channel, Arc, Mutex};
+
+    #[test]
+    fn disconnected_player_commands_return_an_error() {
+        let (tx, rx) = channel();
+        drop(rx);
+        let handle = PlayerHandle {
+            tx,
+            shared: Arc::new(Mutex::new(PlayerState {
+                status: Status::Stopped,
+                track: None,
+                context_index: None,
+                context_len: 0,
+                shuffle: false,
+                repeat: RepeatMode::Off,
+                volume: 0.8,
+                muted: false,
+                stop_after_current: false,
+            })),
+            failure: Arc::new(Mutex::new(None)),
+            queue_shared: Arc::new(Mutex::new(Vec::new())),
+            projectm_pcm: Arc::new(Mutex::new(VecDeque::new())),
+        };
+        assert!(handle.send(Cmd::Stop).is_err());
+        *handle.failure.lock().unwrap() = Some("player initialization failed".into());
+        assert_eq!(
+            handle.state().unwrap_err(),
+            "player initialization failed"
+        );
+        assert_eq!(
+            handle.send(Cmd::Stop).unwrap_err(),
+            "player initialization failed"
+        );
+    }
 
     #[test]
     fn pcm_handoff_is_byte_bounded_and_keeps_newest_data() {
@@ -746,6 +861,10 @@ impl Engine {
     }
 
     fn start_track(&mut self, track_id: i64) {
+        // "Stop after current" belongs to the stream the user armed it on.
+        // Any explicit or error-driven transition starts a new stream and must
+        // not carry that one-shot request forward.
+        self.stop_after_current.store(false, Ordering::SeqCst);
         // Credit the outgoing track (still live, so its position is queryable)
         // before we tear its stream down.
         self.commit_play();
@@ -777,6 +896,9 @@ impl Engine {
     }
 
     fn stop(&mut self) {
+        // A later playback session must not inherit a one-shot stop request
+        // from the stream that was stopped manually.
+        self.stop_after_current.store(false, Ordering::SeqCst);
         self.begin_manual_transition(|_, _| ());
         self.commit_play();
         let _ = self.playbin.set_state(gstreamer::State::Null);

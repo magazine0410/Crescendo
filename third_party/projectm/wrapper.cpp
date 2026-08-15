@@ -1,8 +1,10 @@
 #include <cstdint>
+#include <limits>
 #include <string>
 
 #include <SDL.h>
 #include <emscripten/emscripten.h>
+#include <emscripten/heap.h>
 #include <emscripten/html5_webgl.h>
 
 #include <projectM-4/audio.h>
@@ -18,6 +20,28 @@ std::string last_error;
 
 int fail(const char* message) {
     last_error = message ? message : "Unknown projectM error";
+    return 0;
+}
+
+void cleanup() {
+    if (instance) {
+        projectm_destroy(instance);
+        instance = nullptr;
+    }
+    if (context) {
+        SDL_GL_DeleteContext(context);
+        context = nullptr;
+    }
+    if (window) {
+        SDL_DestroyWindow(window);
+        window = nullptr;
+    }
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}
+
+int fail_and_cleanup(const char* message) {
+    fail(message);
+    cleanup();
     return 0;
 }
 
@@ -38,9 +62,14 @@ EMSCRIPTEN_KEEPALIVE int crescendo_projectm_init(
     if (instance) {
         return 1;
     }
+    // A failed earlier attempt may have created SDL resources before reaching
+    // projectm_create(). Never overwrite those globals on retry.
+    if (window || context) {
+        cleanup();
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        return fail(SDL_GetError());
+        return fail_and_cleanup(SDL_GetError());
     }
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -56,20 +85,20 @@ EMSCRIPTEN_KEEPALIVE int crescendo_projectm_init(
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI
     );
     if (!window) {
-        return fail(SDL_GetError());
+        return fail_and_cleanup(SDL_GetError());
     }
 
     context = SDL_GL_CreateContext(window);
     if (!context) {
-        return fail(SDL_GetError());
+        return fail_and_cleanup(SDL_GetError());
     }
     if (SDL_GL_MakeCurrent(window, context) != 0) {
-        return fail(SDL_GetError());
+        return fail_and_cleanup(SDL_GetError());
     }
 
     const auto webgl_context = emscripten_webgl_get_current_context();
     if (!webgl_context) {
-        return fail("WebGL2 context creation failed");
+        return fail_and_cleanup("WebGL2 context creation failed");
     }
     // projectM's Emscripten notes recommend enabling this WebGL 1 extension.
     // WebGL 2 promotes floating-point textures into the core API, and WebKit
@@ -80,7 +109,7 @@ EMSCRIPTEN_KEEPALIVE int crescendo_projectm_init(
 
     instance = projectm_create();
     if (!instance) {
-        return fail("projectM could not create its OpenGL renderer");
+        return fail_and_cleanup("projectM could not create its OpenGL renderer");
     }
 
     const char* texture_paths[] = {"/textures", "/imports"};
@@ -99,19 +128,7 @@ EMSCRIPTEN_KEEPALIVE int crescendo_projectm_init(
 }
 
 EMSCRIPTEN_KEEPALIVE void crescendo_projectm_destroy() {
-    if (instance) {
-        projectm_destroy(instance);
-        instance = nullptr;
-    }
-    if (context) {
-        SDL_GL_DeleteContext(context);
-        context = nullptr;
-    }
-    if (window) {
-        SDL_DestroyWindow(window);
-        window = nullptr;
-    }
-    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    cleanup();
 }
 
 EMSCRIPTEN_KEEPALIVE void crescendo_projectm_resize(
@@ -136,9 +153,14 @@ EMSCRIPTEN_KEEPALIVE void crescendo_projectm_render() {
 }
 
 EMSCRIPTEN_KEEPALIVE void crescendo_projectm_add_pcm(const int16_t* samples, unsigned int frames) {
-    if (instance && samples && frames > 0) {
-        projectm_pcm_add_int16(instance, samples, frames, PROJECTM_STEREO);
-    }
+    constexpr unsigned int max_frames = 4096;
+    if (!instance || !samples || frames == 0 || frames > max_frames) return;
+    if (frames > std::numeric_limits<size_t>::max() / (2 * sizeof(int16_t))) return;
+    const auto start = reinterpret_cast<uintptr_t>(samples);
+    const size_t bytes = static_cast<size_t>(frames) * 2 * sizeof(int16_t);
+    const size_t heap_size = emscripten_get_heap_size();
+    if (start % alignof(int16_t) != 0 || start > heap_size || bytes > heap_size - start) return;
+    projectm_pcm_add_int16(instance, samples, frames, PROJECTM_STEREO);
 }
 
 EMSCRIPTEN_KEEPALIVE void crescendo_projectm_load_preset(const char* data, int smooth) {

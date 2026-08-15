@@ -195,6 +195,7 @@ export interface ProjectMAssetEntry {
 }
 
 export interface ProjectMImport {
+  grant: string;
   folder_name: string;
   presets: ProjectMPresetEntry[];
   assets: ProjectMAssetEntry[];
@@ -250,8 +251,10 @@ export interface TrackSort {
 export type PlayContext =
   | { type: "album"; id: number }
   | { type: "playlist"; id: number }
+  | { type: "filtered_playlist"; id: number; query: string }
   /** Several playlists shown as one list; they play back to back in order. */
   | { type: "playlists"; ids: number[] }
+  | { type: "filtered_playlists"; ids: number[]; query: string }
   | { type: "library_view"; query: string | null; sort: TrackSort | null }
   | {
       type: "value_tracks";

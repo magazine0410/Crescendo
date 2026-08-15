@@ -13,10 +13,12 @@ class PlayerStore {
   stopAfterCurrent = $state(false);
   contextIndex = $state<number | null>(null);
   contextLen = $state(0);
+  error = $state<string | null>(null);
   /** true while the user drags the seek handle (position events pause) */
   seeking = $state(false);
 
   applyState(s: PlayerState) {
+    this.error = null;
     this.status = s.status;
     this.track = s.track;
     this.shuffle = s.shuffle;
@@ -31,6 +33,18 @@ class PlayerStore {
       this.positionMs = 0;
       this.durationMs = 0;
     }
+  }
+
+  fail(message: string) {
+    this.status = "stopped";
+    this.track = null;
+    this.positionMs = 0;
+    this.durationMs = 0;
+    this.stopAfterCurrent = false;
+    this.contextIndex = null;
+    this.contextLen = 0;
+    this.seeking = false;
+    this.error = message;
   }
 
   onPositionEvent(ms: number, durationMs: number) {

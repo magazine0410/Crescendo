@@ -45,6 +45,11 @@
     return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
   }
 
+  function isInteractiveTarget(e: KeyboardEvent): boolean {
+    const el = e.target instanceof Element ? e.target : null;
+    return !!el?.closest('button, select, summary, a[href], [role="button"], [role="link"]');
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (settingsOpen || document.querySelector('[aria-modal="true"]')) return;
     if (e.key === "/" && !isTypingTarget(e)) {
@@ -53,6 +58,9 @@
       return;
     }
     if (isTypingTarget(e)) return;
+    // Let focused controls keep their native Space activation instead of
+    // turning the keystroke into a global play/pause command.
+    if (e.key === " " && isInteractiveTarget(e)) return;
     switch (e.key) {
       case " ":
         e.preventDefault();

@@ -31,6 +31,7 @@ export async function initEvents() {
   await listen<string>("player:error", (e) => {
     console.error("playback error:", e.payload);
   });
+  await listen<string>("player:fatal", (e) => player.fail(e.payload));
   await listen<ScanProgress>("scan:progress", (e) => library.onScanProgress(e.payload));
   await listen<ScanProgress>("scan:done", (e) => {
     library.onScanProgress(e.payload);
@@ -109,6 +110,10 @@ export async function initEvents() {
   });
 
   // Adopt current playback state (e.g. after a UI reload).
-  const s = await call<PlayerState>("player_get_state");
-  player.applyState(s);
+  try {
+    const s = await call<PlayerState>("player_get_state");
+    player.applyState(s);
+  } catch (cause) {
+    player.fail(cause instanceof Error ? cause.message : String(cause));
+  }
 }

@@ -37,8 +37,7 @@
   interface TrackRow {
     type: "track";
     track: Track;
-    /** Place in the combined list of every selected playlist — the index the
-        player is sent, which `PlayContext` resolves to on the Rust side. */
+    /** Place in the unfiltered combined list of every selected playlist. */
     index: number;
     /** Playlist this row came from, and its position inside that playlist.
         Removal needs these: with several playlists selected they are no
@@ -153,20 +152,28 @@
     };
   });
 
-  /** One playlist keeps the plain playlist context; several resolve as one
-      concatenated list on the Rust side, in the order shown here. */
-  async function playAt(index: number) {
+  /** Resolve exactly what is visible: while filtered, the backend rebuilds
+      the matches and the clicked row is addressed by its visible ordinal. */
+  async function playAt(row: TrackRow) {
     const ids = playlists.selectedIds;
     if (ids.length === 0) return;
+    const query = filterQuery;
+    const context = query
+      ? ids.length === 1
+        ? { type: "filtered_playlist" as const, id: ids[0], query }
+        : { type: "filtered_playlists" as const, ids, query }
+      : ids.length === 1
+        ? { type: "playlist" as const, id: ids[0] }
+        : { type: "playlists" as const, ids };
     await player.playContext(
-      ids.length === 1 ? { type: "playlist", id: ids[0] } : { type: "playlists", ids },
-      index,
+      context,
+      query ? row.visibleIndex : row.index,
     );
   }
 
   function trackMenu(e: MouseEvent, r: TrackRow) {
     openContextMenu(e, [
-      { label: "Play", action: () => playAt(r.index) },
+      { label: "Play", action: () => playAt(r) },
       { label: "Add to queue", action: () => queue.add([r.track.id]) },
       openTrackInFileManagerItem(r.track),
       { separator: true, label: "" },
@@ -247,7 +254,7 @@
       class:alt={r.visibleIndex % 2 === 1}
       class:playing={player.track?.id === r.track.id}
       class:missing={r.track.missing}
-      ondblclick={() => playAt(r.index)}
+      ondblclick={() => playAt(r)}
       oncontextmenu={(e) => trackMenu(e, r)}
     >
       <span class="no">{r.track.track_no ?? r.index + 1}</span>

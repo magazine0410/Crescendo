@@ -26,6 +26,7 @@ impl Db {
         let db = Self { conn: Mutex::new(conn), path: path.to_path_buf() };
         // Once per process, not in `open_conn` — the scanner's side connection
         // must not repeat it.
+        db.lastfm_cache_prune(crate::lastfm::CACHE_TTL_SECS)?;
         db.lyrics_cache_prune(crate::lyrics::CACHE_TTL_SECS)?;
         Ok(db)
     }
@@ -36,14 +37,14 @@ impl Db {
     }
 
     fn open_conn(path: &Path) -> Result<Connection> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA busy_timeout = 10000;
              PRAGMA cache_size = -64000;",
         )?;
-        schema::migrate(&conn)?;
+        schema::migrate(&mut conn)?;
         register_udfs(&conn)?;
         Ok(conn)
     }

@@ -44,8 +44,6 @@ export interface Prefs {
   visualizer_mode: VisualizerMode;
   /** Bundled preset id, or imported preset id for the chosen/imported modes. */
   visualizer_preset: string;
-  /** Last user-selected MilkDrop folder, reloaded when the import mode returns. */
-  visualizer_import_path: string;
   /** Track-list sort, encoded `key:secondary:asc|desc` (see library store's
       parseTrackSort). Blank = default LIBRARY_SORT order. */
   track_sort: string;
@@ -76,7 +74,6 @@ const DEFAULTS: Prefs = {
   visualizer_color: "#ffaf32", // == --accent (theme orange)
   visualizer_mode: "bars",
   visualizer_preset: "",
-  visualizer_import_path: "",
   track_sort: "",
   playlist_sort: "manual",
   playlist_sort_locked: false,
@@ -140,7 +137,6 @@ class PrefsStore {
     )
       v.visualizer_mode = raw.visualizer_mode;
     if (raw.visualizer_preset) v.visualizer_preset = raw.visualizer_preset;
-    if (raw.visualizer_import_path) v.visualizer_import_path = raw.visualizer_import_path;
     if (raw.track_sort) v.track_sort = raw.track_sort;
     if (raw.playlist_sort === "name" || raw.playlist_sort === "count")
       v.playlist_sort = raw.playlist_sort;

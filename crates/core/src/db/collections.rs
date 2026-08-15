@@ -6,7 +6,8 @@
 //! them counts twice, which is what the sidebar's totals mean.
 
 use super::Db;
-use anyhow::Result;
+use anyhow::{bail, Result};
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,11 +67,11 @@ impl Db {
             } else {
                 let existing: Option<i64> = tx
                     .query_row(
-                        "SELECT id FROM collections WHERE name = ?1 COLLATE NOCASE",
+                        "SELECT id FROM collections WHERE ulower(name) = ulower(?1)",
                         [name],
                         |r| r.get(0),
                     )
-                    .ok();
+                    .optional()?;
                 Some(match existing {
                     Some(id) => id,
                     None => {
@@ -101,10 +102,23 @@ impl Db {
     }
 
     pub fn collection_rename(&self, id: i64, name: &str) -> Result<()> {
+        let name = name.trim();
         self.with(|conn| {
+            let existing: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM collections
+                     WHERE id != ?1 AND ulower(name) = ulower(?2)
+                     LIMIT 1",
+                    rusqlite::params![id, name],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if existing.is_some() {
+                bail!("a collection named '{name}' already exists");
+            }
             conn.execute(
                 "UPDATE collections SET name = ?2 WHERE id = ?1",
-                rusqlite::params![id, name.trim()],
+                rusqlite::params![id, name],
             )?;
             Ok(())
         })

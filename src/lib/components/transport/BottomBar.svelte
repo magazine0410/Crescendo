@@ -57,8 +57,8 @@
     <TransportButtons />
   </div>
   <div class="center">
-    <div class="title" class:placeholder={!player.track}>
-      {player.track ? titleLine : "Nothing played"}
+    <div class="title" class:placeholder={!player.track} class:error={!!player.error}>
+      {player.error ? `Playback unavailable: ${player.error}` : player.track ? titleLine : "Nothing played"}
     </div>
     <div class="seekrow">
       <button
@@ -142,6 +142,9 @@
   }
   .title.placeholder {
     color: var(--txt-faded);
+  }
+  .title.error {
+    color: #d97777;
   }
   .seekrow {
     display: flex;

@@ -512,7 +512,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "player_set_spectrum_enabled":
       return undefined as T;
     // The projectM commands (player_set_projectm_enabled,
-    // player_take_projectm_pcm, projectm_import_folder, projectm_load_preset,
+    // player_take_projectm_pcm, projectm_choose_folder, projectm_restore_folder, projectm_load_preset,
     // projectm_load_asset) have no mock on purpose: every call site is behind
     // an `isTauri` guard, and the Visualizer tab drives its own preview audio
     // in the browser. Add mocks here if any of those guards ever go away.
@@ -531,6 +531,8 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "lastfm_artist_info":
     case "lastfm_album_info":
       return null as T;
+    case "lastfm_test_key":
+      return Boolean((args as { apiKey?: string } | undefined)?.apiKey?.trim()) as T;
     case "lyrics_for_track": {
       if (!lyricsOnline) return null as T;
       // Long enough to scroll, and timed across the mock track's 3:04 so the

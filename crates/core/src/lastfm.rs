@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 const API_ROOT: &str = "https://ws.audioscrobbler.com/2.0/";
-const CACHE_TTL_SECS: i64 = 30 * 24 * 3600;
+pub(crate) const CACHE_TTL_SECS: i64 = 30 * 24 * 3600;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArtistInfo {
@@ -154,9 +154,10 @@ fn int_of(v: &Value) -> Option<i64> {
 }
 
 fn names_of(v: &Value) -> Vec<String> {
-    match v.as_array() {
-        Some(arr) => arr.iter().filter_map(|t| str_of(&t["name"])).collect(),
-        None => vec![],
+    if let Some(arr) = v.as_array() {
+        arr.iter().filter_map(|t| str_of(&t["name"])).collect()
+    } else {
+        str_of(&v["name"]).into_iter().collect()
     }
 }
 
@@ -177,7 +178,18 @@ fn strip_lastfm_link(s: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_lastfm_link;
+    use super::{names_of, strip_lastfm_link};
+    use serde_json::json;
+
+    #[test]
+    fn names_accept_lastfm_arrays_and_singletons() {
+        assert_eq!(
+            names_of(&json!([{ "name": "rock" }, { "name": "jazz" }])),
+            ["rock", "jazz"]
+        );
+        assert_eq!(names_of(&json!({ "name": "rock" })), ["rock"]);
+        assert!(names_of(&serde_json::Value::Null).is_empty());
+    }
 
     #[test]
     fn strips_link_and_cc_trailer() {

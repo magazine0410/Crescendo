@@ -96,6 +96,55 @@ fn multi_selection_view_and_playback_agree_on_order() {
     assert_eq!(played, view, "playback order must match the view row for row");
 }
 
+#[test]
+fn filtered_playlist_playback_matches_visible_rows() {
+    let (_d, db) = test_db();
+    db.with(|conn| {
+        conn.execute("UPDATE tracks SET title = 'Alpha' WHERE id = 1", [])?;
+        conn.execute("UPDATE tracks SET title = 'Écho', missing = 1 WHERE id = 2", [])?;
+        conn.execute("UPDATE tracks SET title = 'Other' WHERE id IN (3, 5)", [])?;
+        conn.execute("UPDATE tracks SET title = 'Fourth', genre = 'Rock' WHERE id = 4", [])?;
+        Ok(())
+    })
+    .unwrap();
+    let a = db.playlist_create("A").unwrap();
+    let b = db.playlist_create("B").unwrap();
+    db.playlist_add_tracks(a, &[1, 2, 3]).unwrap();
+    db.playlist_add_tracks(b, &[4, 2, 5]).unwrap();
+
+    let single = db
+        .resolve_context(&PlayContext::FilteredPlaylist {
+            id: a,
+            query: "éCH".into(),
+        })
+        .unwrap();
+    assert_eq!(single, vec![2], "Unicode matching keeps a visible missing track");
+
+    let multi = db
+        .resolve_context(&PlayContext::FilteredPlaylists {
+            ids: vec![b, a],
+            query: "ÉCHO".into(),
+        })
+        .unwrap();
+    assert_eq!(multi, vec![2, 2], "playlist order is preserved across matches");
+
+    let genre = db
+        .resolve_context(&PlayContext::FilteredPlaylist {
+            id: b,
+            query: "rock".into(),
+        })
+        .unwrap();
+    assert_eq!(genre, vec![4]);
+
+    let blank = db
+        .resolve_context(&PlayContext::FilteredPlaylist {
+            id: a,
+            query: "  ".into(),
+        })
+        .unwrap();
+    assert_eq!(blank, vec![1, 2, 3], "a blank filter falls back to the full playlist");
+}
+
 /// A playlist keeps tracks whose file has gone missing, and shows them. If
 /// playback dropped them, every row after one would play the wrong track.
 #[test]

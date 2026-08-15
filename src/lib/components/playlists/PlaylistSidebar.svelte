@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { playlists, type SidebarRow } from "$lib/stores/playlists.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { isTauri, type PlaylistInfo } from "$lib/api";
@@ -130,9 +131,15 @@
 
   function onRowPointerDown(e: PointerEvent, id: number) {
     if (e.button !== 0) return;
+    removeDragListeners();
     dragFrom = { x: e.clientX, y: e.clientY, id };
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp, { once: true });
+  }
+
+  function removeDragListeners() {
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -153,7 +160,7 @@
   }
 
   async function onPointerUp() {
-    window.removeEventListener("pointermove", onPointerMove);
+    removeDragListeners();
     const ids = dragIds;
     const target = dragTarget;
     const dragged = ids.length > 0;
@@ -165,6 +172,13 @@
     setTimeout(() => (suppressClick = false));
     if (target !== undefined) await applyDrop(ids, target);
   }
+
+  onDestroy(() => {
+    removeDragListeners();
+    dragFrom = null;
+    dragIds = [];
+    dragTarget = undefined;
+  });
 
   /** Which collection the pointer is over: an id, null for the loose area of
       the list, undefined for anywhere else (including outside the sidebar). */

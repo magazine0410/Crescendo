@@ -5,7 +5,7 @@
   interface Props {
     preset: ProjectMPresetFile | null;
     assets?: ProjectMAssetEntry[];
-    assetRoot?: string;
+    assetGrant?: string;
     active?: boolean;
     /** The renderer itself cannot run; the caller is expected to fall back. */
     onerror?: (message: string) => void;
@@ -49,7 +49,7 @@
   let {
     preset,
     assets = [],
-    assetRoot = "",
+    assetGrant = "",
     active = true,
     onerror,
     onpresetfail,
@@ -166,10 +166,10 @@
   async function installAssets(
     runtime: ProjectMModule,
     next: ProjectMAssetEntry[],
-    root: string,
+    grant: string,
     generation: number,
   ) {
-    const key = `${root}|${next.map((asset) => `${asset.id}:${asset.bytes}`).join("|")}`;
+    const key = `${grant}|${next.map((asset) => `${asset.id}:${asset.bytes}`).join("|")}`;
     if (key === installedAssetKey) return;
     // Every bail-out below leaves /imports wiped or half-written, so stop
     // claiming any particular set is installed until the last file lands.
@@ -179,9 +179,9 @@
       if (old !== "." && old !== "..") runtime.FS.unlink(`/imports/${old}`);
     }
     for (const asset of next) {
-      if (!root || disposed || generation !== selectionGeneration) return;
+      if (!grant || disposed || generation !== selectionGeneration) return;
       const response = await call<ArrayBuffer>("projectm_load_asset", {
-        path: root,
+        grant,
         id: asset.id,
       });
       if (disposed || generation !== selectionGeneration) return;
@@ -209,14 +209,14 @@
     runtime: ProjectMModule,
     nextPreset: ProjectMPresetFile | null,
     nextAssets: ProjectMAssetEntry[],
-    root: string,
+    grant: string,
     fatal = false,
   ) {
     const generation = ++selectionGeneration;
     try {
       // Texture lookup happens while a preset is parsed, so imported assets
       // must enter the virtual filesystem before that preset is loaded.
-      await installAssets(runtime, nextAssets, root, generation);
+      await installAssets(runtime, nextAssets, grant, generation);
       if (!disposed && generation === selectionGeneration && nextPreset) {
         loadPreset(runtime, nextPreset);
       }
@@ -277,12 +277,15 @@
       module = runtime;
       runtime.FS.mkdirTree("/imports");
       if (!runtime._crescendo_projectm_init(width, height, canvas.width, canvas.height)) {
-        throw new Error(
+        const message =
           runtime.UTF8ToString(runtime._crescendo_projectm_last_error()) ||
-            "projectM could not initialize",
-        );
+          "projectM could not initialize";
+        // Destroy is safe after partial initialization and also protects users
+        // running a checked-in WASM build from before source-level cleanup.
+        runtime._crescendo_projectm_destroy();
+        throw new Error(message);
       }
-      await applySelection(runtime, preset, assets, assetRoot, true);
+      await applySelection(runtime, preset, assets, assetGrant, true);
       if (status === "error") return;
       status = "ready";
       resizeObserver = new ResizeObserver(resize);
@@ -296,9 +299,9 @@
     const runtime = module;
     const nextPreset = preset;
     const nextAssets = assets;
-    const nextRoot = assetRoot;
+    const nextGrant = assetGrant;
     if (runtime && status === "ready") {
-      void applySelection(runtime, nextPreset, nextAssets, nextRoot);
+      void applySelection(runtime, nextPreset, nextAssets, nextGrant);
     }
   });
 

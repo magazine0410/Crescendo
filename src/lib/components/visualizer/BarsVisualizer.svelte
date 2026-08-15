@@ -43,6 +43,7 @@
   let cssH = 0;
   let raf = 0;
   let unlisten: (() => void) | null = null;
+  let destroyed = false;
 
   function resizeCanvas() {
     const w = stage.clientWidth;
@@ -198,17 +199,22 @@
     raf = requestAnimationFrame(frame);
 
     if (isTauri) {
-      listen<{ bands: number[]; rate: number }>("player:spectrum", (e) => {
+      void listen<{ bands: number[]; rate: number }>("player:spectrum", (e) => {
         rawBands = e.payload.bands;
         if (e.payload.rate > 0) sampleRate = e.payload.rate;
         lastSpectrumAt = performance.now();
-      }).then((un) => (unlisten = un));
+      }).then((un) => {
+        if (destroyed) un();
+        else unlisten = un;
+      });
     }
   });
 
   onDestroy(() => {
+    destroyed = true;
     cancelAnimationFrame(raf);
     unlisten?.();
+    unlisten = null;
     if (isTauri) call("player_set_spectrum_enabled", { on: false }).catch(() => {});
   });
 

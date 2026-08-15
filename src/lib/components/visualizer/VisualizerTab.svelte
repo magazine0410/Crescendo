@@ -37,16 +37,16 @@
       persisted; `refId` builds the renderer-facing identity from it. */
   interface PresetRef {
     source: "en-d" | "import";
-    /** En D: the file name. Import: the path relative to `root`. */
+    /** En D: the file name. Import: the path relative to the approved folder. */
     key: string;
-    /** Import root `key` is relative to; empty for bundled presets. */
-    root: string;
+    /** Backend-issued import grant; empty for bundled presets. */
+    grant: string;
   }
 
   /** The only place a preset id string is assembled. projectM uses it purely
       as a cache key, so it just has to stay unique per folder and preset. */
   function refId(ref: PresetRef): string {
-    return ref.source === "en-d" ? `en-d:${ref.key}` : `import:${ref.root}:${ref.key}`;
+    return ref.source === "en-d" ? `en-d:${ref.key}` : `import:${ref.grant}:${ref.key}`;
   }
 
   /** Bundled keys used to be stored with the `en-d:` prefix that the mode
@@ -70,7 +70,7 @@
   let activePreset = $state<ProjectMPresetFile | null>(null);
   let activeRef = $state<PresetRef | null>(null);
   let activeAssets = $state<ProjectMAssetEntry[]>([]);
-  let activeAssetRoot = $state("");
+  let activeAssetGrant = $state("");
   let projectmMounted = $state(false);
   let chooserOpen = $state(false);
   let search = $state("");
@@ -139,9 +139,9 @@
   /** Put a bundled preset on screen and remember it. Shared by the explicit
       picks and by the rotation, which differ only in surrounding chrome. */
   async function showBundled(preset: BundledPreset) {
-    const ref: PresetRef = { source: "en-d", key: preset.file, root: "" };
+    const ref: PresetRef = { source: "en-d", key: preset.file, grant: "" };
     activeAssets = [];
-    activeAssetRoot = "";
+    activeAssetGrant = "";
     activePreset = await readBundled(ref, preset.name);
     activeRef = ref;
     projectmMounted = true;
@@ -167,7 +167,7 @@
 
   async function readImported(ref: PresetRef): Promise<ProjectMPresetFile> {
     const loaded = await call<ProjectMPresetFile>("projectm_load_preset", {
-      path: ref.root,
+      grant: ref.grant,
       id: ref.key,
     });
     return { ...loaded, id: refId(ref) };
@@ -178,10 +178,10 @@
     const ref: PresetRef = {
       source: "import",
       key: preset.id,
-      root: prefs.values.visualizer_import_path,
+      grant: imported?.grant ?? "",
     };
     activeAssets = imported?.assets ?? [];
-    activeAssetRoot = ref.root;
+    activeAssetGrant = ref.grant;
     activePreset = await readImported(ref);
     activeRef = ref;
     projectmMounted = true;
@@ -225,16 +225,12 @@
       error = "Preset-folder import is available in the Crescendo desktop app.";
       return;
     }
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({ directory: true, title: "Import projectM preset folder" });
-    if (typeof selected !== "string") return;
-
     busy = true;
     error = "";
     notice = "";
     try {
-      imported = await call<ProjectMImport>("projectm_import_folder", { path: selected });
-      await prefs.set("visualizer_import_path", selected);
+      imported = await call<ProjectMImport | null>("projectm_choose_folder");
+      if (!imported) return;
       notice = imported.warnings.join(" · ");
       await activateImported(imported.presets[0]);
     } catch (cause) {
@@ -254,7 +250,7 @@
       activePreset = null;
       activeRef = null;
       activeAssets = [];
-      activeAssetRoot = "";
+      activeAssetGrant = "";
       await setMode("bars");
     } else if (value === "en-d") {
       const match = bundled.find((preset) => preset.file === savedBundledKey());
@@ -294,12 +290,8 @@
         if (!isTauri) {
           throw new Error("Imported projectM presets are available only in the desktop app");
         }
-        if (!prefs.values.visualizer_import_path) {
-          throw new Error("The imported projectM preset folder is no longer configured");
-        }
-        imported = await call<ProjectMImport>("projectm_import_folder", {
-          path: prefs.values.visualizer_import_path,
-        });
+        imported = await call<ProjectMImport | null>("projectm_restore_folder");
+        if (!imported) throw new Error("The imported projectM preset folder is no longer configured");
         notice = imported.warnings.join(" · ");
         const selected =
           imported.presets.find((preset) => preset.id === prefs.values.visualizer_preset) ??
@@ -323,7 +315,7 @@
     activePreset = null;
     activeRef = null;
     activeAssets = [];
-    activeAssetRoot = "";
+    activeAssetGrant = "";
     await setMode("bars");
     error = `projectM could not start; switched to Bars (Eole). ${message}`;
   }
@@ -411,7 +403,7 @@
           <ProjectMVisualizer
             preset={activePreset}
             assets={activeAssets}
-            assetRoot={activeAssetRoot}
+            assetGrant={activeAssetGrant}
             active={active && prefs.values.visualizer_mode !== "bars"}
             onerror={onProjectMError}
             onpresetfail={onPresetFail}

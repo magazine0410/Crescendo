@@ -87,6 +87,9 @@ class PlaylistsStore {
   filter = $state("");
   /** Named groups of playlists, in their stored order. */
   collections = $state<CollectionInfo[]>([]);
+  /** Ignore list/track responses superseded by a newer event or selection. */
+  private refreshReqId = 0;
+  private selectionReqId = 0;
 
   /** The sidebar's rows: collections with their members, loose playlists, and
       the separator between the two groups when collections sit above or
@@ -182,10 +185,12 @@ class PlaylistsStore {
   }
 
   async refresh() {
+    const request = ++this.refreshReqId;
     const [list, collections] = await Promise.all([
       call<PlaylistInfo[]>("playlist_list"),
       call<CollectionInfo[]>("collection_list"),
     ]);
+    if (request !== this.refreshReqId) return;
     this.list = list;
     this.collections = collections;
     // Drop any selection that no longer exists, then reload what is left.
@@ -223,15 +228,19 @@ class PlaylistsStore {
 
   /** Store the selection in sidebar order and load its tracks in one call. */
   private async applySelection(ids: number[]) {
+    const request = ++this.selectionReqId;
     const order = this.visible.map((p) => p.id);
-    this.selectedIds = [...ids].sort((x, y) => order.indexOf(x) - order.indexOf(y));
-    if (this.selectedIds.length === 0) {
+    const selectedIds = [...ids].sort((x, y) => order.indexOf(x) - order.indexOf(y));
+    this.selectedIds = selectedIds;
+    if (selectedIds.length === 0) {
       this.groups = [];
       return;
     }
-    this.groups = await call<PlaylistTracks[]>("playlist_tracks_multi", {
-      ids: this.selectedIds,
+    const groups = await call<PlaylistTracks[]>("playlist_tracks_multi", {
+      ids: selectedIds,
     });
+    if (request !== this.selectionReqId) return;
+    this.groups = groups;
   }
 
   selected(): PlaylistInfo | null {
