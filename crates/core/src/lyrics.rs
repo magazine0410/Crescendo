@@ -49,6 +49,12 @@ const VOCADB_SITES: [(&str, &str); 3] = [
     ("https://utaitedb.net/api/", "UtaiteDB"),
 ];
 const LRCLIB_ROOT: &str = "https://lrclib.net/api/";
+/// How far a candidate's length may sit from the track's before it is treated
+/// as a different recording rather than the same one. The API caps a search
+/// at 100 results and we ask for 50, so on a title like "Bad Apple!!" — which
+/// has hundreds of entries — this gate is what stops the closest of a bad
+/// window being accepted.
+const MAX_LENGTH_DELTA_SECS: i64 = 20;
 const USER_AGENT: &str = concat!("Crescendo/", env!("CARGO_PKG_VERSION"), " (lyrics lookup)");
 
 /// A leading `[mm:ss.xx]` line tag. Minutes are not capped at two digits:
@@ -325,7 +331,7 @@ fn find_vocadb_song(track: &Track, root: &str) -> Result<Option<i64>, ()> {
             &[
                 ("query", query),
                 ("nameMatchMode", "Auto"),
-                ("maxResults", "20"),
+                ("maxResults", "50"),
                 ("getTotalCount", "false"),
                 ("lang", "Default"),
             ],
@@ -347,6 +353,13 @@ fn find_vocadb_song(track: &Track, root: &str) -> Result<Option<i64>, ()> {
             let len = item["lengthSeconds"].as_i64().unwrap_or(0);
             let has_len = len > 0;
             let delta = if has_len { (len - duration).abs() } else { i64::MAX };
+            // A title this common is shared by hundreds of arrangements, so a
+            // length that far off is a different recording, not a near miss.
+            // Only applies when both lengths are known — an entry with no
+            // length recorded is not evidence of a mismatch, just weaker.
+            if has_len && duration > 0 && delta >= MAX_LENGTH_DELTA_SECS {
+                continue;
+            }
             let better = match best {
                 None => true,
                 Some((_, best_delta, best_has_len)) => {
