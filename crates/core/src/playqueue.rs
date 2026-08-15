@@ -119,6 +119,27 @@ impl PlayQueue {
         &self.adhoc
     }
 
+    /// Inspect the track that follows the current one without consuming it.
+    pub fn peek_advance(&self) -> Option<i64> {
+        if self.repeat == RepeatMode::One {
+            return self.current();
+        }
+        if let Some(id) = self.adhoc.first() {
+            return Some(*id);
+        }
+        let n = self.order.len();
+        if n == 0 {
+            return None;
+        }
+        let next = match self.pos {
+            None => 0,
+            Some(p) if p + 1 < n => p + 1,
+            Some(_) if self.repeat == RepeatMode::All => 0,
+            Some(_) => return None,
+        };
+        Some(self.context[self.order[next]])
+    }
+
     /// The track that follows the current one; consumes queue/position state.
     pub fn advance(&mut self) -> Option<i64> {
         if self.repeat == RepeatMode::One {
@@ -213,6 +234,19 @@ mod tests {
         q.repeat = RepeatMode::One;
         assert_eq!(q.advance(), Some(1));
         assert_eq!(q.advance(), Some(1));
+    }
+
+    #[test]
+    fn peeking_does_not_consume_the_next_track() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![10, 20, 30], 0);
+        q.queue_add(&[99]);
+
+        assert_eq!(q.peek_advance(), Some(99));
+        assert_eq!(q.peek_advance(), Some(99));
+        assert_eq!(q.advance(), Some(99));
+        assert_eq!(q.peek_advance(), Some(20));
+        assert_eq!(q.current(), Some(99));
     }
 
     #[test]

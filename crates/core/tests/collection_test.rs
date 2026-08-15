@@ -160,3 +160,46 @@ fn an_older_database_migrates() {
     db.collection_set(&[1], "New group").unwrap();
     assert_eq!(db.collection_list().unwrap()[0].playlist_count, 1);
 }
+
+#[test]
+fn collection_failure_rolls_back_and_leaves_the_connection_usable() {
+    let (_d, db) = test_db();
+    let a = db.playlist_create("A").unwrap();
+    let b = db.playlist_create("B").unwrap();
+    db.with(|conn| {
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER fail_second_collection_update
+             BEFORE UPDATE OF collection_id ON playlists
+             WHEN NEW.id = {b}
+             BEGIN
+               SELECT RAISE(ABORT, 'forced collection failure');
+             END;"
+        ))?;
+        Ok(())
+    })
+    .unwrap();
+
+    let error = db.collection_set(&[a, b], "Group").unwrap_err();
+    assert!(error.to_string().contains("forced collection failure"));
+    assert!(
+        db.collection_list().unwrap().is_empty(),
+        "the new collection rolls back"
+    );
+    assert!(db
+        .playlist_list()
+        .unwrap()
+        .iter()
+        .all(|p| p.collection_id.is_none()));
+    db.with(|conn| {
+        assert!(
+            conn.is_autocommit(),
+            "the failed operation must not leave BEGIN active"
+        );
+        conn.execute_batch("DROP TRIGGER fail_second_collection_update")?;
+        Ok(())
+    })
+    .unwrap();
+
+    db.collection_set(&[a, b], "Group").unwrap();
+    assert_eq!(db.collection_list().unwrap()[0].playlist_count, 2);
+}

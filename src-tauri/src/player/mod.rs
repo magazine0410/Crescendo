@@ -106,6 +106,45 @@ pub struct PlayRecorded {
     pub plays: i64,
 }
 
+/// Coordinates the streaming thread's gapless handoff with explicit track
+/// changes on the player thread.
+#[derive(Default)]
+struct HandoffCoordinator {
+    generation: u64,
+    manual_transition: bool,
+}
+
+impl HandoffCoordinator {
+    fn snapshot(&self) -> Option<u64> {
+        (!self.manual_transition).then_some(self.generation)
+    }
+
+    fn accepts(&self, generation: u64) -> bool {
+        !self.manual_transition && self.generation == generation
+    }
+
+    fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn begin_manual(&mut self) {
+        self.invalidate();
+        self.manual_transition = true;
+    }
+
+    fn finish_manual(&mut self) {
+        self.manual_transition = false;
+    }
+}
+
+fn advance_for_transition(queue: &mut PlayQueue, gapless_pending: bool) -> Option<i64> {
+    if gapless_pending {
+        queue.current()
+    } else {
+        queue.advance()
+    }
+}
+
 #[derive(Clone)]
 pub struct PlayerHandle {
     tx: Sender<Cmd>,
@@ -200,6 +239,8 @@ struct Engine {
     max_position_ms: u64,
     /// Set inside about-to-finish; consumed on the next stream-start.
     gapless_pending: Arc<Mutex<bool>>,
+    /// Serializes queue/URI gapless handoffs with explicit track changes.
+    handoff: Arc<Mutex<HandoffCoordinator>>,
     /// One-shot "stop after this song": suppresses the gapless handoff so EOS
     /// fires, then the EOS handler stops and clears it. Shared with the
     /// about-to-finish callback (streaming thread), hence atomic.
@@ -297,6 +338,7 @@ fn run_player(
 
     let queue = Arc::new(Mutex::new(PlayQueue::default()));
     let gapless_pending = Arc::new(Mutex::new(false));
+    let handoff = Arc::new(Mutex::new(HandoffCoordinator::default()));
     let stop_after_current = Arc::new(AtomicBool::new(false));
 
     // Gapless: when the current track is about to end, hand playbin the next
@@ -305,6 +347,7 @@ fn run_player(
         let queue = queue.clone();
         let db = db.clone();
         let gapless_pending = gapless_pending.clone();
+        let handoff = handoff.clone();
         let stop_after_current = stop_after_current.clone();
         playbin.connect("about-to-finish", false, move |values| {
             // "Stop after current": skip the handoff so the stream ends and
@@ -313,13 +356,33 @@ fn run_player(
                 return None;
             }
             let playbin = values[0].get::<gstreamer::Element>().ok()?;
-            let next_id = queue.lock().ok()?.advance()?;
+            // Resolve the path without holding either playback lock. The
+            // generation check below rejects this candidate if a command moved
+            // or changed the queue while the lookup was in flight.
+            let (generation, next_id) = {
+                let coordinator = handoff.lock().ok()?;
+                let generation = coordinator.snapshot()?;
+                let next_id = queue.lock().ok()?.peek_advance()?;
+                (generation, next_id)
+            };
             let track = db.track_by_id(next_id).ok().flatten()?;
             if let Ok(uri) = gstreamer::glib::filename_to_uri(&track.path, None) {
-                playbin.set_property("uri", uri.as_str());
-                if let Ok(mut pending) = gapless_pending.lock() {
-                    *pending = true;
+                let coordinator = handoff.lock().ok()?;
+                if !coordinator.accepts(generation) || stop_after_current.load(Ordering::SeqCst) {
+                    return None;
                 }
+                let mut live_queue = queue.lock().ok()?;
+                let mut pending = gapless_pending.lock().ok()?;
+                if live_queue.peek_advance() != Some(next_id) {
+                    log::error!("gapless queue changed without advancing its generation");
+                    return None;
+                }
+                if live_queue.advance() != Some(next_id) {
+                    log::error!("gapless queue peek and advance disagreed");
+                    return None;
+                }
+                playbin.set_property("uri", uri.as_str());
+                *pending = true;
             }
             None
         });
@@ -342,6 +405,7 @@ fn run_player(
         current_track_id: None,
         max_position_ms: 0,
         gapless_pending,
+        handoff,
         stop_after_current,
     };
     engine.apply_volume();
@@ -378,8 +442,11 @@ fn run_player(
 }
 
 #[cfg(test)]
-mod projectm_pcm_tests {
-    use super::{enqueue_projectm_pcm, MAX_PROJECTM_PCM_BYTES};
+mod tests {
+    use super::{
+        advance_for_transition, enqueue_projectm_pcm, HandoffCoordinator, MAX_PROJECTM_PCM_BYTES,
+    };
+    use crescendo_core::playqueue::PlayQueue;
     use std::collections::VecDeque;
 
     #[test]
@@ -399,20 +466,79 @@ mod projectm_pcm_tests {
         assert_eq!(chunks[0].len(), MAX_PROJECTM_PCM_BYTES);
         assert_eq!(chunks[0], oversized[8..]);
     }
+
+    #[test]
+    fn manual_transition_suppresses_gapless_handoffs() {
+        let mut handoff = HandoffCoordinator::default();
+        let stale = handoff.snapshot().unwrap();
+
+        handoff.begin_manual();
+        assert!(!handoff.accepts(stale));
+        assert!(handoff.snapshot().is_none());
+
+        handoff.finish_manual();
+        let fresh = handoff.snapshot().unwrap();
+        assert_ne!(fresh, stale);
+        assert!(handoff.accepts(fresh));
+    }
+
+    #[test]
+    fn next_does_not_skip_a_handoff_that_is_not_audible_yet() {
+        let mut queue = PlayQueue::default();
+        queue.set_context(vec![10, 20, 30], 0);
+        assert_eq!(queue.advance(), Some(20)); // gapless callback reserved 20
+
+        assert_eq!(advance_for_transition(&mut queue, true), Some(20));
+        assert_eq!(queue.current(), Some(20));
+        assert_eq!(advance_for_transition(&mut queue, false), Some(30));
+    }
 }
 
 impl Engine {
+    /// Bar gapless callbacks, then mutate the queue. The player thread is the
+    /// only caller, so one manual transition cannot overlap another.
+    fn begin_manual_transition<T>(
+        &self,
+        mutate: impl FnOnce(&mut PlayQueue, bool) -> T,
+    ) -> T {
+        let mut handoff = self.handoff.lock().expect("handoff coordinator poisoned");
+        handoff.begin_manual();
+        let was_gapless = {
+            let mut pending = self.gapless_pending.lock().expect("gapless flag poisoned");
+            std::mem::take(&mut *pending)
+        };
+        let mut queue = self.queue.lock().expect("queue poisoned");
+        mutate(&mut queue, was_gapless)
+    }
+
+    /// Queue-only changes take the same lock as the callback's queue/URI pair.
+    fn mutate_queue<T>(&self, mutate: impl FnOnce(&mut PlayQueue) -> T) -> T {
+        let mut handoff = self.handoff.lock().expect("handoff coordinator poisoned");
+        handoff.invalidate();
+        let mut queue = self.queue.lock().expect("queue poisoned");
+        mutate(&mut queue)
+    }
+
+    fn finish_manual_transition(&self) {
+        self.handoff
+            .lock()
+            .expect("handoff coordinator poisoned")
+            .finish_manual();
+    }
+
     fn handle_cmd(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::PlayContext { ctx, start_index } => {
                 match self.db.resolve_context(&ctx) {
                     Ok(ids) if !ids.is_empty() => {
-                        let mut q = self.queue.lock().expect("queue poisoned");
-                        q.set_context(ids, start_index);
-                        let id = q.current();
-                        drop(q);
+                        let id = self.begin_manual_transition(|q, _| {
+                            q.set_context(ids, start_index);
+                            q.current()
+                        });
                         if let Some(id) = id {
                             self.start_track(id);
+                        } else {
+                            self.finish_manual_transition();
                         }
                     }
                     Ok(_) => log::warn!("play_context resolved to an empty track list"),
@@ -420,9 +546,11 @@ impl Engine {
                 }
             }
             Cmd::JumpTo(display_index) => {
-                let id = self.queue.lock().expect("queue poisoned").jump_to(display_index);
+                let id = self.begin_manual_transition(|q, _| q.jump_to(display_index));
                 if let Some(id) = id {
                     self.start_track(id);
+                } else {
+                    self.finish_manual_transition();
                 }
             }
             Cmd::TogglePause => match self.status {
@@ -438,18 +566,22 @@ impl Engine {
                 }
                 Status::Stopped => {
                     // Play from the top of the context if there is one.
-                    let id = {
-                        let mut q = self.queue.lock().expect("queue poisoned");
+                    let id = self.begin_manual_transition(|q, _| {
                         q.current().or_else(|| q.advance())
-                    };
+                    });
                     if let Some(id) = id {
                         self.start_track(id);
+                    } else {
+                        self.finish_manual_transition();
                     }
                 }
             },
             Cmd::Stop => self.stop(),
             Cmd::Next => {
-                let id = self.queue.lock().expect("queue poisoned").advance();
+                // The callback may already have queued the next URI while the
+                // outgoing track is still audible. In that case its queue entry
+                // is the track Next should start, not one to skip over again.
+                let id = self.begin_manual_transition(advance_for_transition);
                 self.sync_queue_shared();
                 match id {
                     Some(id) => self.start_track(id),
@@ -457,7 +589,7 @@ impl Engine {
                 }
             }
             Cmd::Prev => {
-                let id = self.queue.lock().expect("queue poisoned").previous();
+                let id = self.begin_manual_transition(|q, _| q.previous());
                 match id {
                     Some(id) => self.start_track(id),
                     None => self.stop(),
@@ -484,15 +616,20 @@ impl Engine {
                 self.publish_state();
             }
             Cmd::SetShuffle(on) => {
-                self.queue.lock().expect("queue poisoned").set_shuffle(on);
+                self.mutate_queue(|q| q.set_shuffle(on));
                 self.publish_state();
             }
             Cmd::CycleRepeat => {
-                self.queue.lock().expect("queue poisoned").cycle_repeat();
+                self.mutate_queue(|q| {
+                    q.cycle_repeat();
+                });
                 self.publish_state();
             }
             Cmd::SetStopAfterCurrent(on) => {
+                let mut handoff = self.handoff.lock().expect("handoff coordinator poisoned");
+                handoff.invalidate();
                 self.stop_after_current.store(on, Ordering::SeqCst);
+                drop(handoff);
                 self.publish_state();
             }
             Cmd::SetSpectrumEnabled(on) => {
@@ -508,15 +645,15 @@ impl Engine {
                 }
             }
             Cmd::QueueAdd(ids) => {
-                self.queue.lock().expect("queue poisoned").queue_add(&ids);
+                self.mutate_queue(|q| q.queue_add(&ids));
                 self.sync_queue_shared();
             }
             Cmd::QueueRemove(positions) => {
-                self.queue.lock().expect("queue poisoned").queue_remove(&positions);
+                self.mutate_queue(|q| q.queue_remove(&positions));
                 self.sync_queue_shared();
             }
             Cmd::QueueClear => {
-                self.queue.lock().expect("queue poisoned").queue_clear();
+                self.mutate_queue(PlayQueue::queue_clear);
                 self.sync_queue_shared();
             }
         }
@@ -535,7 +672,7 @@ impl Engine {
                 }
                 // Normal end without gapless handoff (e.g. repeat-off at the
                 // end of the context).
-                let id = self.queue.lock().expect("queue poisoned").advance();
+                let id = self.begin_manual_transition(advance_for_transition);
                 self.sync_queue_shared();
                 match id {
                     Some(id) => self.start_track(id),
@@ -551,7 +688,7 @@ impl Engine {
                 );
                 let _ = self.app.emit("player:error", err.error().to_string());
                 // Skip to the next track rather than going silent.
-                let id = self.queue.lock().expect("queue poisoned").advance();
+                let id = self.begin_manual_transition(advance_for_transition);
                 self.sync_queue_shared();
                 match id {
                     Some(id) => self.start_track(id),
@@ -614,14 +751,22 @@ impl Engine {
         self.commit_play();
         let Ok(Some(track)) = self.db.track_by_id(track_id) else {
             log::error!("track {track_id} vanished from the library");
+            self.finish_manual_transition();
             return;
         };
         let Ok(uri) = gstreamer::glib::filename_to_uri(&track.path, None) else {
             log::error!("cannot build uri for {}", track.path);
+            self.finish_manual_transition();
             return;
         };
         let _ = self.playbin.set_state(gstreamer::State::Ready);
-        self.playbin.set_property("uri", uri.as_str());
+        {
+            // about-to-finish performs its queue decision and URI write under
+            // this lock, so neither side can land a stale URI after the other.
+            let mut handoff = self.handoff.lock().expect("handoff coordinator poisoned");
+            self.playbin.set_property("uri", uri.as_str());
+            handoff.finish_manual();
+        }
         let _ = self.playbin.set_state(gstreamer::State::Playing);
         self.status = Status::Playing;
         self.current_duration_ms = track.duration_ms.max(0) as u64;
@@ -632,8 +777,10 @@ impl Engine {
     }
 
     fn stop(&mut self) {
+        self.begin_manual_transition(|_, _| ());
         self.commit_play();
         let _ = self.playbin.set_state(gstreamer::State::Null);
+        self.finish_manual_transition();
         self.status = Status::Stopped;
         self.current_duration_ms = 0;
         self.publish_state();

@@ -158,3 +158,42 @@ fn ids_with_track_reports_membership() {
     assert_eq!(db.playlist_ids_with_track(1).unwrap(), vec![a]);
     assert!(db.playlist_ids_with_track(5).unwrap().is_empty());
 }
+
+#[test]
+fn reorder_failure_rolls_back_and_leaves_the_connection_usable() {
+    let (_d, db) = test_db();
+    let pid = db.playlist_create("P").unwrap();
+    db.playlist_add_tracks(pid, &[1, 2, 3]).unwrap();
+    db.with(|conn| {
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER fail_second_reorder_insert
+             BEFORE INSERT ON playlist_tracks
+             WHEN NEW.playlist_id = {pid} AND NEW.position = 1
+             BEGIN
+               SELECT RAISE(ABORT, 'forced reorder failure');
+             END;"
+        ))?;
+        Ok(())
+    })
+    .unwrap();
+
+    let error = db.playlist_reorder(pid, &[0], 2).unwrap_err();
+    assert!(error.to_string().contains("forced reorder failure"));
+    assert_eq!(
+        ids(&db, pid),
+        vec![1, 2, 3],
+        "the delete and partial rebuild roll back"
+    );
+    db.with(|conn| {
+        assert!(
+            conn.is_autocommit(),
+            "the failed operation must not leave BEGIN active"
+        );
+        conn.execute_batch("DROP TRIGGER fail_second_reorder_insert")?;
+        Ok(())
+    })
+    .unwrap();
+
+    db.playlist_add_tracks(pid, &[4]).unwrap();
+    assert_eq!(ids(&db, pid), vec![1, 2, 3, 4]);
+}

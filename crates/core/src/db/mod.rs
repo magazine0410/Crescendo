@@ -48,9 +48,9 @@ impl Db {
         Ok(conn)
     }
 
-    pub fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        let guard = self.conn.lock().expect("db mutex poisoned");
-        f(&guard)
+    pub fn with<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
+        let mut guard = self.conn.lock().expect("db mutex poisoned");
+        f(&mut guard)
     }
 }
 

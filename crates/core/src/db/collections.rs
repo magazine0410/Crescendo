@@ -60,11 +60,11 @@ impl Db {
     pub fn collection_set(&self, playlist_ids: &[i64], name: &str) -> Result<Option<i64>> {
         let name = name.trim();
         self.with(|conn| {
-            conn.execute_batch("BEGIN")?;
+            let tx = conn.transaction()?;
             let target: Option<i64> = if name.is_empty() {
                 None
             } else {
-                let existing: Option<i64> = conn
+                let existing: Option<i64> = tx
                     .query_row(
                         "SELECT id FROM collections WHERE name = ?1 COLLATE NOCASE",
                         [name],
@@ -74,28 +74,28 @@ impl Db {
                 Some(match existing {
                     Some(id) => id,
                     None => {
-                        conn.execute(
+                        tx.execute(
                             "INSERT INTO collections(name, position)
                              VALUES (?1, (SELECT COALESCE(MAX(position), 0) + 1 FROM collections))",
                             [name],
                         )?;
-                        conn.last_insert_rowid()
+                        tx.last_insert_rowid()
                     }
                 })
             };
             {
                 let mut upd =
-                    conn.prepare("UPDATE playlists SET collection_id = ?2 WHERE id = ?1")?;
+                    tx.prepare("UPDATE playlists SET collection_id = ?2 WHERE id = ?1")?;
                 for id in playlist_ids {
                     upd.execute(rusqlite::params![id, target])?;
                 }
             }
-            conn.execute(
+            tx.execute(
                 "DELETE FROM collections WHERE NOT EXISTS
                    (SELECT 1 FROM playlists p WHERE p.collection_id = collections.id)",
                 [],
             )?;
-            conn.execute_batch("COMMIT")?;
+            tx.commit()?;
             Ok(target)
         })
     }
@@ -114,10 +114,13 @@ impl Db {
     /// must never delete what it grouped.
     pub fn collection_delete(&self, id: i64) -> Result<()> {
         self.with(|conn| {
-            conn.execute_batch("BEGIN")?;
-            conn.execute("UPDATE playlists SET collection_id = NULL WHERE collection_id = ?1", [id])?;
-            conn.execute("DELETE FROM collections WHERE id = ?1", [id])?;
-            conn.execute_batch("COMMIT")?;
+            let tx = conn.transaction()?;
+            tx.execute(
+                "UPDATE playlists SET collection_id = NULL WHERE collection_id = ?1",
+                [id],
+            )?;
+            tx.execute("DELETE FROM collections WHERE id = ?1", [id])?;
+            tx.commit()?;
             Ok(())
         })
     }

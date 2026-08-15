@@ -65,12 +65,14 @@ impl Db {
     /// listed keep their old position, so a stale list cannot lose a playlist.
     pub fn playlists_set_order(&self, ids: &[i64]) -> Result<()> {
         self.with(|conn| {
-            let mut upd = conn.prepare("UPDATE playlists SET position = ?2 WHERE id = ?1")?;
-            conn.execute_batch("BEGIN")?;
-            for (i, id) in ids.iter().enumerate() {
-                upd.execute(rusqlite::params![id, i as i64])?;
+            let tx = conn.transaction()?;
+            {
+                let mut upd = tx.prepare("UPDATE playlists SET position = ?2 WHERE id = ?1")?;
+                for (i, id) in ids.iter().enumerate() {
+                    upd.execute(rusqlite::params![id, i as i64])?;
+                }
             }
-            conn.execute_batch("COMMIT")?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -128,36 +130,38 @@ impl Db {
 
     pub fn playlist_add_tracks(&self, id: i64, track_ids: &[i64]) -> Result<()> {
         self.with(|conn| {
+            let tx = conn.transaction()?;
             // Skip tracks already in the playlist so the same song is never
             // appended twice (deduped against the playlist's current members;
             // repeats within `track_ids` itself are preserved).
             let existing: std::collections::HashSet<i64> = {
                 let mut stmt =
-                    conn.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1")?;
+                    tx.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1")?;
                 let set = stmt
                     .query_map([id], |r| r.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<_>>()?;
                 set
             };
-            let mut next: i64 = conn.query_row(
+            let mut next: i64 = tx.query_row(
                 "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_tracks \
                  WHERE playlist_id = ?1",
                 [id],
                 |r| r.get(0),
             )?;
-            let mut insert = conn.prepare(
-                "INSERT INTO playlist_tracks(playlist_id, position, track_id) \
-                 VALUES (?1, ?2, ?3)",
-            )?;
-            conn.execute_batch("BEGIN")?;
-            for tid in track_ids {
-                if existing.contains(tid) {
-                    continue;
+            {
+                let mut insert = tx.prepare(
+                    "INSERT INTO playlist_tracks(playlist_id, position, track_id) \
+                     VALUES (?1, ?2, ?3)",
+                )?;
+                for tid in track_ids {
+                    if existing.contains(tid) {
+                        continue;
+                    }
+                    insert.execute(rusqlite::params![id, next, tid])?;
+                    next += 1;
                 }
-                insert.execute(rusqlite::params![id, next, tid])?;
-                next += 1;
             }
-            conn.execute_batch("COMMIT")?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -177,17 +181,17 @@ impl Db {
 
     pub fn playlist_remove_tracks(&self, id: i64, positions: &[i64]) -> Result<()> {
         self.with(|conn| {
-            conn.execute_batch("BEGIN")?;
+            let tx = conn.transaction()?;
             {
-                let mut del = conn.prepare(
+                let mut del = tx.prepare(
                     "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND position = ?2",
                 )?;
                 for pos in positions {
                     del.execute(rusqlite::params![id, pos])?;
                 }
             }
-            renumber(conn, id)?;
-            conn.execute_batch("COMMIT")?;
+            renumber(&tx, id)?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -196,14 +200,17 @@ impl Db {
     /// starts at `to` (position after removal).
     pub fn playlist_reorder(&self, id: i64, from: &[i64], to: i64) -> Result<()> {
         self.with(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT position, track_id FROM playlist_tracks \
-                 WHERE playlist_id = ?1 ORDER BY position",
-            )?;
-            let rows = stmt.query_map([id], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-            })?;
-            let all: Vec<(i64, i64)> = rows.collect::<rusqlite::Result<_>>()?;
+            let tx = conn.transaction()?;
+            let all: Vec<(i64, i64)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT position, track_id FROM playlist_tracks \
+                     WHERE playlist_id = ?1 ORDER BY position",
+                )?;
+                let rows = stmt.query_map([id], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                })?;
+                rows.collect::<rusqlite::Result<_>>()?
+            };
 
             let moving: Vec<i64> = all
                 .iter()
@@ -220,10 +227,9 @@ impl Db {
                 rest.insert(insert_at + i, tid);
             }
 
-            conn.execute_batch("BEGIN")?;
-            conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?1", [id])?;
+            tx.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?1", [id])?;
             {
-                let mut ins = conn.prepare(
+                let mut ins = tx.prepare(
                     "INSERT INTO playlist_tracks(playlist_id, position, track_id) \
                      VALUES (?1, ?2, ?3)",
                 )?;
@@ -231,7 +237,7 @@ impl Db {
                     ins.execute(rusqlite::params![id, i as i64, tid])?;
                 }
             }
-            conn.execute_batch("COMMIT")?;
+            tx.commit()?;
             Ok(())
         })
     }
