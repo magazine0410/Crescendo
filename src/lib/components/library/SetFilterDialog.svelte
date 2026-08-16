@@ -8,7 +8,7 @@
 </script>
 
 <script lang="ts">
-  import { library, parseCustomTag } from "$lib/stores/library.svelte";
+  import { customTagLabel, library, parseCustomTag } from "$lib/stores/library.svelte";
 
   /** Tags offered in the dropdown — each resolves through the backend's
       browse_column whitelist, so every pick is guaranteed to work. Kept
@@ -17,7 +17,7 @@
       but still work if typed in manually. */
   const TAGS = [
     "bitdepth", "bitrate", "codec", "date", "disc", "duration",
-    "grouping", "rating", "samplerate", "track", "year",
+    "grouping", "lastplayed", "playcount", "rating", "samplerate", "track", "year",
   ];
 
   let value = $state("");
@@ -162,7 +162,7 @@
           {:else if preview === null}
             <span class="bad">Not a single tag — the list will be empty.</span>
           {:else}
-            Header: <b>{preview}</b>
+            Header: <b>{customTagLabel(preview)}</b>
           {/if}
         </p>
       </section>

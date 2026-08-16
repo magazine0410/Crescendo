@@ -6,14 +6,28 @@
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import { displayName, durationBucketLabel } from "$lib/format";
+  import {
+    displayName,
+    durationBucketLabel,
+    lastPlayedBucketLabel,
+    playCountLabel,
+    LAST_PLAYED_SPANS,
+  } from "$lib/format";
 
   // row 0 = "All", rows 1.. = values (narrowed by the filter bar)
   const count = $derived(library.filteredValues.length + 1);
 
   function label(v: string): string {
     if (library.isDurationMode) return durationBucketLabel(Number(v));
+    if (library.isLastPlayedMode) return lastPlayedBucketLabel(Number(v));
+    if (library.isPlayCountMode) return playCountLabel(Number(v));
     return v === "" ? "?" : v;
+  }
+
+  /** The span a last-played bucket covers, shown as the row's tooltip. */
+  function rowTitle(v: string, sort: string): string | undefined {
+    if (library.isLastPlayedMode) return LAST_PLAYED_SPANS[Number(v)];
+    return sort && sort !== v ? v : undefined;
   }
 
   async function playValue(value: string) {
@@ -85,7 +99,9 @@
         : library.mode === "album" ? "albums"
         : library.mode === "albumartist" ? "album artists"
         : library.isGroupingMode ? "groups"
-        : library.isDurationMode ? "durations" : "values"})</span>
+        : library.isDurationMode ? "durations"
+        : library.isLastPlayedMode ? "spans"
+        : library.isPlayCountMode ? "play counts" : "values"})</span>
     </button>
   {:else}
     {@const [value, n, sort] = library.filteredValues[i - 1]}
@@ -95,7 +111,7 @@
       ondblclick={() => playValue(value)}
       oncontextmenu={(e) => onRowContext(e, value)}
       onclick={(e) => onRowClick(e, value)}
-      title={sort && sort !== value ? value : undefined}
+      title={rowTitle(value, sort)}
     >
       <span class="name">{displayName(label(value), sort || null) ?? "?"}</span>
       <span class="count">{n}</span>

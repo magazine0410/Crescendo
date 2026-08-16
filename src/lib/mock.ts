@@ -150,8 +150,30 @@ function customField(tag: string): ((t: Track) => string) | null {
     case "disc":
     case "discnumber": return (t) => (t.disc_no != null ? String(t.disc_no) : "");
     case "rating": return (t) => (t.rating != null ? String(t.rating) : "");
+    case "lastplayed":
+    case "last_played": return lastPlayedBucket;
+    case "playcount":
+    case "play_count":
+    case "plays": return (t) => String(t.play_count);
     default: return null;
   }
+}
+
+/** Stand-in play history for the dev backend, which records none: a track's id
+    decides how long ago it was "last played", so the %lastplayed% buckets and
+    the Last-played sort both have something to show. One track in six was never
+    played (null). */
+function mockDaysAgo(t: Track): number | null {
+  const DAYS = [0, 3, 14, 100, 800, null] as const;
+  return DAYS[t.id % 6];
+}
+
+/** Bucket number of a track's last play, mirroring last_played_bucket() in
+    queries.rs: rolling day counts, narrowest span wins, "5" = never played. */
+function lastPlayedBucket(t: Track): string {
+  const d = mockDaysAgo(t);
+  if (d == null) return "5";
+  return String(d <= 0 ? 0 : d < 7 ? 1 : d < 30 ? 2 : d < 365 ? 3 : 4);
 }
 
 /** Primary theme of a grouping tag: text before the first ';' (trimmed). */
@@ -224,6 +246,15 @@ function keyCmp(a: Track, b: Track, key: SortKey): number {
     case "album": return (a.album ?? "").localeCompare(b.album ?? "");
     case "genre": return (a.genre ?? "").localeCompare(b.genre ?? "");
     case "grouping": return (a.grouping ?? "").localeCompare(b.grouping ?? "");
+    // Ascending = oldest first; a track that was never played has no time at
+    // all and sorts below every real one (SQLite puts NULLs first ascending).
+    case "lastplayed": {
+      const at = (t: Track) => {
+        const d = mockDaysAgo(t);
+        return d == null ? -Infinity : -d;
+      };
+      return at(a) === at(b) ? 0 : at(a) < at(b) ? -1 : 1;
+    }
   }
 }
 
@@ -269,18 +300,22 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         if (mode === "artist" && t.artistsort) sorts.set(v, t.artistsort);
         if (mode === "albumartist" && t.albumartistsort) sorts.set(v, t.albumartistsort);
       }
-      // Duration buckets order numerically ("10" after "3"), like the backend.
-      const numeric =
-        typeof mode === "object" &&
-        ["duration", "length"].includes(mode.custom.trim().toLowerCase());
+      // Duration buckets order numerically ("10" after "3") and play counts do
+      // the same in reverse (most played first), like the backend.
+      const tag =
+        typeof mode === "object" ? mode.custom.trim().toLowerCase() : "";
+      const numeric = ["duration", "length"].includes(tag);
+      const descending = ["playcount", "play_count", "plays"].includes(tag);
       return [...counts.entries()]
         .map(([v, n]): [string, number, string] => [v, n, sorts.get(v) ?? ""])
         .sort((a, b) =>
           numeric
             ? Number(a[0]) - Number(b[0])
-            : preferRomanized
-              ? (a[2] || a[0]).localeCompare(b[2] || b[0])
-              : a[0].localeCompare(b[0]),
+            : descending
+              ? Number(b[0]) - Number(a[0])
+              : preferRomanized
+                ? (a[2] || a[0]).localeCompare(b[2] || b[0])
+                : a[0].localeCompare(b[0]),
         ) as T;
     }
     case "browse_albums": {
@@ -345,7 +380,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       // crude stand-in: unbalanced quote = invalid, any operator = syntax.
       const quotes = (q.match(/"/g) ?? []).length;
       if (quotes % 2 !== 0) return "invalid" as T;
-      return (/[=#&|!/]|"/.test(q) ? "syntax" : "plain") as T;
+      return (/[=#&|!/<>]|"/.test(q) ? "syntax" : "plain") as T;
     }
     case "playlist_list":
       return playlists as T;

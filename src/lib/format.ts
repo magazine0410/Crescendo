@@ -23,6 +23,40 @@ export function durationBucketLabel(bucket: number): string {
   return `${bucket} minute${bucket === 1 ? "" : "s"} (${bucket}:00 - ${bucket}:59)`;
 }
 
+/** Display label for a %lastplayed% browse bucket. The spans are rolling day
+    counts, not calendar weeks or months (see queries.rs), and each track sits in
+    the narrowest one that holds it — "This week" therefore means "in the last 7
+    days, but not today". */
+export const LAST_PLAYED_BUCKETS = [
+  "Today",
+  "This week",
+  "This month",
+  "This year",
+  "A long time ago",
+  "Never played",
+] as const;
+
+/** Range each bucket covers, shown beside its name in the value list. */
+export const LAST_PLAYED_SPANS = [
+  "today",
+  "last 7 days",
+  "last 30 days",
+  "last 365 days",
+  "over a year ago",
+  "no plays recorded",
+] as const;
+
+export function lastPlayedBucketLabel(bucket: number): string {
+  return LAST_PLAYED_BUCKETS[bucket] ?? "Never played";
+}
+
+/** Display label for a %playcount% browse row: 0 -> "Never played", 1 -> "1
+    play", 4 -> "4 plays". */
+export function playCountLabel(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) return "Never played";
+  return `${count} play${count === 1 ? "" : "s"}`;
+}
+
 /** "3 days, 11 h, 48 min" style used in header stats. */
 export function formatLongDuration(ms: number): string {
   const min = Math.floor(ms / 60000);

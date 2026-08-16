@@ -10,7 +10,12 @@ import {
   type TrackSort,
   type WireBrowseMode,
 } from "../api";
-import { durationBucketLabel } from "../format";
+import {
+  durationBucketLabel,
+  lastPlayedBucketLabel,
+  playCountLabel,
+  LAST_PLAYED_SPANS,
+} from "../format";
 import { prefs } from "./prefs.svelte";
 
 /** Track-list sort keys with their dropdown labels, in menu order. */
@@ -23,6 +28,7 @@ export const SORT_KEYS: [SortKey, string][] = [
   ["year", "Year"],
   ["title", "Title"],
   ["duration", "Duration"],
+  ["lastplayed", "Last played"],
 ];
 
 function isSortKey(s: string): s is SortKey {
@@ -69,6 +75,15 @@ export function parseCustomTag(raw: string): string | null {
   }
   // No %…% at all: accept a single bare word (e.g. `year`).
   return /^\w+$/.test(s) ? s.toLowerCase() : null;
+}
+
+/** How a custom filter tag reads in the tab header and the Set-filter preview.
+    Only tags whose stored spelling is not how anyone would say them appear
+    here; every other tag shows as it was typed. */
+export function customTagLabel(tag: string): string {
+  if (tag === "lastplayed" || tag === "last_played") return "last played";
+  if (tag === "playcount" || tag === "play_count") return "play count";
+  return tag;
 }
 
 /** A visible row in the Track-list view: an album separator or a track. */
@@ -187,6 +202,28 @@ class LibraryStore {
     );
   }
 
+  /** Whether the custom filter browses last-played buckets (`%lastplayed%`).
+      Values are bucket numbers as strings ("0" = today … "5" = never played);
+      the UI renders them via lastPlayedBucketLabel. */
+  get isLastPlayedMode(): boolean {
+    return (
+      this.mode === "custom" &&
+      (this.customTagName === "lastplayed" || this.customTagName === "last_played")
+    );
+  }
+
+  /** Whether the custom filter browses play counts (`%playcount%`). Values are
+      the counts themselves as strings, listed most-played first; the UI renders
+      them via playCountLabel. */
+  get isPlayCountMode(): boolean {
+    return (
+      this.mode === "custom" &&
+      (this.customTagName === "playcount" ||
+        this.customTagName === "play_count" ||
+        this.customTagName === "plays")
+    );
+  }
+
   /** Raw text of the custom filter (persisted centrally in prefs). */
   get customTag(): string {
     return prefs.values.custom_browse_tag;
@@ -296,6 +333,20 @@ class LibraryStore {
       }
       return this.values.filter(([v]) =>
         durationBucketLabel(Number(v)).toLowerCase().includes(f),
+      );
+    }
+    if (this.isLastPlayedMode) {
+      // Match the bucket name or the span beside it ("week", "7 days", …).
+      return this.values.filter(([v]) =>
+        `${lastPlayedBucketLabel(Number(v))} ${LAST_PLAYED_SPANS[Number(v)] ?? ""}`
+          .toLowerCase()
+          .includes(f),
+      );
+    }
+    if (this.isPlayCountMode) {
+      // Match the count itself ("3") or its label ("3 plays", "never").
+      return this.values.filter(
+        ([v]) => v === f || playCountLabel(Number(v)).toLowerCase().includes(f),
       );
     }
     return this.values.filter(

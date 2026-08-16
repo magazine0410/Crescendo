@@ -29,6 +29,7 @@ fn sort_key_sql(key: SortKey, romanized: bool) -> &'static str {
         SortKey::Title if romanized => "COALESCE(NULLIF(titlesort, ''), title) COLLATE NOCASE",
         SortKey::Title => "title COLLATE NOCASE",
         SortKey::Duration => "duration_ms",
+        SortKey::LastPlayed => "last_played",
     }
 }
 
@@ -125,6 +126,32 @@ fn track_where(filter: Option<&SearchFilter>) -> (String, Vec<Value>) {
 /// 3:00–3:59, …). The UI formats the label; only the bucket number crosses IPC.
 const DURATION_BUCKET: &str = "CAST(duration_ms / 60000 AS TEXT)";
 
+/// Whole days between the day a track was last played and today, both taken as
+/// local calendar days: `0` = today, `1` = yesterday. Collapsing each side to
+/// its own midnight keeps the time of day (and any DST jump between them) from
+/// moving a play across a bucket edge. NULL for a track that was never played.
+const DAYS_SINCE_LAST_PLAY: &str =
+    "CAST(ROUND(julianday('now', 'localtime', 'start of day') \
+                - julianday(last_played, 'unixepoch', 'localtime', 'start of day')) AS INTEGER)";
+
+/// How long ago a track was last played, as a TEXT bucket number — the value
+/// the custom `%lastplayed%` filter groups and matches by. The spans are
+/// rolling day counts rather than calendar weeks or months, and each track
+/// falls in the narrowest one that holds it: "0" today, "1" within 7 days, "2"
+/// within 30, "3" within 365, "4" longer ago, "5" never played. The UI supplies
+/// the labels; only the bucket number crosses IPC.
+fn last_played_bucket() -> String {
+    format!(
+        "CAST(CASE WHEN last_played IS NULL THEN 5 \
+                   WHEN {d} <= 0 THEN 0 \
+                   WHEN {d} < 7 THEN 1 \
+                   WHEN {d} < 30 THEN 2 \
+                   WHEN {d} < 365 THEN 3 \
+                   ELSE 4 END AS TEXT)",
+        d = DAYS_SINCE_LAST_PLAY
+    )
+}
+
 /// Append a `<mode expr> IN (values…)` narrowing to a `track_where` fragment,
 /// in place; a track matches when its value is any of the (Ctrl-multi-selected)
 /// `values`. No-op when `values` is empty (= the "All" row). NULLs collate to ""
@@ -149,6 +176,8 @@ fn push_values_clause(
         Some(GROUPING_FIRST_SEG.to_string())
     } else if mode.is_duration() {
         Some(DURATION_BUCKET.to_string())
+    } else if mode.is_last_played() {
+        Some(last_played_bucket())
     } else {
         mode.column().map(col_expr)
     };
@@ -247,6 +276,19 @@ impl Db {
                 "SELECT {DURATION_BUCKET}, COUNT(*), '' FROM tracks WHERE {where_sql} \
                  GROUP BY duration_ms / 60000 ORDER BY duration_ms / 60000"
             ),
+            // Play count: one row per distinct count, most-played first, so the
+            // never-played tracks come last however many counts there are.
+            _ if mode.is_play_count() => format!(
+                "SELECT CAST(play_count AS TEXT), COUNT(*), '' FROM tracks WHERE {where_sql} \
+                 GROUP BY play_count ORDER BY play_count DESC"
+            ),
+            // Last played: at most six buckets, newest first. They are single
+            // digits, so ordering them as text keeps them in bucket order.
+            _ if mode.is_last_played() => format!(
+                "SELECT {bucket}, COUNT(*), '' FROM tracks WHERE {where_sql} \
+                 GROUP BY 1 ORDER BY 1",
+                bucket = last_played_bucket()
+            ),
             // Genre / Album / non-collapsed Grouping / Custom. TEXT-cast so
             // integer columns (year, rating, …) come back as strings.
             _ => format!(
@@ -315,14 +357,32 @@ impl Db {
 
     /// Credit one play to a track and return its new total. Called by the
     /// player once more than half of the track has been heard.
+    ///
+    /// Writes the play three ways in one transaction: a dated row in
+    /// `play_history`, the running `play_count`, and the `last_played` cache the
+    /// Last-played filter and sort read. The calendar parts come from SQLite's
+    /// `localtime`, so a play is filed under the day the listener saw on the
+    /// clock, not the UTC day.
     pub fn record_play(&self, id: i64) -> Result<i64> {
         self.with(|conn| {
-            let n = conn.query_row(
-                "UPDATE tracks SET play_count = play_count + 1 WHERE id = ?1 \
-                 RETURNING play_count",
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT INTO play_history(track_id, played_at, year, month, day) \
+                 SELECT ?1, unixepoch(), \
+                        CAST(strftime('%Y', 'now', 'localtime') AS INTEGER), \
+                        CAST(strftime('%m', 'now', 'localtime') AS INTEGER), \
+                        CAST(strftime('%d', 'now', 'localtime') AS INTEGER)",
+                [id],
+            )?;
+            let n = tx.query_row(
+                "UPDATE tracks SET play_count = play_count + 1, \
+                        last_played = (SELECT MAX(played_at) FROM play_history \
+                                       WHERE track_id = ?1) \
+                 WHERE id = ?1 RETURNING play_count",
                 [id],
                 |r| r.get::<_, i64>(0),
             )?;
+            tx.commit()?;
             Ok(n)
         })
     }

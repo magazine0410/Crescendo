@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -44,7 +44,8 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
               album_id     INTEGER,
               search_blob  TEXT NOT NULL DEFAULT '',
               missing      INTEGER NOT NULL DEFAULT 0,
-              play_count   INTEGER NOT NULL DEFAULT 0
+              play_count   INTEGER NOT NULL DEFAULT 0,
+              last_played  INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_tracks_album    ON tracks(album_id, disc_no, track_no);
             CREATE INDEX IF NOT EXISTS idx_tracks_artist   ON tracks(artist COLLATE NOCASE);
@@ -85,6 +86,18 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
               track_id INTEGER NOT NULL,
               PRIMARY KEY (playlist_id, position)
             ) WITHOUT ROWID;
+
+            CREATE TABLE IF NOT EXISTS play_history (
+              id         INTEGER PRIMARY KEY,
+              track_id   INTEGER NOT NULL,
+              played_at  INTEGER NOT NULL,
+              year       INTEGER NOT NULL,
+              month      INTEGER NOT NULL,
+              day        INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_play_history_track ON play_history(track_id, played_at);
+            CREATE INDEX IF NOT EXISTS idx_play_history_at    ON play_history(played_at);
+            CREATE INDEX IF NOT EXISTS idx_play_history_date  ON play_history(year, month, day);
 
             CREATE TABLE IF NOT EXISTS lastfm_cache (
               key TEXT PRIMARY KEY,
@@ -150,6 +163,28 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
                source TEXT NOT NULL,
                fetched_at INTEGER NOT NULL
              );",
+        )?;
+    }
+    if version < 6 && version >= 1 {
+        // v6: one row per play, with the local calendar date it happened on, and
+        // a `tracks.last_played` cache of the newest of them. The cache is what
+        // the Last-played filter and sort read, so neither has to touch the
+        // history table for 136k rows. Fresh databases get both from the CREATE
+        // block above; a pre-v6 database has no history to backfill from, so
+        // `last_played` starts NULL even where `play_count` is not 0.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS play_history (
+               id         INTEGER PRIMARY KEY,
+               track_id   INTEGER NOT NULL,
+               played_at  INTEGER NOT NULL,
+               year       INTEGER NOT NULL,
+               month      INTEGER NOT NULL,
+               day        INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_play_history_track ON play_history(track_id, played_at);
+             CREATE INDEX IF NOT EXISTS idx_play_history_at    ON play_history(played_at);
+             CREATE INDEX IF NOT EXISTS idx_play_history_date  ON play_history(year, month, day);
+             ALTER TABLE tracks ADD COLUMN last_played INTEGER;",
         )?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

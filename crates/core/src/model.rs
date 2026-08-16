@@ -98,6 +98,8 @@ impl BrowseMode {
             BrowseMode::Albumartist => Some("albumartist"),
             BrowseMode::Grouping => Some("grouping"),
             BrowseMode::Custom(_) if self.is_duration() => Some("duration_ms"),
+            BrowseMode::Custom(_) if self.is_last_played() => Some("last_played"),
+            BrowseMode::Custom(_) if self.is_play_count() => Some("play_count"),
             BrowseMode::Custom(tag) => crate::search::browse_column(tag),
         }
     }
@@ -109,6 +111,27 @@ impl BrowseMode {
     pub fn is_duration(&self) -> bool {
         matches!(self, BrowseMode::Custom(tag)
             if matches!(tag.trim().to_lowercase().as_str(), "duration" | "length"))
+    }
+
+    /// Whether this is the custom `%lastplayed%` filter. Like duration it has no
+    /// browsable text column: the value list buckets tracks by how long ago they
+    /// were last played (see `queries::last_played_bucket`) and values are
+    /// bucket numbers as strings ("0" = today … "5" = never played); the UI
+    /// renders them as "Today", "This week", …
+    pub fn is_last_played(&self) -> bool {
+        matches!(self, BrowseMode::Custom(tag)
+            if matches!(tag.trim().to_lowercase().as_str(), "lastplayed" | "last_played"))
+    }
+
+    /// Whether this is the custom `%playcount%` filter. Values are the play
+    /// counts themselves as strings ("0", "1", …), listed most-played first, so
+    /// the tracks nothing has ever played sit at the bottom. Unlike the other
+    /// two special filters it groups a plain column; only the ordering (and the
+    /// UI's "3 plays" labelling) sets it apart.
+    pub fn is_play_count(&self) -> bool {
+        matches!(self, BrowseMode::Custom(tag)
+            if matches!(tag.trim().to_lowercase().as_str(),
+                        "playcount" | "play_count" | "plays"))
     }
 }
 
@@ -125,6 +148,9 @@ pub enum SortKey {
     Year,
     Title,
     Duration,
+    /// Newest play first when descending. Never-played tracks have no time at
+    /// all: they sort as the oldest, so descending leaves them at the bottom.
+    LastPlayed,
 }
 
 /// Explicit Track-list sort: a primary key with its direction, and an optional

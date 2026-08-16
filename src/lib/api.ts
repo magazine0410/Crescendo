@@ -234,7 +234,8 @@ export type SortKey =
   | "grouping"
   | "year"
   | "title"
-  | "duration";
+  | "duration"
+  | "lastplayed";
 
 /** Explicit Track-list sort (backend `TrackSort`); null = default LIBRARY_SORT.
     The secondary key's direction follows the primary until set on its own

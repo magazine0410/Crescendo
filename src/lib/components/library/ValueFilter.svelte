@@ -8,7 +8,9 @@
     : library.mode === "album" ? "albums"
     : library.mode === "albumartist" ? "album artists"
     : library.isGroupingMode ? "groups"
-    : library.isDurationMode ? "durations" : "values",
+    : library.isDurationMode ? "durations"
+    : library.isLastPlayedMode ? "spans"
+    : library.isPlayCountMode ? "play counts" : "values",
   );
 </script>
 

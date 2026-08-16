@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { library } from "$lib/stores/library.svelte";
+  import { customTagLabel, library } from "$lib/stores/library.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { openSetFilter } from "./SetFilterDialog.svelte";
@@ -17,7 +17,7 @@
       reads CUSTOM. Every other tab uses its fixed label. */
   function labelFor(m: { id: BrowseMode; label: string }): string {
     if (m.id !== "custom") return m.label;
-    return (library.customTagName ?? "custom").toUpperCase();
+    return customTagLabel(library.customTagName ?? "custom").toUpperCase();
   }
 
   // --- Overflow handling --------------------------------------------------
