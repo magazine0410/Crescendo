@@ -6,7 +6,8 @@
   let { open, onclose }: Props = $props();
 
   // Every tag usable in a search, alphabetical. "Text" tags take = / != / regex
-  // matchers; "Number" tags go inside #( ). Keep in sync with search/sql.rs.
+  // matchers; "Number" tags compare with < <= = != >= >. Keep in sync with
+  // search/sql.rs.
   const tagRows: [string, string][] = [
     ["album", "Text — album title."],
     ["albumartist", "Text — album artist."],
@@ -21,8 +22,9 @@
     ["format", "Text — codec / container, e.g. FLAC (alias: codec)."],
     ["genre", "Text — genre."],
     ["grouping", "Text — grouping tag."],
-    ["length", "Number — duration in seconds; write times as m:ss inside #( )."],
+    ["length", "Number — duration in seconds; times are written as m:ss."],
     ["path", "Text — full file path."],
+    ["plays", "Number — times the track was played (alias: playcount)."],
     ["rating", "Number — rating."],
     ["samplerate", "Number — sample rate in Hz."],
     ["title", "Text — track title."],
@@ -56,9 +58,19 @@
     {
       title: "Numbers and time",
       rows: [
-        ["#(year >= 2010)", "Numeric comparison: < <= = != >= >. Numeric tags: track, disc, year, length, rating, bitrate, samplerate, bitdepth."],
-        ["#(1994 <= year < 2000)", "Comparisons chain into ranges."],
+        ["year>=2010", "Numeric comparison: < <= = != >= >. Numeric tags: track, disc, year, length, rating, plays, bitrate, samplerate, bitdepth."],
+        ["#(year >= 2010)", "The same comparison in Quod Libet's #( ) form."],
+        ["1994<=year<2000", "Comparisons chain into ranges."],
         ["#(length > 5:00)", "Times are written as m:ss or h:mm:ss."],
+      ],
+    },
+    {
+      title: "Play counts",
+      rows: [
+        ["plays=3", "Tracks played exactly 3 times."],
+        ["plays>2", "Played more than twice; use >= for “2 or more”."],
+        ["plays<3", "Played once or twice. Never-played tracks stay out: no plays is not a low play count."],
+        ["plays=0", "Never played. A query that asks about 0 keeps those tracks (also plays<1)."],
       ],
     },
     {

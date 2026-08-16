@@ -1,3 +1,4 @@
+use super::sql::is_numeric_tag;
 use super::{CmpOp, Matcher, Node, NumOperand, ParseError};
 
 pub fn parse(input: &str) -> Result<Node, ParseError> {
@@ -122,11 +123,32 @@ impl Parser {
         Ok(items)
     }
 
-    /// A bare word, which may turn out to be `tag=value` / `tag!=value`.
+    /// A bare word, which may turn out to be `tag=value` / `tag!=value`, or a
+    /// comparison on a numeric tag (`plays>2`, `year>=2010`).
     fn word_or_tagmatch(&mut self) -> Result<Node, ParseError> {
-        let word = self.bareword(&['=', '!'])?;
+        let mut word = self.bareword(&['=', '!', '<', '>'])?;
+        // '<' and '>' start a comparison only after a numeric operand — a
+        // numeric tag or a literal (`plays>2`, `1980<=year`). Anywhere else
+        // they are ordinary characters of the word (titles do contain them),
+        // so glue the rest of the word back on.
+        while matches!(self.peek(), Some('<' | '>')) && num_operand_word(&word).is_none() {
+            word.push(self.bump().unwrap());
+            word.push_str(&self.bareword(&['=', '!', '<', '>'])?);
+        }
         self.skip_ws();
+        let operand = num_operand_word(&word);
+        let is_num_tag = matches!(operand, Some(NumOperand::Tag(_)));
         match self.peek() {
+            // `plays<3`, and a literal leading a range (`1980<=year<2000`).
+            Some('<' | '>') if operand.is_some() => {
+                self.numeric_chain_from(operand.unwrap())
+            }
+            // `plays=3` / `plays!=3`: a numeric tag compares as a number,
+            // never as a substring.
+            Some('=') if is_num_tag => self.numeric_chain_from(operand.unwrap()),
+            Some('!') if is_num_tag && self.peek_at(1) == Some('=') => {
+                self.numeric_chain_from(operand.unwrap())
+            }
             Some('=') => {
                 self.bump();
                 let matcher = self.value()?;
@@ -301,7 +323,13 @@ impl Parser {
     }
 
     fn numeric_chain(&mut self) -> Result<Node, ParseError> {
-        let mut operands = vec![self.num_operand()?];
+        let first = self.num_operand()?;
+        self.numeric_chain_from(first)
+    }
+
+    /// The rest of a comparison chain, with the first operand already read.
+    fn numeric_chain_from(&mut self, first: NumOperand) -> Result<Node, ParseError> {
+        let mut operands = vec![first];
         let mut ops = Vec::new();
         loop {
             self.skip_ws();
@@ -311,7 +339,7 @@ impl Parser {
             operands.push(self.num_operand()?);
         }
         if ops.is_empty() {
-            return self.err("expected a comparison operator in #()");
+            return self.err("expected a comparison operator");
         }
         Ok(Node::Numeric { operands, ops })
     }
@@ -345,7 +373,7 @@ impl Parser {
             out
         };
         if word.is_empty() {
-            return self.err("expected a number or tag in #()");
+            return self.err("expected a number or tag");
         }
         if let Some(secs) = parse_time_literal(&word) {
             return Ok(NumOperand::Number(secs));
@@ -355,6 +383,23 @@ impl Parser {
         }
         Ok(NumOperand::Tag(normalize_tag(&word)))
     }
+}
+
+/// The word as the left side of a bare comparison: a numeric tag, a number, or
+/// a time literal. None for anything else, which keeps `<` and `>` as plain
+/// text there.
+fn num_operand_word(word: &str) -> Option<NumOperand> {
+    if word.is_empty() {
+        return None;
+    }
+    if let Some(secs) = parse_time_literal(word) {
+        return Some(NumOperand::Number(secs));
+    }
+    if let Ok(n) = word.parse::<f64>() {
+        return Some(NumOperand::Number(n));
+    }
+    let tag = normalize_tag(word);
+    is_numeric_tag(&tag).then(|| NumOperand::Tag(tag))
 }
 
 /// `2:00` -> 120, `1:02:03` -> 3723.

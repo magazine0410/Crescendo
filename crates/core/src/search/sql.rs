@@ -55,7 +55,77 @@ fn num_expr(tag: &str) -> Option<&'static str> {
         "bitrate" => "bitrate",
         "samplerate" => "sample_rate",
         "bitdepth" => "bit_depth",
+        "plays" | "playcount" => "play_count",
         _ => return None,
+    })
+}
+
+/// True if the tag compares as a number. The parser uses this to let a bare
+/// `plays>2` / `year>=2010` start a comparison, which for a text tag stays
+/// ordinary free text.
+pub(super) fn is_numeric_tag(tag: &str) -> bool {
+    num_expr(tag).is_some()
+}
+
+/// Guard for tags whose zero means "it never happened" instead of a measured
+/// value. `plays<3` must not answer with the whole never-played library, so a
+/// comparison on such a tag only sees rows above zero. A query that names 0
+/// itself (`plays=0`, `!plays>0`) keeps its plain meaning and finds the
+/// never-played tracks.
+fn zero_is_absent(tag: &str) -> Option<&'static str> {
+    match tag {
+        "plays" | "playcount" => Some("play_count > 0"),
+        _ => None,
+    }
+}
+
+/// The `zero_is_absent` guard for one comparison chain, or None when the chain
+/// does not need one. The chain is probed at 0 and at a few positive counts:
+/// the guard is added only where zero would match *and* a real count would
+/// match too. `plays<3` therefore means 1 or 2, while `plays<1` and `plays=0`
+/// keep their plain meaning and find the never-played tracks.
+fn zero_guard(operands: &[NumOperand], ops: &[CmpOp]) -> Option<&'static str> {
+    let (tag, guard) = operands.iter().find_map(|o| match o {
+        NumOperand::Tag(t) => zero_is_absent(t).map(|g| (t.as_str(), g)),
+        NumOperand::Number(_) => None,
+    })?;
+    if !chain_holds(operands, ops, tag, 0.0) {
+        return None;
+    }
+    // Counts are whole numbers, so the literals and their neighbours cover
+    // every interval the chain can describe.
+    let mut probes = vec![1.0];
+    for o in operands {
+        if let NumOperand::Number(n) = o {
+            probes.extend([n - 1.0, *n, n + 1.0]);
+        }
+    }
+    probes
+        .iter()
+        .any(|&x| x > 0.0 && chain_holds(operands, ops, tag, x))
+        .then_some(guard)
+}
+
+/// Evaluate a comparison chain with `tag` set to `x`. A comparison against a
+/// different tag has no known value; it counts as holding, so an unrelated
+/// operand never decides the guard on its own.
+fn chain_holds(operands: &[NumOperand], ops: &[CmpOp], tag: &str, x: f64) -> bool {
+    let value = |o: &NumOperand| match o {
+        NumOperand::Number(n) => Some(*n),
+        NumOperand::Tag(t) => (t == tag).then_some(x),
+    };
+    ops.iter().enumerate().all(|(i, op)| {
+        match (value(&operands[i]), value(&operands[i + 1])) {
+            (Some(a), Some(b)) => match op {
+                CmpOp::Lt => a < b,
+                CmpOp::Le => a <= b,
+                CmpOp::Eq => a == b,
+                CmpOp::Ne => a != b,
+                CmpOp::Ge => a >= b,
+                CmpOp::Gt => a > b,
+            },
+            _ => true,
+        }
     })
 }
 
@@ -99,6 +169,10 @@ impl Compiler {
                 }
             }
             Node::Numeric { operands, ops } => {
+                let guard = zero_guard(operands, ops);
+                if let Some(g) = guard {
+                    self.sql.push_str(&format!("({g} AND "));
+                }
                 self.sql.push('(');
                 for (i, op) in ops.iter().enumerate() {
                     if i > 0 {
@@ -116,6 +190,9 @@ impl Compiler {
                     self.num_operand(&operands[i + 1]);
                 }
                 self.sql.push(')');
+                if guard.is_some() {
+                    self.sql.push(')');
+                }
             }
         }
     }

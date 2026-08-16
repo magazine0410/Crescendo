@@ -8,7 +8,11 @@
 //!   case-sensitive)
 //! - regex: `album=/shadow/`, `/Boa/c` (case-insensitive unless `c`)
 //! - boolean: `&(a, b)`, `|(a, b)`, `!term`, value lists `genre=|(jazz, soul)`
-//! - numeric: `#(year >= 1990)`, `#(10 <= track < 100)`, `#(length > 2:00)`
+//! - numeric: `#(year >= 1990)`, `#(10 <= track < 100)`, `#(length > 2:00)`,
+//!   or without the `#( )` wrapper: `plays>2`, `year>=1990`
+//! - plays: `plays>2` / `plays=3` / `plays<3` over the per-track play counter.
+//!   Zero means "never played", so a comparison hides those rows unless the
+//!   query names 0 (`plays=0`).
 
 mod parser;
 mod sql;

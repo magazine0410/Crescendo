@@ -112,6 +112,59 @@ fn numeric_and_time() {
 }
 
 #[test]
+fn bare_comparison_without_the_hash_wrapper() {
+    let (_d, db) = test_db();
+    assert_eq!(count(&db, "year>=2000"), 2);
+    assert_eq!(count(&db, "year >= 2000"), 2);
+    assert_eq!(count(&db, "1980<=year<2000"), 1);
+    assert_eq!(count(&db, "track=1"), 2); // numeric tag never matches as text
+    assert_eq!(count(&db, "year!=1950"), 3);
+    // '<' and '>' after anything else are ordinary free-text characters.
+    assert_eq!(count(&db, "bird>man"), 0);
+    assert_eq!(search::validate("bird>man"), None);
+}
+
+#[test]
+fn play_counts() {
+    let (_d, db) = test_db();
+    let id_of = |title: &str| -> i64 {
+        db.with(|c| Ok(c.query_row("SELECT id FROM tracks WHERE title = ?1", [title], |r| r.get(0))?))
+            .unwrap()
+    };
+    // 3 plays, 2 plays, 1 play, and one track that was never played.
+    for _ in 0..3 {
+        db.record_play(id_of("Now's The Time")).unwrap();
+    }
+    for _ in 0..2 {
+        db.record_play(id_of("Bird Man")).unwrap();
+    }
+    db.record_play(id_of("Misery")).unwrap();
+
+    assert_eq!(count(&db, "plays=3"), 1);
+    assert_eq!(count(&db, "plays>2"), 1);
+    assert_eq!(count(&db, "plays>=2"), 2);
+    assert_eq!(count(&db, "playcount>2"), 1); // alias
+    assert_eq!(count(&db, "#(plays > 2)"), 1); // the #( ) form still works
+
+    // "Under N" holds back the never-played tracks — they are not low counts,
+    // they are no count at all.
+    assert_eq!(count(&db, "plays<3"), 2);
+    assert_eq!(count(&db, "plays<=2"), 2);
+    assert_eq!(count(&db, "plays!=3"), 2);
+    assert_eq!(count(&db, "1<=plays<3"), 2);
+
+    // Naming 0 asks for them on purpose.
+    assert_eq!(count(&db, "plays=0"), 1);
+    assert_eq!(count(&db, "plays<1"), 1);
+    assert_eq!(count(&db, "!plays>0"), 1);
+    assert_eq!(count(&db, "plays>0"), 3);
+
+    // Combines with the rest of the syntax.
+    assert_eq!(count(&db, "&(plays>0, genre=jazz)"), 1);
+    assert_eq!(count(&db, "plays>1 artist=parker"), 1);
+}
+
+#[test]
 fn regex_match() {
     let (_d, db) = test_db();
     assert_eq!(count(&db, "album=/essential/"), 1); // default case-insensitive
@@ -169,7 +222,10 @@ fn classify_tints_queries() {
     assert_eq!(search::classify("artist=parker"), QueryKind::Syntax);
     assert_eq!(search::classify("!ambient"), QueryKind::Syntax);
     assert_eq!(search::classify("|(a, b)"), QueryKind::Syntax);
+    assert_eq!(search::classify("plays>2"), QueryKind::Syntax);
+    assert_eq!(search::classify("bird>man"), QueryKind::Plain); // free text, not a comparison
     assert_eq!(search::classify("#(year <)"), QueryKind::Invalid);
+    assert_eq!(search::classify("plays>"), QueryKind::Invalid);
     assert_eq!(search::classify("artist=\"oops"), QueryKind::Invalid);
 }
 
