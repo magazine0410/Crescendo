@@ -5,7 +5,6 @@
   import { call, type Track } from "$lib/api";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
-  import { ui } from "$lib/stores/ui.svelte";
   import {
     displayName,
     durationBucketLabel,
@@ -83,7 +82,7 @@
 </script>
 
 <div class="valuelist">
-  <VirtualList {count} itemHeight={26} padBottom={ui.bottombarH} row={rowSnippet} />
+  <VirtualList {count} itemHeight={26} row={rowSnippet} />
 </div>
 
 {#snippet rowSnippet(i: number)}
@@ -126,6 +125,9 @@
     background: var(--bg-panel);
     border-right: 1px solid var(--sidesline);
     overflow: hidden;
+    /* Stop the scroll viewport at the top edge of the bottom bar (as the track
+       list and the album wall do), so the scroll thumb never goes under it. */
+    padding-bottom: var(--bottombar-h);
   }
   .row {
     display: flex;

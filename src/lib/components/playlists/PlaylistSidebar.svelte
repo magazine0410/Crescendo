@@ -521,8 +521,13 @@
   }
   .items {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding-bottom: var(--bottombar-h);
+    /* Margin, not padding: it shortens the scroll box itself, so the scroll
+       thumb stops at the top edge of the bottom bar instead of running under
+       it. The gap shows the sidebar's own background, so nothing changes
+       visually. */
+    margin-bottom: var(--bottombar-h);
   }
   .item {
     display: flex;

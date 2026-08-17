@@ -3,7 +3,6 @@
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
-  import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, type Track } from "$lib/api";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist, playsText } from "$lib/format";
@@ -27,7 +26,7 @@
 </script>
 
 {#if album}
-  <div class="detail" style:padding-bottom={`${ui.bottombarH + 10}px`}>
+  <div class="detail">
     <button class="back" onclick={() => library.selectAlbum(null)}>
       {prefs.values.library_view === "track_list" ? "‹ Back" : "‹ Albums"}
     </button>
@@ -87,9 +86,12 @@
   .detail {
     flex: 1;
     min-width: 0;
-    height: 100%;
     overflow-y: auto;
     padding: 14px 20px;
+    /* Margin, not padding — and no height: 100%, so the flex row stretches this
+       to the space that is left. The scroll box then ends at the top edge of
+       the bottom bar and its thumb never goes under it. */
+    margin-bottom: var(--bottombar-h);
   }
   .back {
     color: var(--txt-faded);
