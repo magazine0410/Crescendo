@@ -8,7 +8,7 @@ description = "Library, scanner, search and metadata core for Crescendo (no UI d
 name = "crescendo_core"
 
 [dependencies]
-rusqlite = { version = "0.32", features = ["bundled", "functions"] }
+rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 lofty = "0.22"
 walkdir = "2"
 crossbeam-channel = "0.5"
