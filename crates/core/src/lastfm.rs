@@ -96,14 +96,16 @@ pub fn test_key(api_key: &str) -> Result<bool> {
         .query("artist", "cher")
         .query("api_key", api_key)
         .query("format", "json")
-        .timeout(std::time::Duration::from_secs(10))
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .build()
         .call();
     match resp {
-        Ok(r) => {
-            let json: Value = r.into_json()?;
+        Ok(mut r) => {
+            let json: Value = r.body_mut().read_json()?;
             Ok(json.get("error").is_none())
         }
-        Err(ureq::Error::Status(_, _)) => Ok(false),
+        Err(ureq::Error::StatusCode(_)) => Ok(false),
         Err(e) => Err(e.into()),
     }
 }
@@ -120,13 +122,15 @@ fn cached_or_fetch(
     let mut req = ureq::get(API_ROOT)
         .query("api_key", api_key)
         .query("format", "json")
-        .timeout(std::time::Duration::from_secs(15));
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(15)))
+        .build();
     for (k, v) in params {
         req = req.query(k, v);
     }
-    let resp = match req.call() {
+    let mut resp = match req.call() {
         Ok(r) => r,
-        Err(ureq::Error::Status(code, _)) => {
+        Err(ureq::Error::StatusCode(code)) => {
             log::warn!("last.fm returned HTTP {code} for {cache_key}");
             return Ok(None);
         }
@@ -135,7 +139,7 @@ fn cached_or_fetch(
             return Ok(None);
         }
     };
-    let json: Value = resp.into_json()?;
+    let json: Value = resp.body_mut().read_json()?;
     if json.get("error").is_some() {
         // Cache "no result" too, so unknown artists don't re-query for a month.
         db.lastfm_cache_put(cache_key, "null")?;

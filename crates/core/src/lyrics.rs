@@ -399,11 +399,13 @@ fn thwiki_lyrics(track: &Track) -> OnlineResult {
     for query in queries {
         let url = format!("{THWIKI_ROOT}{}.lrc", percent_encode(query));
         let raw = match ureq::get(&url)
-            .set("User-Agent", USER_AGENT)
-            .timeout(std::time::Duration::from_secs(15))
+            .header("User-Agent", USER_AGENT)
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(15)))
+            .build()
             .call()
         {
-            Ok(r) => match r.into_string() {
+            Ok(mut r) => match r.body_mut().read_to_string() {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!("LyricsTouHou returned unreadable text ({query}): {e}");
@@ -411,7 +413,7 @@ fn thwiki_lyrics(track: &Track) -> OnlineResult {
                     continue;
                 }
             },
-            Err(ureq::Error::Status(404, _)) => continue,
+            Err(ureq::Error::StatusCode(404)) => continue,
             Err(e) => {
                 log::warn!("LyricsTouHou request failed ({query}): {e}");
                 any_failed = true;
@@ -517,17 +519,19 @@ fn lrclib_lyrics(track: &Track) -> OnlineResult {
         .query("artist_name", artist)
         .query("album_name", track.album.as_deref().unwrap_or(""))
         .query("duration", &(track.duration_ms / 1000).to_string())
-        .set("User-Agent", USER_AGENT)
-        .timeout(std::time::Duration::from_secs(15));
+        .header("User-Agent", USER_AGENT)
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(15)))
+        .build();
     let json: Value = match req.call() {
-        Ok(r) => match r.into_json() {
+        Ok(mut r) => match r.body_mut().read_json() {
             Ok(v) => v,
             Err(e) => {
                 log::warn!("LRCLIB returned unreadable JSON: {e}");
                 return OnlineResult::Failed;
             }
         },
-        Err(ureq::Error::Status(404, _)) => return OnlineResult::NotFound,
+        Err(ureq::Error::StatusCode(404)) => return OnlineResult::NotFound,
         Err(e) => {
             log::warn!("LRCLIB request failed: {e}");
             return OnlineResult::Failed;
@@ -563,20 +567,22 @@ enum Fetch {
 
 fn vocadb_get(root: &str, path: &str, query: &[(&str, &str)]) -> Fetch {
     let mut req = ureq::get(&format!("{root}{path}"))
-        .set("User-Agent", USER_AGENT)
-        .timeout(std::time::Duration::from_secs(15));
+        .header("User-Agent", USER_AGENT)
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(15)))
+        .build();
     for (k, v) in query {
         req = req.query(k, v);
     }
     match req.call() {
-        Ok(r) => match r.into_json() {
+        Ok(mut r) => match r.body_mut().read_json() {
             Ok(v) => Fetch::Ok(v),
             Err(e) => {
                 log::warn!("{root}{path} returned unreadable JSON: {e}");
                 Fetch::Failed
             }
         },
-        Err(ureq::Error::Status(404, _)) => Fetch::NotFound,
+        Err(ureq::Error::StatusCode(404)) => Fetch::NotFound,
         Err(e) => {
             log::warn!("{root}{path} request failed: {e}");
             Fetch::Failed
