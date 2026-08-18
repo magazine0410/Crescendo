@@ -252,21 +252,14 @@ fn embedded_lyrics(audio_path: &str) -> Option<String> {
         .read()
         .ok()?;
     let tag = file.primary_tag().or_else(|| file.first_tag())?;
-    if let Some(s) = tag.get_string(&ItemKey::Lyrics) {
+    if let Some(s) = tag.get_string(ItemKey::Lyrics) {
         return non_empty(s);
     }
-    // foobar2000 writes unsynced lyrics to a Vorbis `UNSYNCEDLYRICS` field,
-    // which lofty has no ItemKey for, so it comes back as an unknown key.
-    for item in tag.items() {
-        if let ItemKey::Unknown(key) = item.key() {
-            if key.eq_ignore_ascii_case("UNSYNCEDLYRICS") {
-                if let Some(s) = item.value().text() {
-                    return non_empty(s);
-                }
-            }
-        }
-    }
-    None
+    // foobar2000 writes unsynced lyrics to a Vorbis `UNSYNCEDLYRICS` field.
+    // lofty 0.25 maps that key (and ID3v2's `USLT`) to `UnsyncLyrics`, so this
+    // no longer needs to walk the items looking for an unknown key — and it now
+    // also reaches unsynced lyrics in ID3v2, which has no `ItemKey::Lyrics`.
+    tag.get_string(ItemKey::UnsyncLyrics).and_then(non_empty)
 }
 
 fn non_empty(s: &str) -> Option<String> {

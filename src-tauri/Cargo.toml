@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
-lofty = "0.22"
+lofty = "0.25"
 
 [dependencies]
 crescendo-core = { path = "../crates/core" }

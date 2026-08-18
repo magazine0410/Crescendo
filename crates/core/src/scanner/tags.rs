@@ -63,23 +63,29 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
         meta.artist = tag.artist().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         meta.album = tag.album().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         meta.genre = tag.genre().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        meta.albumartist = get_str(tag, &ItemKey::AlbumArtist);
-        meta.titlesort = get_str(tag, &ItemKey::TrackTitleSortOrder);
-        meta.artistsort = get_str(tag, &ItemKey::TrackArtistSortOrder);
-        meta.albumartistsort = get_str(tag, &ItemKey::AlbumArtistSortOrder);
-        meta.grouping = get_str(tag, &ItemKey::ContentGroup);
+        meta.albumartist = get_str(tag, ItemKey::AlbumArtist);
+        meta.titlesort = get_str(tag, ItemKey::TrackTitleSortOrder);
+        meta.artistsort = get_str(tag, ItemKey::TrackArtistSortOrder);
+        meta.albumartistsort = get_str(tag, ItemKey::AlbumArtistSortOrder);
+        meta.grouping = get_str(tag, ItemKey::ContentGroup);
         meta.track_no = tag.track().map(|n| n as i64).or_else(|| {
-            get_str(tag, &ItemKey::TrackNumber).and_then(|s| leading_int(&s))
+            get_str(tag, ItemKey::TrackNumber).and_then(|s| leading_int(&s))
         });
         meta.disc_no = tag.disk().map(|n| n as i64).or_else(|| {
-            get_str(tag, &ItemKey::DiscNumber).and_then(|s| leading_int(&s))
+            get_str(tag, ItemKey::DiscNumber).and_then(|s| leading_int(&s))
         });
-        meta.date = get_str(tag, &ItemKey::RecordingDate)
-            .or_else(|| get_str(tag, &ItemKey::Year))
-            .or_else(|| get_str(tag, &ItemKey::OriginalReleaseDate));
-        meta.year = tag.year().map(|y| y as i64).or_else(|| {
-            meta.date.as_deref().and_then(year_from_date)
-        });
+        meta.date = get_str(tag, ItemKey::RecordingDate)
+            .or_else(|| get_str(tag, ItemKey::Year))
+            .or_else(|| get_str(tag, ItemKey::OriginalReleaseDate));
+        // lofty 0.25 removed `Accessor::year`. Its replacement, `date`, reads
+        // RecordingDate *before* Year — the reverse of the old `year` — so a
+        // file carrying both (a reissue `DATE=2020-09-11` alongside
+        // `YEAR=2017`) would silently change year. Keep the original
+        // precedence rather than inherit the new one.
+        meta.year = get_str(tag, ItemKey::Year)
+            .or_else(|| get_str(tag, ItemKey::RecordingDate))
+            .and_then(|s| year_from_date(&s))
+            .or_else(|| meta.date.as_deref().and_then(year_from_date));
         meta.has_embedded_art = !tag.pictures().is_empty();
     }
 
@@ -93,7 +99,7 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
     Ok(meta)
 }
 
-fn get_str(tag: &lofty::tag::Tag, key: &ItemKey) -> Option<String> {
+fn get_str(tag: &lofty::tag::Tag, key: ItemKey) -> Option<String> {
     tag.get_string(key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 

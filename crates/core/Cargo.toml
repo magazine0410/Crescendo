@@ -9,7 +9,7 @@ name = "crescendo_core"
 
 [dependencies]
 rusqlite = { version = "0.40", features = ["bundled", "functions"] }
-lofty = "0.22"
+lofty = "0.25"
 walkdir = "2"
 crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
