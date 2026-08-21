@@ -22,6 +22,9 @@ export interface Prefs {
       contains CJK text renders (see format.ts). Off shows the original tags. */
   prefer_romanized: boolean;
   titlebar_format: string;
+  /** Optional second line in the transport bar (same %tag% syntax).
+      Blank preserves the single-line transport layout. */
+  titlebar_format_2: string;
   track_detail_format: string;
   /** Optional smaller second line under track_detail (same %tag% syntax).
       Blank = single-line rows, unchanged from before. */
@@ -62,6 +65,7 @@ const DEFAULTS: Prefs = {
   lyrics_online: true,
   prefer_romanized: true,
   titlebar_format: "%albumartist% - %title%",
+  titlebar_format_2: "",
   track_detail_format: "",
   track_detail_format_2: "",
   scan_threads: 4,
@@ -102,7 +106,12 @@ class PrefsStore {
     if (raw.prefer_romanized) v.prefer_romanized = raw.prefer_romanized === "true";
     // %title_display% and friends became the prefer_romanized toggle: fold any
     // stored pattern back onto the plain tags, which now follow that toggle.
-    for (const key of ["titlebar_format", "track_detail_format", "track_detail_format_2"] as const) {
+    for (const key of [
+      "titlebar_format",
+      "titlebar_format_2",
+      "track_detail_format",
+      "track_detail_format_2",
+    ] as const) {
       if (!raw[key]) continue;
       const folded = foldDisplayTags(raw[key]);
       v[key] = folded;

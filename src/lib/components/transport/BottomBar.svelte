@@ -10,6 +10,12 @@
   import SpriteButton from "../common/SpriteButton.svelte";
 
   const titleLine = $derived(formatTitle(prefs.values.titlebar_format, player.track));
+  const titleLine2 = $derived(formatTitle(prefs.values.titlebar_format_2, player.track));
+  const useSecondTitle = $derived(!!player.track && prefs.values.titlebar_format_2.trim() !== "");
+
+  // The upper half ends where the seek row begins. At 84px it can hold the
+  // padded primary line, the smaller second line, and clearance above seek.
+  const showSecondTitle = $derived(useSecondTitle && !!titleLine2 && ui.bottombarH >= 84);
 
   const repeatIcon = $derived(
     player.repeat === "off" ? "repeat" : player.repeat === "all" ? "repeat_all" : "repeat_track",
@@ -57,8 +63,13 @@
     <TransportButtons />
   </div>
   <div class="center">
-    <div class="title" class:placeholder={!player.track} class:error={!!player.error}>
-      {player.error ? `Playback unavailable: ${player.error}` : player.track ? titleLine : "Nothing played"}
+    <div class="titleblock" class:with-second={useSecondTitle}>
+      <div class="title" class:placeholder={!player.track} class:error={!!player.error}>
+        {player.error ? `Playback unavailable: ${player.error}` : player.track ? titleLine : "Nothing played"}
+      </div>
+      {#if showSecondTitle}
+        <div class="title2">{titleLine2}</div>
+      {/if}
     </div>
     <div class="seekrow">
       <button
@@ -123,22 +134,30 @@
     padding: 0 10px 0 14px;
   }
   .center {
+    position: relative;
+    align-self: stretch;
     flex: 1;
     min-width: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 5px;
-    padding: 0 14px;
+  }
+  .titleblock {
+    position: absolute;
+    top: 25%;
+    left: 14px;
+    right: 14px;
+    transform: translateY(-50%);
+    text-align: center;
+    min-width: 0;
+  }
+  .titleblock.with-second {
+    top: 8px;
+    transform: none;
   }
   .title {
-    text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     font-weight: 350;
     color: var(--txt);
-    transform: translateY(-2px);
   }
   .title.placeholder {
     color: var(--txt-faded);
@@ -146,7 +165,20 @@
   .title.error {
     color: #d97777;
   }
+  .title2 {
+    margin-top: 2px;
+    color: var(--txt-faded);
+    font-size: 10px;
+    line-height: 1.1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .seekrow {
+    position: absolute;
+    top: 50%;
+    left: 14px;
+    right: 14px;
     display: flex;
     align-items: center;
     gap: 10px;

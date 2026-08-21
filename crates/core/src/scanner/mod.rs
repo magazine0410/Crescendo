@@ -139,12 +139,25 @@ impl Counters<'_> {
 
 /// Run a scan. `progress` is called from the writer thread every few hundred
 /// files and once at the end with `done = true`.
+///
+/// The scan stops with an error if the root is unreachable or holds no audio
+/// files while the library holds some. On a network share (an unmounted NAS, a
+/// share that dropped) the walk would otherwise find nothing and the sweep at
+/// the end would mark every track `missing = 1` — which reads as an empty
+/// library, because all views filter on `missing = 0`.
 pub fn scan(
     db: &Db,
     opts: &ScanOptions,
     progress: &(dyn Fn(ScanProgress) + Sync),
     cancel: &AtomicBool,
 ) -> Result<ScanProgress> {
+    if !opts.root.is_dir() {
+        anyhow::bail!(
+            "music folder not found: {} (if it is on a network drive, mount it and try again)",
+            opts.root.display()
+        );
+    }
+
     let conn = db.side_connection()?;
 
     // Known files: path -> (mtime, size). Entries still present when the walk
@@ -199,6 +212,18 @@ pub fn scan(
 
         Ok(walker.join().expect("walker thread panicked"))
     })?;
+
+    // A root that is present but empty gets the same treatment as a missing
+    // one: an empty mount point is what a failed mount looks like.
+    let seen = scanned.load(Ordering::Relaxed);
+    if !cancel.load(Ordering::Relaxed) && seen == 0 && !leftover.is_empty() {
+        anyhow::bail!(
+            "music folder {} holds no audio files, but the library holds {}; \
+             the library was left unchanged",
+            opts.root.display(),
+            leftover.len()
+        );
+    }
 
     // Anything left in `known` was not seen on disk.
     let mut removed = 0u64;

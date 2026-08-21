@@ -159,7 +159,6 @@
 
 {#if !track}
   <div class="nothing">
-    <img src="/eole/controls/nothing_played.png" alt="" />
     <p>Nothing played</p>
   </div>
 {:else}
@@ -278,10 +277,6 @@
     justify-content: center;
     gap: 12px;
     color: var(--txt-faded);
-  }
-  .nothing img {
-    height: 46px;
-    opacity: 0.4;
   }
   .np {
     height: 100%;

@@ -245,7 +245,7 @@
           its "Original title" row. Turn this off to always show the original tags.
         </p>
 
-        <label for="fmt">Now-playing title format</label>
+        <label for="fmt">Now-playing format</label>
         <input
           id="fmt"
           type="text"
@@ -258,6 +258,19 @@
           albumartistsort. The three *sort tags print the file's sort tag exactly as
           stored — the tick box does not change them, and they show nothing on tracks
           without one. [brackets] render only when every tag inside resolves.
+        </p>
+
+        <label for="fmt2">Now-playing format 2</label>
+        <input
+          id="fmt2"
+          type="text"
+          value={prefs.values.titlebar_format_2}
+          onchange={(e) => prefs.set("titlebar_format_2", e.currentTarget.value)}
+        />
+        <p class="hint">
+          An optional smaller second line in the transport bar, using the same
+          %tag% placeholders and [bracket] rules. Leave blank to keep the current
+          single-line layout. It appears when the transport bar is tall enough.
         </p>
 
         <label for="rowfmt">Track detail (shown left of the duration)</label>

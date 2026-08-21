@@ -21,6 +21,12 @@
     player.setVolume(player.volume + step);
   }
 
+  function openVolume(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    open = true;
+  }
+
   function volFromEvent(e: PointerEvent): number {
     if (!sliderEl) return player.volume;
     const r = sliderEl.getBoundingClientRect();
@@ -51,9 +57,10 @@
   <SpriteButton
     {icon}
     size={26}
-    title={`Volume ${Math.round(player.volume * 100)}%`}
-    onclick={() => (open = !open)}
+    title={`${player.muted ? "Unmute" : "Mute"} (right-click for volume)`}
+    onclick={() => player.toggleMute()}
     onwheel={onWheel}
+    oncontextmenu={openVolume}
   />
   {#if open}
     <div class="popover" onwheel={onWheel}>
