@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -35,6 +35,13 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
               albumartistsort TEXT,
               genre        TEXT,
               grouping     TEXT,
+              composer     TEXT,
+              arranger     TEXT,
+              lyricist     TEXT,
+              vocalist     TEXT,
+              catalognumber TEXT,
+              event        TEXT,
+              bpm          INTEGER,
               track_no     INTEGER,
               disc_no      INTEGER,
               year         INTEGER,
@@ -185,6 +192,22 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
              CREATE INDEX IF NOT EXISTS idx_play_history_at    ON play_history(played_at);
              CREATE INDEX IF NOT EXISTS idx_play_history_date  ON play_history(year, month, day);
              ALTER TABLE tracks ADD COLUMN last_played INTEGER;",
+        )?;
+    }
+    if version < 7 && version >= 1 {
+        // v7: credit and release tags the scanner previously read past
+        // (COMPOSER/ARRANGER/LYRICIST/VOCALIST/CATALOGNUMBER/EVENT/BPM). Fresh
+        // databases get them from the CREATE block above. Existing rows stay
+        // NULL until a *full* rescan re-reads their tags — an incremental scan
+        // skips files whose mtime and size are unchanged, which is all of them.
+        tx.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN composer TEXT;
+             ALTER TABLE tracks ADD COLUMN arranger TEXT;
+             ALTER TABLE tracks ADD COLUMN lyricist TEXT;
+             ALTER TABLE tracks ADD COLUMN vocalist TEXT;
+             ALTER TABLE tracks ADD COLUMN catalognumber TEXT;
+             ALTER TABLE tracks ADD COLUMN event TEXT;
+             ALTER TABLE tracks ADD COLUMN bpm INTEGER;",
         )?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

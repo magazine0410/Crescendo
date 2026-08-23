@@ -9,7 +9,8 @@ use rusqlite::{params_from_iter, types::Value, Connection, Row};
 pub const TRACK_COLS: &str = "id, path, title, artist, album, albumartist, titlesort, \
                               artistsort, albumartistsort, genre, grouping, \
                               track_no, disc_no, year, duration_ms, format, album_id, rating, \
-                              play_count, missing";
+                              play_count, missing, composer, arranger, lyricist, vocalist, \
+                              catalognumber, event, bpm";
 
 /// Stable order used everywhere a "whole library" listing appears.
 pub const LIBRARY_SORT: &str = "albumartist COLLATE NOCASE, year, album COLLATE NOCASE, \
@@ -97,6 +98,13 @@ pub fn track_from_row(r: &Row) -> rusqlite::Result<Track> {
         rating: r.get(17)?,
         play_count: r.get(18)?,
         missing: r.get::<_, i64>(19)? != 0,
+        composer: r.get(20)?,
+        arranger: r.get(21)?,
+        lyricist: r.get(22)?,
+        vocalist: r.get(23)?,
+        catalognumber: r.get(24)?,
+        event: r.get(25)?,
+        bpm: r.get(26)?,
     })
 }
 

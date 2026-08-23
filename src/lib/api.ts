@@ -22,6 +22,13 @@ export interface Track {
   albumartistsort: string | null;
   genre: string | null;
   grouping: string | null;
+  composer: string | null;
+  arranger: string | null;
+  lyricist: string | null;
+  vocalist: string | null;
+  catalognumber: string | null;
+  event: string | null;
+  bpm: number | null;
   track_no: number | null;
   disc_no: number | null;
   year: number | null;

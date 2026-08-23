@@ -16,8 +16,9 @@
       album / albumartist are deliberately omitted (they're the four built-in tabs)
       but still work if typed in manually. */
   const TAGS = [
-    "bitdepth", "bitrate", "codec", "date", "disc", "duration",
-    "grouping", "lastplayed", "playcount", "rating", "samplerate", "track", "year",
+    "arranger", "bitdepth", "bitrate", "bpm", "catalognumber", "codec", "composer",
+    "date", "disc", "duration", "event", "grouping", "lastplayed", "lyricist",
+    "playcount", "rating", "samplerate", "track", "vocalist", "year",
   ];
 
   let value = $state("");

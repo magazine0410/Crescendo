@@ -131,7 +131,7 @@ fn unresolvable_custom_tag_yields_nothing() {
     let (_d, db) = make_db();
 
     // Unknown tag → empty value list …
-    assert!(db.browse_values(custom("composer"), None, false).unwrap().is_empty());
+    assert!(db.browse_values(custom("mood"), None, false).unwrap().is_empty());
     // … and selecting against it matches no tracks (the `AND 0` guard).
     assert_eq!(db.track_count(None, custom("nope"), &["x".into()], false).unwrap(), 0);
 }

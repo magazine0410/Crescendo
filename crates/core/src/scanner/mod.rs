@@ -28,10 +28,12 @@ pub(crate) const UPSERT_TRACK: &str = r#"
     INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms,
                        bitrate, sample_rate, bit_depth, title, artist, album,
                        albumartist, titlesort, artistsort, albumartistsort,
-                       genre, grouping, track_no, disc_no, year,
+                       genre, grouping, composer, arranger, lyricist, vocalist,
+                       catalognumber, event, bpm, track_no, disc_no, year,
                        date, has_embedded_art, search_blob, missing)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, 0)
+            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28,
+            ?29, ?30, ?31, ?32, 0)
     ON CONFLICT(path) DO UPDATE SET
         dir = excluded.dir, filename = excluded.filename,
         mtime = excluded.mtime, size = excluded.size,
@@ -42,7 +44,11 @@ pub(crate) const UPSERT_TRACK: &str = r#"
         albumartist = excluded.albumartist,
         titlesort = excluded.titlesort, artistsort = excluded.artistsort,
         albumartistsort = excluded.albumartistsort, genre = excluded.genre,
-        grouping = excluded.grouping, track_no = excluded.track_no,
+        grouping = excluded.grouping, composer = excluded.composer,
+        arranger = excluded.arranger, lyricist = excluded.lyricist,
+        vocalist = excluded.vocalist,
+        catalognumber = excluded.catalognumber, event = excluded.event,
+        bpm = excluded.bpm, track_no = excluded.track_no,
         disc_no = excluded.disc_no, year = excluded.year,
         date = excluded.date, has_embedded_art = excluded.has_embedded_art,
         search_blob = excluded.search_blob, missing = 0
@@ -79,6 +85,13 @@ pub(crate) fn upsert_row(
         meta.albumartistsort,
         meta.genre,
         meta.grouping,
+        meta.composer,
+        meta.arranger,
+        meta.lyricist,
+        meta.vocalist,
+        meta.catalognumber,
+        meta.event,
+        meta.bpm,
         meta.track_no,
         meta.disc_no,
         meta.year,

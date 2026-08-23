@@ -146,6 +146,15 @@ const TAG_GETTERS: Record<string, (t: Track) => string | number | null> = {
   album: (t) => t.album,
   genre: (t) => t.genre,
   grouping: (t) => t.grouping,
+  // Credit tags carry no sort variant of their own, so they render as tagged
+  // even when the value is CJK.
+  composer: (t) => t.composer,
+  arranger: (t) => t.arranger,
+  lyricist: (t) => t.lyricist,
+  vocalist: (t) => t.vocalist,
+  catalognumber: (t) => t.catalognumber,
+  event: (t) => t.event,
+  bpm: (t) => t.bpm,
   tracknumber: (t) => t.track_no,
   discnumber: (t) => t.disc_no,
   year: (t) => t.year,

@@ -1,6 +1,12 @@
 use anyhow::Result;
-use lofty::file::{FileType, TaggedFileExt};
+use lofty::config::ParseOptions;
+use lofty::file::{FileType, TaggedFile, TaggedFileExt};
+use lofty::flac::FlacFile;
+use lofty::ogg::tag::VorbisComments;
+use lofty::ogg::{OpusFile, SpeexFile, VorbisFile};
 use lofty::prelude::{Accessor, AudioFile, ItemKey};
+use lofty::probe::Probe;
+use std::io::{Read, Seek};
 use std::path::Path;
 
 #[derive(Debug, Default, Clone)]
@@ -19,6 +25,13 @@ pub struct TrackMeta {
     pub albumartistsort: Option<String>,
     pub genre: Option<String>,
     pub grouping: Option<String>,
+    pub composer: Option<String>,
+    pub arranger: Option<String>,
+    pub lyricist: Option<String>,
+    pub vocalist: Option<String>,
+    pub catalognumber: Option<String>,
+    pub event: Option<String>,
+    pub bpm: Option<i64>,
     pub track_no: Option<i64>,
     pub disc_no: Option<i64>,
     pub year: Option<i64>,
@@ -41,12 +54,70 @@ pub fn format_name(ft: FileType) -> &'static str {
     }
 }
 
+/// Tag values lofty's format-agnostic `Tag` cannot carry. Converting a
+/// format-specific tag to `Tag` drops every field without an `ItemKey`
+/// mapping, and neither `VOCALIST` nor `EVENT` — both conventions of the
+/// doujin releases this library is full of — has one. They are read straight
+/// off the concrete tag instead, which is why [`read_meta`] dispatches on the
+/// file type rather than going through `Probe::read`.
+#[derive(Debug, Default, Clone)]
+struct RawExtras {
+    vocalist: Option<String>,
+    event: Option<String>,
+}
+
+fn vorbis_extras(vc: &VorbisComments) -> RawExtras {
+    // VorbisComments::get matches the field name case-insensitively, as the
+    // spec requires — taggers write both `VOCALIST` and `vocalist`.
+    let get = |key: &str| vc.get(key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    RawExtras { vocalist: get("VOCALIST"), event: get("EVENT") }
+}
+
+/// Read the file, keeping the format-specific tag long enough to pull the
+/// fields `Tag` would discard. The Vorbis-comment formats are the ones that
+/// carry `VOCALIST`/`EVENT` in practice; everything else parses exactly as
+/// `Probe::read` would and simply has no extras.
+///
+/// The file type comes from the extension alone, as before — `Probe::read`
+/// never sniffed content either, so detection is unchanged.
+fn read_tagged<R: Read + Seek>(
+    reader: &mut R,
+    file_type: Option<FileType>,
+    opts: ParseOptions,
+) -> Result<(TaggedFile, RawExtras)> {
+    Ok(match file_type {
+        Some(FileType::Flac) => {
+            let f = FlacFile::read_from(reader, opts)?;
+            let extras = f.vorbis_comments().map(vorbis_extras).unwrap_or_default();
+            (f.into(), extras)
+        }
+        Some(FileType::Vorbis) => {
+            let f = VorbisFile::read_from(reader, opts)?;
+            let extras = vorbis_extras(f.vorbis_comments());
+            (f.into(), extras)
+        }
+        Some(FileType::Opus) => {
+            let f = OpusFile::read_from(reader, opts)?;
+            let extras = vorbis_extras(f.vorbis_comments());
+            (f.into(), extras)
+        }
+        Some(FileType::Speex) => {
+            let f = SpeexFile::read_from(reader, opts)?;
+            let extras = vorbis_extras(f.vorbis_comments());
+            (f.into(), extras)
+        }
+        Some(ft) => (Probe::with_file_type(reader, ft).options(opts).read()?, RawExtras::default()),
+        None => (Probe::new(reader).options(opts).read()?, RawExtras::default()),
+    })
+}
+
 pub fn read_meta(path: &Path) -> Result<TrackMeta> {
     // Relaxed parsing: skip malformed tag items (broken ID3 timestamps and
     // the like are common in the wild) instead of rejecting the whole file.
-    let file = lofty::probe::Probe::open(path)?
-        .options(lofty::config::ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed))
-        .read()?;
+    let opts = ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
+    let probe = Probe::open(path)?.options(opts);
+    let file_type = probe.file_type();
+    let (file, extras) = read_tagged(&mut probe.into_inner(), file_type, opts)?;
     let props = file.properties();
     let mut meta = TrackMeta {
         format: format_name(file.file_type()).to_string(),
@@ -68,6 +139,15 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
         meta.artistsort = get_str(tag, ItemKey::TrackArtistSortOrder);
         meta.albumartistsort = get_str(tag, ItemKey::AlbumArtistSortOrder);
         meta.grouping = get_str(tag, ItemKey::ContentGroup);
+        meta.composer = get_str(tag, ItemKey::Composer);
+        meta.arranger = get_str(tag, ItemKey::Arranger);
+        meta.lyricist = get_str(tag, ItemKey::Lyricist);
+        meta.catalognumber = get_str(tag, ItemKey::CatalogNumber);
+        // Vorbis writes BPM as free text, ID3v2's TBPM is the integer variant.
+        meta.bpm = get_str(tag, ItemKey::Bpm)
+            .or_else(|| get_str(tag, ItemKey::IntegerBpm))
+            .and_then(|s| leading_int(&s))
+            .filter(|n| *n > 0);
         meta.track_no = tag.track().map(|n| n as i64).or_else(|| {
             get_str(tag, ItemKey::TrackNumber).and_then(|s| leading_int(&s))
         });
@@ -88,6 +168,8 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
             .or_else(|| meta.date.as_deref().and_then(year_from_date));
         meta.has_embedded_art = !tag.pictures().is_empty();
     }
+    meta.vocalist = extras.vocalist;
+    meta.event = extras.event;
 
     // Untagged files still get a display title from the filename.
     if meta.title.is_none() {
@@ -160,10 +242,22 @@ pub fn search_blob(meta: &TrackMeta) -> String {
         &meta.artistsort,
         &meta.albumartistsort,
         &meta.genre,
+        &meta.composer,
+        &meta.arranger,
+        &meta.lyricist,
+        &meta.vocalist,
+        &meta.catalognumber,
+        &meta.event,
     ] {
+        // Credits repeat the artist constantly on doujin releases (arranger,
+        // vocalist and composer are often all the circle name), and the blob is
+        // scanned in full for every free-text query — so store each value once.
         if let Some(s) = part {
-            blob.push_str(&s.to_lowercase());
-            blob.push('\n');
+            let lower = s.to_lowercase();
+            if !blob.split('\n').any(|seen| seen == lower) {
+                blob.push_str(&lower);
+                blob.push('\n');
+            }
         }
     }
     blob
