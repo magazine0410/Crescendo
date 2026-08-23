@@ -189,6 +189,16 @@ function firstSeg(v: string): string {
   return (i >= 0 ? v.slice(0, i) : v).trim();
 }
 
+const CJK_RE = /[぀-ヿ㐀-䶿一-鿿豈-﫿ｦ-ﾟ가-힯]/;
+
+/** Fixed artist panels group by the label they show. When romanization is on,
+    distinct CJK tags sharing a sort tag therefore become one selectable row. */
+function artistBrowseKey(t: Track, mode: string, raw: string): string {
+  if (!preferRomanized || !CJK_RE.test(raw)) return raw;
+  const sort = mode === "artist" ? t.artistsort : t.albumartistsort;
+  return sort || raw;
+}
+
 /** The value a track buckets under. Collapses grouping to its primary theme when
     `collapse` is set (mirrors GROUPING_FIRST_SEG); routes custom modes through
     the resolved tag (unbrowsable tag → "", never selected in practice). */
@@ -199,6 +209,7 @@ function browseKey(t: Track, mode: WireMode, collapse: boolean): string {
     return mode.custom.trim().toLowerCase() === "grouping" && collapse ? firstSeg(v) : v;
   }
   const v = browseCol(t, mode);
+  if (mode === "artist" || mode === "albumartist") return artistBrowseKey(t, mode, v);
   return mode === "grouping" && collapse ? firstSeg(v) : v;
 }
 
@@ -299,13 +310,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       // Unresolvable custom tag → empty list (mirrors the backend).
       if (typeof mode === "object" && customField(mode.custom) === null) return [] as T;
       const counts = new Map<string, number>();
-      const sorts = new Map<string, string>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
         const v = browseKey(t, mode, collapse);
         counts.set(v, (counts.get(v) ?? 0) + 1);
-        if (mode === "artist" && t.artistsort) sorts.set(v, t.artistsort);
-        if (mode === "albumartist" && t.albumartistsort) sorts.set(v, t.albumartistsort);
       }
       // Duration buckets order numerically ("10" after "3") and play counts do
       // the same in reverse (most played first), like the backend.
@@ -314,15 +322,13 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       const numeric = ["duration", "length"].includes(tag);
       const descending = ["playcount", "play_count", "plays"].includes(tag);
       return [...counts.entries()]
-        .map(([v, n]): [string, number, string] => [v, n, sorts.get(v) ?? ""])
+        .map(([v, n]): [string, number, string] => [v, n, ""])
         .sort((a, b) =>
           numeric
             ? Number(a[0]) - Number(b[0])
             : descending
               ? Number(b[0]) - Number(a[0])
-              : preferRomanized
-                ? (a[2] || a[0]).localeCompare(b[2] || b[0])
-                : a[0].localeCompare(b[0]),
+              : a[0].localeCompare(b[0]),
         ) as T;
     }
     case "browse_albums": {

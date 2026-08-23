@@ -55,10 +55,54 @@ fn fixed_albumartist_uses_romanized_sort_values() {
         vals,
         vec![
             ("".into(), 1, "".into()),
-            ("上海アリス幻樂団".into(), 2, "Shanghai Alice".into()),
+            ("Shanghai Alice".into(), 2, "".into()),
             ("Zulu".into(), 1, "".into()),
         ],
     );
+}
+
+#[test]
+fn fixed_albumartist_merges_raw_names_that_render_as_the_same_name() {
+    let (_d, db) = make_db();
+    db.with(|conn| {
+        conn.execute(
+            "INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms,
+                                albumartist, albumartistsort)
+             VALUES ('/m/other.flac', '/m', 'other.flac', 0, 0, 'FLAC', 180000,
+                     '上海愛麗絲', 'Shanghai Alice')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms,
+                                albumartist)
+             VALUES ('/m/latin.flac', '/m', 'latin.flac', 0, 0, 'FLAC', 180000,
+                     'Shanghai Alice')",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    assert_eq!(
+        vals.iter().find(|(v, _, _)| v == "Shanghai Alice"),
+        Some(&("Shanghai Alice".into(), 4, "".into())),
+    );
+    assert_eq!(
+        db.track_count(None, BrowseMode::Albumartist, &["Shanghai Alice".into()], false)
+            .unwrap(),
+        4,
+        "selecting the merged row must include every raw albumartist"
+    );
+
+    let ctx = PlayContext::ValueTracks {
+        mode: BrowseMode::Albumartist,
+        values: vec!["Shanghai Alice".into()],
+        query: None,
+        collapse: false,
+        sort: None,
+    };
+    assert_eq!(db.resolve_context(&ctx).unwrap().len(), 4);
 }
 
 #[test]
@@ -66,17 +110,37 @@ fn prefer_romanized_off_orders_album_artists_by_the_shown_name() {
     let (_d, db) = make_db();
     db.prefs_set("prefer_romanized", "false").unwrap();
 
-    // The sort value still rides along for callers that want it, but the row
-    // order now follows the name on screen: 上海… falls after the Latin ones.
+    // Rows use and order by the untouched name: 上海… falls after the Latin ones.
     let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
     assert_eq!(
         vals,
         vec![
             ("".into(), 1, "".into()),
             ("Zulu".into(), 1, "".into()),
-            ("上海アリス幻樂団".into(), 2, "Shanghai Alice".into()),
+            ("上海アリス幻樂団".into(), 2, "".into()),
         ],
     );
+}
+
+#[test]
+fn latin_albumartist_is_ordered_by_its_visible_name_not_its_sort_tag() {
+    let (_d, db) = make_db();
+    db.with(|conn| {
+        conn.execute(
+            "INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms,
+                                albumartist, albumartistsort)
+             VALUES ('/m/ara.flac', '/m', 'ara.flac', 0, 0, 'FLAC', 180000,
+                     'ARA', 'CarrotWine.')",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    let ara = vals.iter().position(|(v, _, _)| v == "ARA").unwrap();
+    let shanghai = vals.iter().position(|(v, _, _)| v == "Shanghai Alice").unwrap();
+    assert!(ara < shanghai, "ARA is displayed and therefore sorted under A, not C");
 }
 
 #[test]

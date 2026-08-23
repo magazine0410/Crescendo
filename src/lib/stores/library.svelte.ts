@@ -426,6 +426,24 @@ class LibraryStore {
     }
   }
 
+  /** Reload after the romanized-display preference changes. Artist facet keys
+      can change from a merged sort name to several raw names (or vice versa),
+      so discard any selection that no longer identifies a visible row. */
+  async reloadRomanizedView() {
+    await this.loadValues();
+    const visible = new Set(this.values.map(([v]) => v));
+    const still = this.selectedValues.filter((v) => visible.has(v));
+    if (still.length !== this.selectedValues.length) {
+      this.selectedValues = still;
+      this.valueAnchor = null;
+      this.selectedAlbum = null;
+      this.albumTracks = [];
+    }
+    this.resetScroll();
+    await this.loadAlbums();
+    await this.reloadTrackView(prefs.values.track_separators);
+  }
+
   /** Plain click: select exactly this value (or "All" for null). */
   async selectValue(v: string | null) {
     this.valueAnchor = v;

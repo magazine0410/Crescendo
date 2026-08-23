@@ -20,9 +20,7 @@
       stored. */
   async function setPreferRomanized(on: boolean) {
     await prefs.set("prefer_romanized", on);
-    await library.loadValues();
-    await library.loadAlbums();
-    await library.reloadTrackView(prefs.values.track_separators);
+    await library.reloadRomanizedView();
   }
 
   /** Same shape as setPreferRomanized: lyrics_for_track reads the pref from

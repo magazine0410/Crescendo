@@ -176,6 +176,7 @@ fn push_values_clause(
     mode: &BrowseMode,
     values: &[String],
     collapse: bool,
+    romanized: bool,
 ) {
     if values.is_empty() {
         return;
@@ -186,6 +187,8 @@ fn push_values_clause(
         Some(DURATION_BUCKET.to_string())
     } else if mode.is_last_played() {
         Some(last_played_bucket())
+    } else if let Some(expr) = displayed_artist_expr(mode, romanized) {
+        Some(expr)
     } else {
         mode.column().map(col_expr)
     };
@@ -208,6 +211,32 @@ fn push_values_clause(
 /// the string-based value list and still compare equal to the selected value.
 fn col_expr(col: &str) -> String {
     format!("CAST(COALESCE({col}, '') AS TEXT)")
+}
+
+/// The key an Artist / Album artist row actually displays and filters by.
+/// Romanization is deliberately limited to names containing CJK, matching
+/// `format.ts`: Latin names may carry sort tags too, but the UI shows the raw
+/// name and must therefore also group and order by it. Returning this same
+/// expression from `browse_values` and using it in `push_values_clause` makes
+/// merged rows select every raw tag represented by their visible name.
+fn displayed_artist_expr(mode: &BrowseMode, romanized: bool) -> Option<String> {
+    let (name, sort) = match mode {
+        BrowseMode::Artist => ("artist", "artistsort"),
+        BrowseMode::Albumartist => ("albumartist", "albumartistsort"),
+        _ => return None,
+    };
+    Some(displayed_name_expr(name, sort, romanized))
+}
+
+fn displayed_name_expr(name: &str, sort: &str, romanized: bool) -> String {
+    let raw = col_expr(name);
+    if !romanized {
+        return raw;
+    }
+    format!(
+        "CASE WHEN NULLIF(COALESCE({sort}, ''), '') IS NOT NULL AND has_cjk({raw}) \
+              THEN {sort} ELSE {raw} END"
+    )
 }
 
 impl Db {
@@ -233,10 +262,10 @@ impl Db {
         })
     }
 
-    /// Distinct values for the Library tab's left column, with track counts
-    /// and (for artist/album-artist modes) the romanized sort value used for
-    /// ordering and display. NULL values group under "" (rendered as "?" by
-    /// the UI).
+    /// Distinct values for the Library tab's left column, with track counts.
+    /// Artist modes return the final visible label as the value, merging raw
+    /// CJK names that render through the same sort tag. NULL values group under
+    /// "" (rendered as "?" by the UI).
     pub fn browse_values(
         &self,
         mode: BrowseMode,
@@ -250,30 +279,15 @@ impl Db {
         };
         let (where_sql, params) = track_where(filter);
         let val = col_expr(col);
-        // Artist rows are ordered by the sort tag only while it is what they
-        // show; with the pref off they order by the name on screen.
-        let name_order = |sort_col: &str| {
-            if self.prefer_romanized() {
-                format!(
-                    "COALESCE(NULLIF(COALESCE(MAX({sort_col}), ''), ''), COALESCE({col}, ''))"
-                )
-            } else {
-                format!("COALESCE({col}, '')")
-            }
-        };
+        let romanized = self.prefer_romanized();
         let sql = match &mode {
-            BrowseMode::Artist => format!(
-                "SELECT COALESCE({col}, ''), COUNT(*), COALESCE(MAX(artistsort), '') \
-                 FROM tracks WHERE {where_sql} GROUP BY COALESCE({col}, '') \
-                 ORDER BY {} COLLATE NOCASE",
-                name_order("artistsort")
-            ),
-            BrowseMode::Albumartist => format!(
-                "SELECT COALESCE({col}, ''), COUNT(*), COALESCE(MAX(albumartistsort), '') \
-                 FROM tracks WHERE {where_sql} GROUP BY COALESCE({col}, '') \
-                 ORDER BY {} COLLATE NOCASE",
-                name_order("albumartistsort")
-            ),
+            BrowseMode::Artist | BrowseMode::Albumartist => {
+                let shown = displayed_artist_expr(&mode, romanized).expect("fixed artist mode");
+                format!(
+                    "SELECT {shown}, COUNT(*), '' FROM tracks WHERE {where_sql} \
+                     GROUP BY {shown} ORDER BY {shown} COLLATE NOCASE"
+                )
+            }
             // Collapse multi-theme grouping tags under their primary theme.
             _ if col == "grouping" && collapse => format!(
                 "SELECT {GROUPING_FIRST_SEG}, COUNT(*), '' FROM tracks WHERE {where_sql} \
@@ -322,13 +336,17 @@ impl Db {
         collapse: bool,
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
+        let romanized = self.prefer_romanized();
+        push_values_clause(
+            &mut where_sql,
+            &mut params,
+            &mode,
+            values,
+            collapse,
+            romanized,
+        );
         // Read before locking: `with` holds the connection mutex.
-        let artist_order = if self.prefer_romanized() {
-            "COALESCE(NULLIF(a.albumartist_sort, ''), a.albumartist)"
-        } else {
-            "a.albumartist"
-        };
+        let artist_order = displayed_name_expr("a.albumartist", "a.albumartist_sort", romanized);
         self.with(|conn| {
             let sql = format!(
                 "SELECT a.id, a.album, a.albumartist, a.albumartist_sort, a.year, a.genre, \
@@ -419,7 +437,14 @@ impl Db {
         collapse: bool,
     ) -> Result<i64> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
+        push_values_clause(
+            &mut where_sql,
+            &mut params,
+            &mode,
+            values,
+            collapse,
+            self.prefer_romanized(),
+        );
         self.with(|conn| {
             Ok(conn.query_row(
                 &format!("SELECT COUNT(*) FROM tracks WHERE {where_sql}"),
@@ -443,8 +468,9 @@ impl Db {
         limit: i64,
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
-        let order = order_sql(sort, self.prefer_romanized());
+        let romanized = self.prefer_romanized();
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse, romanized);
+        let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
                 "SELECT {TRACK_COLS} FROM tracks WHERE {where_sql} \
@@ -474,8 +500,9 @@ impl Db {
         track_id: i64,
     ) -> Result<Option<i64>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
-        let order = order_sql(sort, self.prefer_romanized());
+        let romanized = self.prefer_romanized();
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse, romanized);
+        let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
                 "SELECT rn FROM ( \
@@ -507,8 +534,9 @@ impl Db {
         sort: Option<TrackSort>,
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse);
-        let order = order_sql(sort, self.prefer_romanized());
+        let romanized = self.prefer_romanized();
+        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse, romanized);
+        let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
                 "WITH ordered AS ( \
@@ -595,8 +623,16 @@ impl Db {
             PlayContext::ValueTracks { mode, values, query, collapse, sort } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                push_values_clause(&mut where_sql, &mut params, mode, values, *collapse);
-                let order = order_sql(*sort, self.prefer_romanized());
+                let romanized = self.prefer_romanized();
+                push_values_clause(
+                    &mut where_sql,
+                    &mut params,
+                    mode,
+                    values,
+                    *collapse,
+                    romanized,
+                );
+                let order = order_sql(*sort, romanized);
                 self.with(|conn| {
                     collect_ids(
                         conn,

@@ -57,8 +57,9 @@ impl Db {
 
 /// Unicode-aware helpers SQLite lacks: `ulower(text)` supplies deterministic
 /// Unicode lowercasing for persisted identity keys, `ucontains(haystack,
-/// needle)` does a lowercased substring test, and `regexp(pattern, text)` backs
-/// the `tag=/re/` query syntax.
+/// needle)` does a lowercased substring test, `has_cjk(text)` mirrors the
+/// frontend's romanized-display rule, and `regexp(pattern, text)` backs the
+/// `tag=/re/` query syntax.
 fn register_udfs(conn: &Connection) -> Result<()> {
     use rusqlite::functions::FunctionFlags;
     use std::sync::Arc;
@@ -94,6 +95,30 @@ fn register_udfs(conn: &Connection) -> Result<()> {
                 }
                 _ => false,
             })
+        },
+    )?;
+
+    conn.create_scalar_function(
+        "has_cjk",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let value = ctx.get_raw(0).as_str_or_null().map_err(|e| {
+                rusqlite::Error::UserFunctionError(Box::new(e))
+            })?;
+            Ok(value.is_some_and(|s| {
+                s.chars().any(|c| {
+                    matches!(
+                        c,
+                        '\u{3040}'..='\u{30ff}'
+                            | '\u{3400}'..='\u{4dbf}'
+                            | '\u{4e00}'..='\u{9fff}'
+                            | '\u{f900}'..='\u{faff}'
+                            | '\u{ff66}'..='\u{ff9f}'
+                            | '\u{ac00}'..='\u{d7af}'
+                    )
+                })
+            }))
         },
     )?;
 
