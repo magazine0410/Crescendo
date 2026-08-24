@@ -183,6 +183,20 @@ export interface AboutInfo {
   dependencies: AboutDependency[];
 }
 
+export interface UpdateCheck {
+  current_version: string;
+  available: boolean;
+  latest_version: string | null;
+  release_notes: string | null;
+  package_name: string | null;
+  downloaded: boolean;
+}
+
+export interface UpdateInstallResult {
+  version: string;
+  package_removed: boolean;
+}
+
 export interface ProjectMPresetFile {
   id: string;
   name: string;

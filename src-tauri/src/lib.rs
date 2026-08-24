@@ -118,6 +118,8 @@ pub fn run() {
             commands::misc::autostart_set,
             commands::misc::open_cover_window,
             commands::misc::open_about_window,
+            commands::update::update_check,
+            commands::update::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -552,11 +552,26 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           { name: "Lofty", version: "0.22.4" },
           { name: "image", version: "0.25.10" },
           { name: "ureq", version: "2.12.1" },
+          { name: "SemVer", version: "1.0.28" },
+          { name: "SHA-2", version: "0.10.9" },
           { name: "walkdir", version: "2.5.0" },
           { name: "regex", version: "1.13.1" },
           { name: "Serde", version: "1.0.229" },
         ],
       } as T;
+    case "update_check":
+      return {
+        current_version: packageInfo.version,
+        available: true,
+        latest_version: "0.8.0",
+        release_notes:
+          "- Add: Example release notes for the browser preview.\n- Fix: Update packages are cached when installation is cancelled.",
+        package_name: "Crescendo_0.8.0_amd64.deb",
+        downloaded: false,
+      } as T;
+    case "update_install":
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return { version: args.version as string, package_removed: true } as T;
     case "player_set_spectrum_enabled":
       return undefined as T;
     // The projectM commands (player_set_projectm_enabled,

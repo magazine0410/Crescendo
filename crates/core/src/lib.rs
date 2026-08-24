@@ -8,5 +8,6 @@ pub mod model;
 pub mod playqueue;
 pub mod scanner;
 pub mod search;
+pub mod updater;
 
 pub use db::Db;

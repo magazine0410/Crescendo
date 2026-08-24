@@ -111,6 +111,14 @@ pub async fn about_info() -> AboutInfo {
                 version: env!("CRESCENDO_DEP_UREQ"),
             },
             AboutDependency {
+                name: "SemVer",
+                version: env!("CRESCENDO_DEP_SEMVER"),
+            },
+            AboutDependency {
+                name: "SHA-2",
+                version: env!("CRESCENDO_DEP_SHA2"),
+            },
+            AboutDependency {
                 name: "walkdir",
                 version: env!("CRESCENDO_DEP_WALKDIR"),
             },

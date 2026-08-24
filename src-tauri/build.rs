@@ -60,6 +60,8 @@ fn main() {
         ("CRESCENDO_DEP_LOFTY", "lofty"),
         ("CRESCENDO_DEP_IMAGE", "image"),
         ("CRESCENDO_DEP_UREQ", "ureq"),
+        ("CRESCENDO_DEP_SEMVER", "semver"),
+        ("CRESCENDO_DEP_SHA2", "sha2"),
         ("CRESCENDO_DEP_WALKDIR", "walkdir"),
         ("CRESCENDO_DEP_REGEX", "regex"),
         ("CRESCENDO_DEP_SERDE", "serde"),
