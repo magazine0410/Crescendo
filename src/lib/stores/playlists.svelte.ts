@@ -85,6 +85,13 @@ class PlaylistsStore {
   dropReport = $state<string | null>(null);
   /** Sidebar filter text; matches playlist names, case-insensitive. */
   filter = $state("");
+  /** One-shot intent: scroll the open playlist to whatever is playing now.
+      See LibraryStore.pendingJump — the two views hold one flag each, so a
+      jump asked for from the Now playing or Visualizer tab lands on whichever
+      of them is opened next. */
+  pendingJump = $state(false);
+  /** Viewport offset retained while an album is visited in another tab. */
+  viewScroll = $state(0);
   /** Named groups of playlists, in their stored order. */
   collections = $state<CollectionInfo[]>([]);
   /** Ignore list/track responses superseded by a newer event or selection. */

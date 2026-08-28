@@ -10,6 +10,10 @@
   import Icon from "../common/Icon.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import { openTrackInFileManagerItem } from "$lib/menu";
+  import { viewAlbum } from "$lib/navigate";
+  import { tick, untrack } from "svelte";
+
+  let list = $state<VirtualList | null>(null);
 
   const HEADER_H = 84;
   // Two-line track rows so the play counter can sit under the title.
@@ -172,9 +176,15 @@
   }
 
   function trackMenu(e: MouseEvent, r: TrackRow) {
+    const albumId = r.track.album_id;
     openContextMenu(e, [
       { label: "Play", action: () => playAt(r) },
       { label: "Add to queue", action: () => queue.add([r.track.id]) },
+      {
+        label: "View album",
+        disabled: albumId == null,
+        action: albumId == null ? undefined : () => viewAlbum(albumId),
+      },
       openTrackInFileManagerItem(r.track),
       { separator: true, label: "" },
       {
@@ -185,6 +195,20 @@
       },
     ]);
   }
+
+  // "Jump to now playing song". `rows` is read live, so the jump lands whether
+  // it was asked for with this view on screen or from another tab, in which
+  // case it happens on the first render after the tab is opened again. The
+  // song is read now, not when the jump was asked for, so a long detour on the
+  // Now playing tab still reveals what is playing rather than what was.
+  $effect(() => {
+    if (!playlists.pendingJump) return;
+    const all = rows;
+    const id = player.track?.id;
+    untrack(() => (playlists.pendingJump = false));
+    const i = all.findIndex((r) => r.type === "track" && r.track.id === id);
+    if (i >= 0) void tick().then(() => list?.scrollToIndex(i));
+  });
 
   function onImgError(e: Event) {
     (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
@@ -220,8 +244,11 @@
     </div>
   {:else}
     <VirtualList
+      bind:this={list}
       count={rows.length}
       itemHeight={rowHeight}
+      initialScrollTop={playlists.viewScroll}
+      onScrollChange={(y) => (playlists.viewScroll = y)}
       row={rowSnippet}
     />
   {/if}
@@ -236,11 +263,20 @@
     </div>
   {:else if r.type === "header"}
     <div class="ah">
-      <img class="acover" src={r.albumId != null ? artUrl("album", r.albumId) : "/eole/no_cover.png"} alt="" loading="lazy" onerror={onImgError} />
-      <div class="ainfo">
-        <div class="aline1">{r.album ?? "?"}</div>
-        <div class="aline2">{displayName(r.artist, r.artistSort) ?? "?"}</div>
-      </div>
+      <button
+        class="album-link"
+        disabled={r.albumId == null}
+        aria-label={r.albumId != null ? `View album ${r.album ?? "Unknown album"}` : undefined}
+        onclick={() => {
+          if (r.albumId != null) viewAlbum(r.albumId);
+        }}
+      >
+        <img class="acover" src={r.albumId != null ? artUrl("album", r.albumId) : "/eole/no_cover.png"} alt="" loading="lazy" onerror={onImgError} />
+        <div class="ainfo">
+          <div class="aline1">{r.album ?? "?"}</div>
+          <div class="aline2">{displayName(r.artist, r.artistSort) ?? "?"}</div>
+        </div>
+      </button>
       <div class="aright">
         <div>{formatTime(r.durationMs)}</div>
         {#if r.year}<div>{r.year}</div>{/if}
@@ -348,6 +384,26 @@
     align-items: center;
     height: 100%;
     padding: 10px 16px 6px;
+  }
+  .album-link {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    color: inherit;
+    text-align: left;
+  }
+  .album-link:disabled {
+    cursor: default;
+  }
+  .album-link:not(:disabled):hover .aline1,
+  .album-link:not(:disabled):focus-visible .aline1 {
+    color: var(--txt-full);
+  }
+  .album-link:not(:disabled):focus-visible {
+    outline: 1px solid var(--selection);
+    outline-offset: 3px;
   }
   .acover {
     width: 56px;

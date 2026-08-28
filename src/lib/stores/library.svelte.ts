@@ -174,6 +174,22 @@ class LibraryStore {
       the full library instead of snapping to the top. Consumed once. */
   scrollToTrackId = $state<number | null>(null);
 
+  /** One-shot intent: open this album (AlbumDetail) as soon as the Library tab
+      can. Set from outside the tab — the transport bar and the playlist view —
+      because the tab is unmounted while another one is on screen. */
+  pendingAlbumId = $state<number | null>(null);
+
+  /** One-shot intent: reveal whatever is playing *now*. It carries no track id
+      on purpose: the song is read when the view consumes the flag, so a jump
+      requested from another tab shows the song playing when you come back
+      rather than the one that was playing when you asked.
+
+      `explicit` (the menu command) may also change what the tab shows — leave
+      an album, or open one in the Album-wall view, which has no track rows.
+      `auto` (the shuffle follow-along) only ever scrolls a list: drilling into
+      an album under a browsing user on every song would be far too much. */
+  pendingJump = $state<"explicit" | "auto" | null>(null);
+
   scanning = $state(false);
   scanProgress = $state<ScanProgress | null>(null);
   scanError = $state<string | null>(null);

@@ -8,6 +8,8 @@
   import SeekBar from "./SeekBar.svelte";
   import VolumeControl from "./VolumeControl.svelte";
   import SpriteButton from "../common/SpriteButton.svelte";
+  import { openContextMenu } from "../common/ContextMenu.svelte";
+  import { jumpToNowPlaying, viewAlbum } from "$lib/navigate";
 
   const titleLine = $derived(formatTitle(prefs.values.titlebar_format, player.track));
   const titleLine2 = $derived(formatTitle(prefs.values.titlebar_format_2, player.track));
@@ -26,6 +28,39 @@
   const seekHeight = $derived(
     Math.min(37.5, Math.max(15, (ui.bottombarH / 76) * 17.5)),
   );
+
+  /** The album of the song that plays, when it has one. */
+  const nowPlayingAlbumId = $derived(player.track?.album_id ?? null);
+
+  function showAlbum() {
+    if (nowPlayingAlbumId != null) viewAlbum(nowPlayingAlbumId);
+  }
+
+  function titleMenu(e: MouseEvent) {
+    if (!player.track) return;
+    openContextMenu(e, [
+      {
+        label: "View album",
+        disabled: nowPlayingAlbumId == null,
+        action: nowPlayingAlbumId == null ? undefined : showAlbum,
+      },
+      {
+        label: "Jump to now playing song",
+        action: () => jumpToNowPlaying({ switchTab: true }),
+      },
+    ]);
+  }
+
+  function shuffleMenu(e: MouseEvent) {
+    openContextMenu(e, [
+      {
+        label: "Auto-jump to the now playing song",
+        checked: prefs.values.auto_jump_now_playing,
+        action: () =>
+          prefs.set("auto_jump_now_playing", !prefs.values.auto_jump_now_playing),
+      },
+    ]);
+  }
 
   /* drag the top edge to resize the bar */
   let resizing = false;
@@ -63,14 +98,23 @@
     <TransportButtons />
   </div>
   <div class="center">
-    <div class="titleblock" class:with-second={useSecondTitle}>
+    <!-- Clicking the song details opens its album; right-clicking offers that
+         and a jump to the song in whichever list view can show it. -->
+    <button
+      class="titleblock"
+      class:with-second={useSecondTitle}
+      class:actionable={nowPlayingAlbumId != null}
+      title={nowPlayingAlbumId != null ? "View album" : undefined}
+      onclick={showAlbum}
+      oncontextmenu={titleMenu}
+    >
       <div class="title" class:placeholder={!player.track} class:error={!!player.error}>
         {player.error ? `Playback unavailable: ${player.error}` : player.track ? titleLine : "Nothing played"}
       </div>
       {#if showSecondTitle}
         <div class="title2">{titleLine2}</div>
       {/if}
-    </div>
+    </button>
     <div class="seekrow">
       <button
         class="time"
@@ -102,6 +146,7 @@
         size={26}
         title={player.shuffle ? "Shuffle: on" : "Shuffle: off"}
         onclick={() => player.setShuffle(!player.shuffle)}
+        oncontextmenu={shuffleMenu}
       />
     </span>
   </div>
@@ -147,6 +192,16 @@
     transform: translateY(-50%);
     text-align: center;
     min-width: 0;
+    /* Only an album to open makes it a link; otherwise it is plain text that
+       still takes a right-click. */
+    cursor: default;
+  }
+  .titleblock.actionable {
+    cursor: pointer;
+  }
+  .titleblock.actionable:hover .title {
+    color: var(--txt-full);
+    text-decoration: underline;
   }
   .titleblock.with-second {
     top: 8px;

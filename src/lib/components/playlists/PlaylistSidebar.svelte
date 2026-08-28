@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { slide } from "svelte/transition";
   import { playlists, type SidebarRow } from "$lib/stores/playlists.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { isTauri, type PlaylistInfo } from "$lib/api";
@@ -11,6 +12,23 @@
   let renamingCollectionId = $state<number | null>(null);
   let renameValue = $state("");
   let importReport = $state<string | null>(null);
+  let collectionTransitionsReady = $state(false);
+  let reduceMotion = $state(false);
+
+  // Expanded collections are already visible when the sidebar first mounts;
+  // only later user/filter changes should animate. Respect the desktop's
+  // reduced-motion preference for those changes as well.
+  onMount(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updateMotion = () => (reduceMotion = media.matches);
+    updateMotion();
+    media.addEventListener("change", updateMotion);
+    const frame = requestAnimationFrame(() => (collectionTransitionsReady = true));
+    return () => {
+      cancelAnimationFrame(frame);
+      media.removeEventListener("change", updateMotion);
+    };
+  });
 
   async function createPlaylist() {
     const base = "New Playlist";
@@ -324,9 +342,16 @@
           </button>
         {/if}
         {#if row.expanded}
-          {#each row.children as p (p.id)}
-            {@render playlistRow(p, true, row.collection.id)}
-          {/each}
+          <div
+            class="collection-children"
+            transition:slide={{
+              duration: collectionTransitionsReady && !reduceMotion ? 180 : 0,
+            }}
+          >
+            {#each row.children as p (p.id)}
+              {@render playlistRow(p, true, row.collection.id)}
+            {/each}
+          </div>
         {/if}
       {:else}
         {@render playlistRow(row.playlist, false, null)}
@@ -442,7 +467,9 @@
     align-items: center;
     width: 100%;
     gap: 6px;
-    padding: 7px 12px;
+    /* Keep the count column clear of the panel toggle attached at the
+       sidebar's right edge. */
+    padding: 7px 20px 7px 12px;
     color: var(--txt);
     text-align: left;
   }
@@ -453,7 +480,7 @@
     display: flex;
     flex: none;
     color: var(--txt-faded);
-    transition: transform 0.12s ease;
+    transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
   }
   .chev.open {
     transform: rotate(90deg);
@@ -464,6 +491,9 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .collection-children {
+    width: 100%;
   }
   /* a playlist drawn inside a collection */
   .item.nested {
@@ -487,6 +517,12 @@
   }
   .item.dragging {
     opacity: 0.5;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chev {
+      transition-duration: 0s;
+    }
   }
   .citem.dragover,
   .item.dragover {
@@ -534,7 +570,7 @@
     align-items: center;
     width: 100%;
     gap: 8px;
-    padding: 7px 12px;
+    padding: 7px 20px 7px 12px;
     color: var(--txt);
     text-align: left;
   }

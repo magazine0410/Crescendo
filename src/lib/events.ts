@@ -3,6 +3,7 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { isTauri, call, type PlayerState, type ScanProgress } from "./api";
+import { autoJumpOnTrackChange } from "./navigate";
 import { player } from "./stores/player.svelte";
 import { library } from "./stores/library.svelte";
 import { playlists } from "./stores/playlists.svelte";
@@ -24,7 +25,13 @@ export async function initEvents() {
   if (inited || !isTauri) return;
   inited = true;
 
-  await listen<PlayerState>("player:state", (e) => player.applyState(e.payload));
+  await listen<PlayerState>("player:state", (e) => {
+    // A state event carries far more than track changes (pause, volume, …), so
+    // compare ids: only a genuinely new song may trigger the shuffle auto-jump.
+    const previousId = player.track?.id ?? null;
+    player.applyState(e.payload);
+    if (player.track && player.track.id !== previousId) autoJumpOnTrackChange();
+  });
   await listen<{ ms: number; duration_ms: number }>("player:position", (e) => {
     player.onPositionEvent(e.payload.ms, e.payload.duration_ms);
   });

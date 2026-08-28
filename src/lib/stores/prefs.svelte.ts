@@ -57,6 +57,10 @@ export interface Prefs {
   playlist_sort_locked: boolean;
   /** Where collections are shown in the playlist sidebar. */
   collections_placement: CollectionsPlacement;
+  /** While shuffling, scroll the Library and Playlists views to each new song
+      as it starts (right-click the shuffle button to set it). Off = the views
+      stay where they were put. */
+  auto_jump_now_playing: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -82,6 +86,7 @@ const DEFAULTS: Prefs = {
   playlist_sort: "manual",
   playlist_sort_locked: false,
   collections_placement: "above",
+  auto_jump_now_playing: false,
 };
 
 /** `%title_display%` -> `%title%` for the three retired _display tags. */
@@ -156,6 +161,8 @@ class PrefsStore {
       raw.collections_placement === "inline" ? "above" : raw.collections_placement;
     if (placement === "above" || placement === "within" || placement === "below")
       v.collections_placement = placement;
+    if (raw.auto_jump_now_playing)
+      v.auto_jump_now_playing = raw.auto_jump_now_playing === "true";
     this.values = v;
     this.loaded = true;
   }

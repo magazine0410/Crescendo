@@ -11,8 +11,26 @@
   }
   let { open, onclose }: Props = $props();
 
+  type SettingsSection =
+    | "general"
+    | "library"
+    | "playlists"
+    | "display"
+    | "now-playing"
+    | "visualizer";
+
+  const settingsSections: { id: SettingsSection; label: string }[] = [
+    { id: "general", label: "General" },
+    { id: "library", label: "Library" },
+    { id: "playlists", label: "Playlists" },
+    { id: "display", label: "Display" },
+    { id: "now-playing", label: "Now playing" },
+    { id: "visualizer", label: "Visualizer" },
+  ];
+
   let keyTest = $state<"idle" | "testing" | "ok" | "bad">("idle");
   let autostart = $state(false);
+  let activeSection = $state<SettingsSection>("general");
 
   /** Ordering follows this pref in SQL (see queries.rs), so the pref has to be
       written before anything re-queries — hence the reload here rather than an
@@ -33,6 +51,7 @@
   // Reflect the actual on-disk autostart state whenever the dialog opens.
   $effect(() => {
     if (open) {
+      activeSection = "general";
       call<boolean>("autostart_get")
         .then((v) => (autostart = v))
         .catch(() => {});
@@ -78,20 +97,58 @@
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onclose();
   }
+
+  function onTabKeydown(e: KeyboardEvent, index: number) {
+    let next = index;
+    if (e.key === "ArrowRight") next = (index + 1) % settingsSections.length;
+    else if (e.key === "ArrowLeft")
+      next = (index - 1 + settingsSections.length) % settingsSections.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = settingsSections.length - 1;
+    else return;
+
+    e.preventDefault();
+    const section = settingsSections[next].id;
+    activeSection = section;
+    requestAnimationFrame(() => document.getElementById(`settings-tab-${section}`)?.focus());
+  }
 </script>
 
 <svelte:window onkeydown={open ? onKeydown : undefined} />
 
 {#if open}
   <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
-    <div class="dialog" role="dialog" aria-label="Settings">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="Settings">
       <header>
         <span>Settings</span>
-        <button class="x" onclick={onclose}>✕</button>
+        <button class="x" aria-label="Close settings" onclick={onclose}>✕</button>
       </header>
 
-      <section>
-        <h3>General</h3>
+      <div class="tabs" role="tablist" aria-label="Settings sections">
+        {#each settingsSections as section, i (section.id)}
+          <button
+            id={`settings-tab-${section.id}`}
+            class="tab"
+            class:active={activeSection === section.id}
+            role="tab"
+            aria-selected={activeSection === section.id}
+            aria-controls={`settings-panel-${section.id}`}
+            tabindex={activeSection === section.id ? 0 : -1}
+            onclick={() => (activeSection = section.id)}
+            onkeydown={(e) => onTabKeydown(e, i)}
+          >
+            {section.label}
+          </button>
+        {/each}
+      </div>
+
+      <div class="panel-scroll">
+      {#if activeSection === "general"}
+      <div class="settings-panel"
+        id="settings-panel-general"
+        role="tabpanel"
+        aria-labelledby="settings-tab-general"
+      >
         <label class="check">
           <input
             type="checkbox"
@@ -112,10 +169,14 @@
           <option value="playlists">Playlists</option>
         </select>
         <p class="hint">Which tab opens when Crescendo starts.</p>
-      </section>
+      </div>
 
-      <section>
-        <h3>Library</h3>
+      {:else if activeSection === "library"}
+      <div class="settings-panel"
+        id="settings-panel-library"
+        role="tabpanel"
+        aria-labelledby="settings-tab-library"
+      >
         <label for="libpath">Music folder</label>
         <div class="pathrow">
           <input
@@ -169,10 +230,14 @@
           value={prefs.values.scan_threads}
           onchange={(e) => prefs.set("scan_threads", parseInt(e.currentTarget.value, 10) || 4)}
         />
-      </section>
+      </div>
 
-      <section>
-        <h3>Playlists</h3>
+      {:else if activeSection === "playlists"}
+      <div class="settings-panel"
+        id="settings-panel-playlists"
+        role="tabpanel"
+        aria-labelledby="settings-tab-playlists"
+      >
         <label for="collplacement">Collections</label>
         <select
           id="collplacement"
@@ -188,10 +253,14 @@
           Where grouped playlists appear in the sidebar. Group playlists by
           right-clicking them and choosing "Set collection…".
         </p>
-      </section>
+      </div>
 
-      <section>
-        <h3>Display</h3>
+      {:else if activeSection === "display"}
+      <div class="settings-panel"
+        id="settings-panel-display"
+        role="tabpanel"
+        aria-labelledby="settings-tab-display"
+      >
         <label for="libview">Library view</label>
         <select
           id="libview"
@@ -295,10 +364,14 @@
           A smaller second line under the track detail, right-aligned to the duration.
           Same %tag% placeholders. Leave blank to keep rows single-line.
         </p>
-      </section>
+      </div>
 
-      <section>
-        <h3>Now playing</h3>
+      {:else if activeSection === "now-playing"}
+      <div class="settings-panel"
+        id="settings-panel-now-playing"
+        role="tabpanel"
+        aria-labelledby="settings-tab-now-playing"
+      >
         <label for="lfmkey">Last.fm API key (get one at last.fm/api)</label>
         <div class="pathrow">
           <input
@@ -332,19 +405,24 @@
           LRCLIB when there is no sidecar .lrc/.txt file or embedded lyrics tag. Off
           keeps lyrics to those local sources only.
         </p>
-      </section>
+      </div>
 
-      <section>
-        <h3>Visualizer</h3>
+      {:else}
+      <div class="settings-panel"
+        id="settings-panel-visualizer"
+        role="tabpanel"
+        aria-labelledby="settings-tab-visualizer"
+      >
         <p class="hint">
           Change the bar color from the swatch in the Visualizer tab. More options coming here later.
         </p>
-      </section>
+      </div>
+      {/if}
+      </div>
 
-      <section>
-        <h3>About</h3>
+      <footer>
         <button class="btn" onclick={openAbout}>About Crescendo</button>
-      </section>
+      </footer>
     </div>
   </div>
 {/if}
@@ -362,7 +440,9 @@
   .dialog {
     width: 520px;
     max-height: 80vh;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     background: var(--bg-main);
     border: 1px solid var(--popup-border);
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.7);
@@ -374,6 +454,7 @@
     padding: 12px 18px;
     border-bottom: 1px solid var(--hairline);
     font-weight: 600;
+    flex: none;
   }
   .x {
     color: var(--txt-faded);
@@ -381,16 +462,45 @@
   .x:hover {
     color: var(--txt);
   }
-  section {
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--sidesline);
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    flex: none;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--bg-panel);
   }
-  h3 {
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .tab {
+    position: relative;
+    min-width: 0;
+    padding: 9px 3px 8px;
     color: var(--txt-faded);
-    margin-bottom: 10px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .tab:hover,
+  .tab:focus-visible {
+    color: var(--txt);
+    background: var(--hover-row);
+  }
+  .tab.active {
+    color: var(--txt-full);
+  }
+  .tab.active::after {
+    content: "";
+    position: absolute;
+    right: 8px;
+    bottom: 0;
+    left: 8px;
+    height: 2px;
+    background: var(--txt-full);
+  }
+  .panel-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .settings-panel {
+    padding: 18px;
   }
   label {
     display: block;
@@ -525,5 +635,13 @@
   .bad {
     color: var(--search-invalid);
     font-size: 11px;
+  }
+  footer {
+    display: flex;
+    justify-content: flex-end;
+    flex: none;
+    padding: 10px 18px;
+    border-top: 1px solid var(--hairline);
+    background: var(--bg-panel);
   }
 </style>

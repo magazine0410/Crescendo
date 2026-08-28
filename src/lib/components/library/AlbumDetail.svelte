@@ -5,11 +5,22 @@
   import { playlists } from "$lib/stores/playlists.svelte";
   import { artUrl, type Track } from "$lib/api";
   import { prefs } from "$lib/stores/prefs.svelte";
+  import { ui } from "$lib/stores/ui.svelte";
   import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem, openTrackInFileManagerItem } from "$lib/menu";
 
   const album = $derived(library.selectedAlbum);
+  const returnsToAnotherTab = $derived(
+    ui.albumReturnTab != null && ui.albumReturnTab !== "library",
+  );
+
+  function goBack() {
+    const returnTab = ui.albumReturnTab;
+    ui.albumReturnTab = null;
+    void library.selectAlbum(null);
+    if (returnTab && returnTab !== "library") ui.activeTab = returnTab;
+  }
 
   function onImgError(e: Event) {
     (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
@@ -27,8 +38,8 @@
 
 {#if album}
   <div class="detail">
-    <button class="back" onclick={() => library.selectAlbum(null)}>
-      {prefs.values.library_view === "track_list" ? "‹ Back" : "‹ Albums"}
+    <button class="back" onclick={goBack}>
+      {returnsToAnotherTab || prefs.values.library_view === "track_list" ? "‹ Back" : "‹ Albums"}
     </button>
     <header>
       <img class="cover" src={artUrl("album", album.id, "thumb")} alt="" onerror={onImgError} />

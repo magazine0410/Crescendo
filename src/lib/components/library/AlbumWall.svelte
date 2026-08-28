@@ -3,6 +3,7 @@
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
+  import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, call, type Album, type Track } from "$lib/api";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem, openInFileManager } from "$lib/menu";
@@ -16,10 +17,17 @@
     await player.playContext({ type: "album", id: a.id }, 0);
   }
 
+  function showAlbum(a: Album) {
+    // A direct Library drill-in starts a fresh navigation path; do not retain
+    // an origin tab from an earlier cross-tab album visit.
+    ui.albumReturnTab = null;
+    void library.selectAlbum(a);
+  }
+
   async function albumMenu(e: MouseEvent, a: Album) {
     const items: MenuItem[] = [
       { label: "Play", action: () => playAlbum(a) },
-      { label: "Show tracks", action: () => library.selectAlbum(a) },
+      { label: "Show tracks", action: () => showAlbum(a) },
       {
         label: "Open in file manager",
         action: async () => {
@@ -65,7 +73,7 @@
   {@const a = library.albums[i]}
   <button
     class="cell"
-    onclick={() => library.selectAlbum(a)}
+    onclick={() => showAlbum(a)}
     ondblclick={() => playAlbum(a)}
     oncontextmenu={(e) => albumMenu(e, a)}
     title={`${a.album ?? "?"} — ${a.albumartist ?? "?"}`}

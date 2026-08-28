@@ -51,6 +51,17 @@
     void revealTrack(id);
   });
 
+  // "Jump to now playing song". Unlike the intent above this one is watched
+  // live, so it also lands while the tab is already open; the trackEpoch read
+  // makes it wait for the first loaded view after the tab is opened again.
+  $effect(() => {
+    library.trackEpoch;
+    if (!library.pendingJump || library.trackCount === 0) return;
+    const id = player.track?.id;
+    untrack(() => (library.pendingJump = null));
+    if (id != null) void revealTrack(id);
+  });
+
   async function revealTrack(id: number) {
     const idx = await library.indexOfTrack(id);
     if (idx == null) return;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { player } from "$lib/stores/player.svelte";
@@ -30,6 +30,13 @@
     if (layout.playlistSidebarW) ui.playlistSidebarW = layout.playlistSidebarW;
     if (layout.queuePanelW) ui.queuePanelW = layout.queuePanelW;
     if (layout.libraryValueListW) ui.libraryValueListW = layout.libraryValueListW;
+    ui.librarySidebarCollapsed = layout.librarySidebarCollapsed === 1;
+    ui.playlistSidebarCollapsed = layout.playlistSidebarCollapsed === 1;
+    ui.queuePanelCollapsed = layout.queuePanelCollapsed === 1;
+    // Flush restored layout while transitions are disabled. Otherwise a saved
+    // collapsed panel visibly sweeps shut every time the app starts.
+    await tick();
+    ui.layoutReady = true;
     const { initEvents } = await import("$lib/events");
     await initEvents();
     const { library } = await import("$lib/stores/library.svelte");
@@ -51,6 +58,14 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
+    // WebKitGTK does not consistently expose its browser reload shortcut in a
+    // packaged app. Handle it explicitly, even while a field or dialog has
+    // focus, and prevent a second native reload where F5 already works.
+    if (e.key === "F5") {
+      e.preventDefault();
+      window.location.reload();
+      return;
+    }
     if (settingsOpen || document.querySelector('[aria-modal="true"]')) return;
     if (e.key === "/" && !isTypingTarget(e)) {
       e.preventDefault();
@@ -75,9 +90,22 @@
         break;
     }
   }
+
+  function onContextMenu(e: MouseEvent) {
+    const el = e.target instanceof Element ? e.target : null;
+    // Keep native editing/link actions where they are genuinely useful.
+    // Crescendo's own context menus stop propagation before reaching here.
+    if (
+      el?.closest(
+        'input, textarea, [contenteditable]:not([contenteditable="false"]), a[href]',
+      )
+    )
+      return;
+    e.preventDefault();
+  }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} oncontextmenu={onContextMenu} />
 
 <div class="app">
   <TopBar onOpenSettings={() => (settingsOpen = true)} />

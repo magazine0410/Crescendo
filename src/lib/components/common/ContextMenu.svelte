@@ -45,14 +45,22 @@
     const el = rootEl;
     const m = menu;
     if (!el || !m) return;
+    // Measure from the corner. Left at the pointer, a menu opened near an edge
+    // is squeezed into the space that is left there — it wraps, and reads both
+    // narrower and taller than it will be drawn once moved, which is the very
+    // measurement the move is decided from.
+    el.style.left = "0px";
+    el.style.top = "0px";
+    const width = el.offsetWidth;
+    const height = el.offsetHeight;
     const left =
-      m.x + el.offsetWidth > window.innerWidth - MARGIN
-        ? Math.max(MARGIN, m.x - el.offsetWidth)
-        : m.x;
+      m.x + width > window.innerWidth - MARGIN ? Math.max(MARGIN, m.x - width) : m.x;
+    // Too tall to open downwards: flip it above the pointer, the way it
+    // already flips to the pointer's left. Clamping it to the bottom of the
+    // window instead left it lying over whatever was clicked — the transport
+    // controls, for a menu opened from the bottom bar.
     const top =
-      m.y + el.offsetHeight > window.innerHeight - MARGIN
-        ? Math.max(MARGIN, window.innerHeight - MARGIN - el.offsetHeight)
-        : m.y;
+      m.y + height > window.innerHeight - MARGIN ? Math.max(MARGIN, m.y - height) : m.y;
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
   });
@@ -135,11 +143,16 @@
       </div>
     </div>
   {:else}
-    <button class="item" class:disabled={item.disabled} onclick={() => pick(item)}>
+    <button
+      class="item"
+      class:checkable={item.checked !== undefined}
+      class:disabled={item.disabled}
+      onclick={() => pick(item)}
+    >
       {#if item.checked !== undefined}
         <span class="check">{item.checked ? "✓" : ""}</span>
       {/if}
-      {item.label}
+      <span class="label">{item.label}</span>
     </button>
   {/if}
 {/snippet}
@@ -168,8 +181,14 @@
     color: var(--txt-faded);
     cursor: default;
   }
+  /* Tick in its own column, so a label that wraps keeps its later lines
+     under the first one instead of running back beneath the tick. */
+  .item.checkable {
+    display: flex;
+    align-items: flex-start;
+  }
   .check {
-    display: inline-block;
+    flex: none;
     width: 1em;
     margin-right: 2px;
     text-align: center;

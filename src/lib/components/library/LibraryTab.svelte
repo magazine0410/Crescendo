@@ -9,7 +9,7 @@
   import AlbumWall from "./AlbumWall.svelte";
   import AlbumDetail from "./AlbumDetail.svelte";
   import TrackList from "./TrackList.svelte";
-  import Splitter from "../common/Splitter.svelte";
+  import CollapsiblePanel from "../common/CollapsiblePanel.svelte";
   import ScanProgress from "../common/ScanProgress.svelte";
   import QueuePanel from "../playlists/QueuePanel.svelte";
 
@@ -38,23 +38,60 @@
     prefs.values.library_view;
     library.selectAlbum(null);
   });
+
+  // "View album" asked for from outside this tab (the transport bar, the
+  // playlist view). It is held in the store because this tab is unmounted
+  // while another one is on screen, so the album opens on mount as well.
+  $effect(() => {
+    const id = library.pendingAlbumId;
+    if (id == null) return;
+    library.pendingAlbumId = null;
+    void library.openAlbumById(id);
+  });
+
+  // "Jump to now playing song", the part TrackList cannot decide. The Track
+  // list scrolls itself and only needs a drilled-in album taken off screen;
+  // the Album wall has no track rows at all, so the song's album is opened
+  // instead. Both change what the tab shows, so only the menu command may make
+  // them — a shuffle follow-along scrolls lists and leaves the rest alone.
+  $effect(() => {
+    const kind = library.pendingJump;
+    if (!kind) return;
+    const trackList = prefs.values.library_view === "track_list";
+    if (trackList && !library.selectedAlbum) return; // TrackList consumes it
+    if (kind === "explicit" && trackList) {
+      void library.selectAlbum(null); // TrackList mounts and takes it from here
+      return;
+    }
+    library.pendingJump = null;
+    const albumId = player.track?.album_id;
+    if (kind === "explicit" && albumId != null) void library.openAlbumById(albumId);
+  });
 </script>
 
 <div class="tab">
   <ScanProgress />
   <div class="cols">
-    <div class="left" style:width={`${ui.libraryValueListW}px`}>
-      <ModeSelector />
-      <ValueFilter />
-      <ValueList />
-    </div>
-    <Splitter
+    <CollapsiblePanel
+      side="left"
       size={ui.libraryValueListW}
       min={150}
       max={480}
       persistKey="libraryValueListW"
+      collapsePersistKey="librarySidebarCollapsed"
+      collapsed={ui.librarySidebarCollapsed}
+      panelId="library-filter-panel"
+      label="Library filters"
+      transitionsReady={ui.layoutReady}
       onresize={(px) => (ui.libraryValueListW = px)}
-    />
+      oncollapsedchange={(collapsed) => (ui.librarySidebarCollapsed = collapsed)}
+    >
+      <div class="left">
+        <ModeSelector />
+        <ValueFilter />
+        <ValueList />
+      </div>
+    </CollapsiblePanel>
     {#if library.selectedAlbum}
       <AlbumDetail />
     {:else if prefs.values.library_view === "track_list"}
@@ -62,17 +99,22 @@
     {:else}
       <AlbumWall />
     {/if}
-    <Splitter
+    <CollapsiblePanel
+      side="right"
       size={ui.queuePanelW}
       min={180}
       max={440}
-      invert
       persistKey="queuePanelW"
+      collapsePersistKey="queuePanelCollapsed"
+      collapsed={ui.queuePanelCollapsed}
+      panelId="library-queue-panel"
+      label="Queued files"
+      transitionsReady={ui.layoutReady}
       onresize={(px) => (ui.queuePanelW = px)}
-    />
-    <div class="right" style:width={`${ui.queuePanelW}px`} style:--bottombar-h={`${ui.bottombarH}px`}>
-      <QueuePanel />
-    </div>
+      oncollapsedchange={(collapsed) => (ui.queuePanelCollapsed = collapsed)}
+    >
+      <div class="right"><QueuePanel /></div>
+    </CollapsiblePanel>
   </div>
 </div>
 
@@ -89,6 +131,8 @@
     min-height: 0;
   }
   .left {
+    width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -96,7 +140,8 @@
     background: var(--bg-panel);
   }
   .right {
-    flex: none;
+    width: 100%;
+    height: 100%;
     min-height: 0;
   }
 </style>
