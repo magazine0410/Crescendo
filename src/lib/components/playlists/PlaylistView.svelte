@@ -248,7 +248,8 @@
       count={rows.length}
       itemHeight={rowHeight}
       initialScrollTop={playlists.viewScroll}
-      onScrollChange={(y) => (playlists.viewScroll = y)}
+      scrollResetKey={playlists.viewScrollKey}
+      onScrollChange={(y) => playlists.setViewScroll(y)}
       row={rowSnippet}
     />
   {/if}

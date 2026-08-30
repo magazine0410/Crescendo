@@ -59,11 +59,14 @@
 
   function onKeydown(e: KeyboardEvent) {
     // WebKitGTK does not consistently expose its browser reload shortcut in a
-    // packaged app. Handle it explicitly, even while a field or dialog has
-    // focus, and prevent a second native reload where F5 already works.
+    // packaged app, so F5 is handled here, even while a dialog is open. Always
+    // take the key over first: where the WebView *does* reload on its own,
+    // leaving the default in place would reload anyway. Only then decide, and
+    // do not reload over a field being typed into — those commit on
+    // change/blur, so the entry would be thrown away.
     if (e.key === "F5") {
       e.preventDefault();
-      window.location.reload();
+      if (!isTypingTarget(e)) window.location.reload();
       return;
     }
     if (settingsOpen || document.querySelector('[aria-modal="true"]')) return;

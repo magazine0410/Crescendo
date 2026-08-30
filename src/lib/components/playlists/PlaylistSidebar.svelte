@@ -15,19 +15,23 @@
   let collectionTransitionsReady = $state(false);
   let reduceMotion = $state(false);
 
-  // Expanded collections are already visible when the sidebar first mounts;
-  // only later user/filter changes should animate. Respect the desktop's
-  // reduced-motion preference for those changes as well.
+  // Respect the desktop's reduced-motion preference for collection changes.
   onMount(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const updateMotion = () => (reduceMotion = media.matches);
     updateMotion();
     media.addEventListener("change", updateMotion);
+    return () => media.removeEventListener("change", updateMotion);
+  });
+
+  // Expanded collections are already visible the first time the sidebar has
+  // rows to draw; only later user/filter changes should animate. The rows
+  // arrive from an IPC call that resolves well after mount, so this waits for
+  // that first populated render rather than for a fixed number of frames.
+  $effect(() => {
+    if (collectionTransitionsReady || playlists.sidebar.length === 0) return;
     const frame = requestAnimationFrame(() => (collectionTransitionsReady = true));
-    return () => {
-      cancelAnimationFrame(frame);
-      media.removeEventListener("change", updateMotion);
-    };
+    return () => cancelAnimationFrame(frame);
   });
 
   async function createPlaylist() {

@@ -10,8 +10,10 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -19,7 +21,13 @@ use std::time::Duration;
 const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/magazine0410/Crescendo/releases/latest";
 const GITHUB_REPOSITORY: &str = "magazine0410/Crescendo";
-const USER_AGENT: &str = concat!("Crescendo/", env!("CARGO_PKG_VERSION"));
+
+/// Identify the running app. This crate carries its own (unrelated) version
+/// number, so the app's is passed in by the caller rather than read from
+/// `CARGO_PKG_VERSION` here.
+fn user_agent(version: &Version) -> String {
+    format!("Crescendo/{version}")
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UpdateCheck {
@@ -41,6 +49,15 @@ pub struct InstallResult {
 enum PackageKind {
     Deb,
     Rpm,
+}
+
+/// Why an anonymous release lookup failed, so the fallback can explain itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnonymousFailure {
+    /// No release visible without credentials — a private repository, or none published.
+    NotFound,
+    /// GitHub's unauthenticated request budget for this address is spent.
+    RateLimited,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -99,7 +116,7 @@ struct SelectedUpdate {
 pub fn check(current_version: &str, cache_dir: &Path) -> Result<UpdateCheck> {
     let current = parse_version(current_version)
         .with_context(|| format!("the installed version {current_version:?} is invalid"))?;
-    let release = fetch_latest_release()?;
+    let release = fetch_latest_release(&user_agent(&current))?;
     let latest = version_from_tag(&release.tag_name)?;
 
     if latest <= current {
@@ -142,7 +159,8 @@ pub fn install(
         .with_context(|| format!("the installed version {current_version:?} is invalid"))?;
     let requested = parse_version(requested_version)
         .with_context(|| format!("the requested version {requested_version:?} is invalid"))?;
-    let release = fetch_latest_release()?;
+    let agent = user_agent(&current);
+    let release = fetch_latest_release(&agent)?;
     let latest = version_from_tag(&release.tag_name)?;
 
     if latest != requested {
@@ -161,16 +179,19 @@ pub fn install(
             &selected.path,
             selected.release.access,
             &selected.release.tag_name,
+            &agent,
         )?;
     }
 
-    // Re-hash immediately before elevation as well as after downloading. This
-    // prevents a stale or modified cached package from being installed as root.
+    // A cheap local check first, so a corrupt cache fails before the password
+    // prompt instead of after it. The check that *decides* is the one the
+    // elevated script makes against its own root-owned copy: this one runs as
+    // the user, over a file the user can still rewrite afterwards.
     if !cached_package_is_valid(&selected.path, &selected.asset)? {
         bail!("The downloaded package failed its GitHub SHA-256 integrity check");
     }
 
-    run_installer(selected.kind, &selected.path)?;
+    run_installer(selected.kind, &selected.path, &selected.asset)?;
     let package_removed = match fs::remove_file(&selected.path) {
         Ok(()) => true,
         Err(error) => {
@@ -189,10 +210,10 @@ pub fn install(
     })
 }
 
-fn fetch_latest_release() -> Result<GithubRelease> {
+fn fetch_latest_release(user_agent: &str) -> Result<GithubRelease> {
     let response = ureq::get(LATEST_RELEASE_API)
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", user_agent)
         .config()
         .timeout_global(Some(Duration::from_secs(20)))
         .build()
@@ -200,7 +221,16 @@ fn fetch_latest_release() -> Result<GithubRelease> {
 
     let mut response = match response {
         Ok(response) => response,
-        Err(ureq::Error::StatusCode(404 | 403)) => return fetch_latest_release_with_gh(),
+        // 404 is what a private repository answers anonymously; 403 is the
+        // unauthenticated rate limit. Both are worth retrying through the CLI,
+        // which is authenticated, but they need different advice when it is
+        // missing.
+        Err(ureq::Error::StatusCode(404)) => {
+            return fetch_latest_release_with_gh(AnonymousFailure::NotFound)
+        }
+        Err(ureq::Error::StatusCode(403)) => {
+            return fetch_latest_release_with_gh(AnonymousFailure::RateLimited)
+        }
         Err(error) => return Err(anyhow!(error)).context("could not check GitHub for updates"),
     };
 
@@ -210,11 +240,14 @@ fn fetch_latest_release() -> Result<GithubRelease> {
         .context("GitHub returned invalid release information")
 }
 
-fn fetch_latest_release_with_gh() -> Result<GithubRelease> {
-    let gh = find_program(&["gh"]).ok_or_else(|| {
-        anyhow!(
+fn fetch_latest_release_with_gh(reason: AnonymousFailure) -> Result<GithubRelease> {
+    let gh = find_program(&["gh"]).ok_or_else(|| match reason {
+        AnonymousFailure::NotFound => anyhow!(
             "No public Crescendo release was found, and GitHub CLI is unavailable. For a private repository, install GitHub CLI and run `gh auth login`."
-        )
+        ),
+        AnonymousFailure::RateLimited => anyhow!(
+            "GitHub is rate-limiting update checks that are not signed in, for this whole network. Wait an hour and try again, or install GitHub CLI and run `gh auth login` to check as yourself."
+        ),
     })?;
     let output = Command::new(gh)
         .args([
@@ -401,16 +434,26 @@ fn file_sha256(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Create a directory that only this user may enter, and tighten it if it
+/// already exists with looser permissions.
+fn ensure_private_dir(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).context("could not create the update cache")?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .context("could not restrict the update cache")?;
+    Ok(())
+}
+
 fn download_package(
     asset: &GithubAsset,
     destination: &Path,
     access: ReleaseAccess,
     release_tag: &str,
+    user_agent: &str,
 ) -> Result<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| anyhow!("the update cache path has no parent directory"))?;
-    fs::create_dir_all(parent).context("could not create the update cache")?;
+    ensure_private_dir(parent)?;
     let partial = destination.with_extension(format!(
         "{}.part",
         destination
@@ -424,7 +467,7 @@ fn download_package(
 
     let download_result = (|| -> Result<()> {
         let bytes = match access {
-            ReleaseAccess::Anonymous => download_package_anonymously(asset, &partial)?,
+            ReleaseAccess::Anonymous => download_package_anonymously(asset, &partial, user_agent)?,
             ReleaseAccess::GithubCli => download_package_with_gh(asset, &partial, release_tag)?,
         };
         if bytes != asset.size {
@@ -446,10 +489,14 @@ fn download_package(
     download_result
 }
 
-fn download_package_anonymously(asset: &GithubAsset, partial: &Path) -> Result<u64> {
+fn download_package_anonymously(
+    asset: &GithubAsset,
+    partial: &Path,
+    user_agent: &str,
+) -> Result<u64> {
     let mut response = ureq::get(&asset.browser_download_url)
         .header("Accept", "application/octet-stream")
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", user_agent)
         .config()
         .timeout_global(Some(Duration::from_secs(10 * 60)))
         .build()
@@ -548,12 +595,64 @@ fn detect_package_kind() -> Result<PackageKind> {
     }
 }
 
-fn run_installer(kind: PackageKind, package: &Path) -> Result<()> {
-    let pkexec = find_program(&["pkexec"]).ok_or_else(|| {
-        anyhow!("PolicyKit (pkexec) is required to install the update with administrator access")
-    })?;
+/// Exit codes the elevated script uses for its own failures, kept clear of the
+/// ranges apt/dpkg/dnf/zypper/rpm and pkexec use so the two cannot be confused.
+const EXIT_DIGEST_FAILED: i32 = 91;
+const EXIT_COPY_FAILED: i32 = 92;
 
-    let (installer, args): (PathBuf, Vec<&str>) = match kind {
+/// Run as root, through `sh -c`, by `run_installer`.
+///
+/// Root copies the package into a directory only root can enter, checks the
+/// digest of *that* copy, and installs the copy. This is what closes the race:
+/// the cache entry stays writable by this user, but nothing after the copy
+/// reads it again, and a swap made during the copy fails the digest check.
+/// Verifying as the user before elevating cannot do this — the checked path
+/// stays writable by the user for as long as the installer takes to open it.
+///
+/// The script is a constant. Every value reaches it as a positional argument,
+/// so nothing is ever spliced into a command line, whatever a future change
+/// lets through the asset validators. Bare command names are safe because
+/// pkexec replaces the environment, PATH included, with a root-controlled one.
+const INSTALL_SCRIPT: &str = r#"set -eu
+umask 077
+src=$1
+digest=$2
+name=$3
+shift 3
+dir=$(mktemp -d /var/tmp/crescendo-update.XXXXXXXX)
+trap 'rm -rf -- "$dir"' EXIT HUP INT TERM
+cp -- "$src" "$dir/$name" || exit 92
+chmod 0644 -- "$dir/$name"
+printf '%s  %s\n' "$digest" "$dir/$name" > "$dir/sha256"
+sha256sum -c --status -- "$dir/sha256" || exit 91
+"$@" "$dir/$name"
+"#;
+
+/// The argument vector handed to the shell: `-c`, the constant script, `$0`,
+/// then the script's own positional arguments. Split out so a test can prove
+/// the values stay separate arguments.
+fn install_script_args(
+    package: &Path,
+    digest: &str,
+    name: &str,
+    installer: &Path,
+    args: &[&str],
+) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![
+        OsString::from("-c"),
+        OsString::from(INSTALL_SCRIPT),
+        OsString::from("crescendo-update"),
+        package.into(),
+        OsString::from(digest),
+        OsString::from(name),
+        installer.into(),
+    ];
+    argv.extend(args.iter().map(OsString::from));
+    argv
+}
+
+fn installer_for(kind: PackageKind) -> Result<(PathBuf, Vec<&'static str>)> {
+    Ok(match kind {
         PackageKind::Deb => {
             if let Some(apt_get) = find_program(&["apt-get"]) {
                 (apt_get, vec!["install", "-y"])
@@ -577,12 +676,27 @@ fn run_installer(kind: PackageKind, package: &Path) -> Result<()> {
                 bail!("No RPM package installer was found")
             }
         }
-    };
+    })
+}
+
+fn run_installer(kind: PackageKind, package: &Path, asset: &GithubAsset) -> Result<()> {
+    let pkexec = find_program(&["pkexec"]).ok_or_else(|| {
+        anyhow!("PolicyKit (pkexec) is required to install the update with administrator access")
+    })?;
+    let shell = find_program(&["sh"])
+        .ok_or_else(|| anyhow!("A POSIX shell is required to install the update"))?;
+    let (installer, args) = installer_for(kind)?;
+    let digest = expected_sha256(asset)?;
+    let name = package
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("the update package has no usable filename"))?;
 
     let output = Command::new(pkexec)
-        .arg(installer)
-        .args(args)
-        .arg(package)
+        .arg(&shell)
+        .args(install_script_args(
+            package, digest, name, &installer, &args,
+        ))
         .output()
         .context("could not start the system package installer")?;
     interpret_installer_output(output)
@@ -593,6 +707,12 @@ fn interpret_installer_output(output: Output) -> Result<()> {
         return Ok(());
     }
     match output.status.code() {
+        Some(EXIT_DIGEST_FAILED) => bail!(
+            "The update package failed its SHA-256 integrity check when it was re-checked with administrator access. Nothing was installed."
+        ),
+        Some(EXIT_COPY_FAILED) => bail!(
+            "The update package could not be copied for installation. Nothing was installed."
+        ),
         Some(126 | 127) => bail!(
             "Installation was cancelled. The downloaded package was kept for another attempt."
         ),
@@ -709,6 +829,77 @@ mod tests {
         let mut unsigned = asset("Crescendo_0.8.0_amd64.deb");
         unsigned.digest = None;
         assert!(validate_asset(&unsigned).is_err());
+    }
+
+    /// Run INSTALL_SCRIPT exactly as pkexec would, minus the elevation, with a
+    /// stub standing in for the package manager. The stub copies the package it
+    /// was handed to `delivered`, so a test can check what the installer would
+    /// actually have received.
+    fn run_install_script(source: &Path, digest: &str, delivered: &Path) -> Output {
+        let stub = source.parent().unwrap().join("stub-installer.sh");
+        // "$@" "$dir/$name" puts the package last: $1 is the destination the
+        // stub was configured with, $2 the package root staged for it.
+        fs::write(&stub, "cp -- \"$2\" \"$1\"\n").unwrap();
+        let name = source.file_name().unwrap().to_str().unwrap();
+        let argv = install_script_args(
+            source,
+            digest,
+            name,
+            Path::new("/bin/sh"),
+            &[stub.to_str().unwrap(), delivered.to_str().unwrap()],
+        );
+        Command::new("/bin/sh").args(&argv).output().unwrap()
+    }
+
+    #[test]
+    fn the_elevated_script_installs_only_what_matches_the_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Crescendo_0.8.0_amd64.deb");
+        let delivered = dir.path().join("delivered.deb");
+        fs::write(&source, b"real package").unwrap();
+
+        let good = format!("{:x}", Sha256::digest(b"real package"));
+        let output = run_install_script(&source, &good, &delivered);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            fs::read(&delivered).unwrap(),
+            b"real package",
+            "the installer must receive the checked bytes"
+        );
+
+        // The same package after someone else rewrote the cache entry.
+        fs::remove_file(&delivered).unwrap();
+        fs::write(&source, b"swapped package").unwrap();
+        let output = run_install_script(&source, &good, &delivered);
+        assert_eq!(output.status.code(), Some(EXIT_DIGEST_FAILED));
+        assert!(
+            !delivered.exists(),
+            "a mismatching package reached the installer"
+        );
+    }
+
+    #[test]
+    fn elevated_values_stay_separate_arguments() {
+        let argv = install_script_args(
+            Path::new("/home/u/.cache/crescendo/updates/Crescendo_0.8.0_amd64.deb"),
+            &"a".repeat(64),
+            "Crescendo_0.8.0_amd64.deb",
+            Path::new("/usr/bin/apt-get"),
+            &["install", "-y"],
+        );
+        assert_eq!(argv[0], "-c");
+        assert_eq!(
+            argv[1],
+            OsString::from(INSTALL_SCRIPT),
+            "the script root runs must stay a constant"
+        );
+        assert_eq!(
+            argv[3],
+            OsString::from("/home/u/.cache/crescendo/updates/Crescendo_0.8.0_amd64.deb")
+        );
+        assert_eq!(argv[4], OsString::from("a".repeat(64)));
+        assert_eq!(argv[6], OsString::from("/usr/bin/apt-get"));
+        assert_eq!(argv[7], OsString::from("install"));
     }
 
     #[test]

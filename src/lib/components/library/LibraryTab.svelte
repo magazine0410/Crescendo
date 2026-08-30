@@ -65,7 +65,13 @@
     }
     library.pendingJump = null;
     const albumId = player.track?.album_id;
-    if (kind === "explicit" && albumId != null) void library.openAlbumById(albumId);
+    if (kind === "explicit" && albumId != null) {
+      // This album is reached from inside the Library tab, so "Back" belongs to
+      // the Album wall. Drop any return tab left by an earlier cross-tab visit
+      // that the user left without pressing Back.
+      ui.albumReturnTab = null;
+      void library.openAlbumById(albumId);
+    }
   });
 </script>
 

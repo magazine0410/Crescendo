@@ -90,8 +90,19 @@ class PlaylistsStore {
       jump asked for from the Now playing or Visualizer tab lands on whichever
       of them is opened next. */
   pendingJump = $state(false);
-  /** Viewport offset retained while an album is visited in another tab. */
-  viewScroll = $state(0);
+  /** Viewport offset per selection, retained while an album is visited in
+      another tab. A plain Map, not $state: it is written on every scroll frame
+      and read only when the view remounts or the selection changes, so making
+      it reactive would re-render the list while it scrolls. */
+  private viewScrolls = new Map<string, number>();
+  /** The selection whose rows are on screen right now. It moves with `groups`,
+      not with `selectedIds`: the outgoing playlist stays rendered until the
+      incoming one's tracks arrive, and a scroll during that wait belongs to
+      what the user can actually see. */
+  private renderedKey = $state("");
+  /** Bumped with `renderedKey`, so the view re-applies the offset held for the
+      newly rendered playlists instead of keeping the previous one. */
+  viewScrollKey = $state(0);
   /** Named groups of playlists, in their stored order. */
   collections = $state<CollectionInfo[]>([]);
   /** Ignore list/track responses superseded by a newer event or selection. */
@@ -241,6 +252,7 @@ class PlaylistsStore {
     this.selectedIds = selectedIds;
     if (selectedIds.length === 0) {
       this.groups = [];
+      this.markRendered([]);
       return;
     }
     const groups = await call<PlaylistTracks[]>("playlist_tracks_multi", {
@@ -248,6 +260,25 @@ class PlaylistsStore {
     });
     if (request !== this.selectionReqId) return;
     this.groups = groups;
+    this.markRendered(selectedIds);
+  }
+
+  /** Hand the viewport over to a freshly rendered selection, in one step with
+      the rows themselves. Re-applying an offset any earlier would clamp it to
+      the outgoing list's height, and crediting a scroll any earlier would file
+      the outgoing list's offset under the incoming one. */
+  private markRendered(ids: number[]) {
+    this.renderedKey = ids.join(",");
+    this.viewScrollKey++;
+  }
+
+  /** Stored offset of the rendered selection; 0 for one not scrolled yet. */
+  get viewScroll(): number {
+    return this.viewScrolls.get(this.renderedKey) ?? 0;
+  }
+
+  setViewScroll(y: number) {
+    this.viewScrolls.set(this.renderedKey, y);
   }
 
   selected(): PlaylistInfo | null {
