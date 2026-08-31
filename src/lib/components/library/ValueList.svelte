@@ -24,7 +24,7 @@
   }
 
   /** The span a last-played bucket covers, shown as the row's tooltip. */
-  function rowTitle(v: string, sort: string): string | undefined {
+  function rowTitle(v: string, sort: string | null): string | undefined {
     if (library.isLastPlayedMode) return LAST_PLAYED_SPANS[Number(v)];
     return sort && sort !== v ? v : undefined;
   }
@@ -103,17 +103,17 @@
         : library.isPlayCountMode ? "play counts" : "values"})</span>
     </button>
   {:else}
-    {@const [value, n, sort] = library.filteredValues[i - 1]}
+    {@const item = library.filteredValues[i - 1]}
     <button
       class="row"
-      class:selected={library.selectedValues.includes(value)}
-      ondblclick={() => playValue(value)}
-      oncontextmenu={(e) => onRowContext(e, value)}
-      onclick={(e) => onRowClick(e, value)}
-      title={rowTitle(value, sort)}
+      class:selected={library.selectedValues.includes(item.value)}
+      ondblclick={() => playValue(item.value)}
+      oncontextmenu={(e) => onRowContext(e, item.value)}
+      onclick={(e) => onRowClick(e, item.value)}
+      title={rowTitle(item.value, item.sort_value)}
     >
-      <span class="name">{displayName(label(value), sort || null) ?? "?"}</span>
-      <span class="count">{n}</span>
+      <span class="name">{displayName(label(item.value), item.sort_value) ?? "?"}</span>
+      <span class="count">{item.count}</span>
     </button>
   {/if}
 {/snippet}

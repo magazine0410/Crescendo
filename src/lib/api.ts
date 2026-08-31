@@ -230,7 +230,6 @@ export type BrowseMode =
   | "artist"
   | "album"
   | "albumartist"
-  | "grouping"
   | "custom";
 
 /** Wire form of the backend `BrowseMode` enum. The fixed modes serialize as
@@ -243,8 +242,15 @@ export type WireBrowseMode =
   | "artist"
   | "album"
   | "albumartist"
-  | "grouping"
   | { custom: string };
+
+/** One projected row in the left-panel facet value list. `sort_value` is
+    present only when a facet has a distinct display/sort label. */
+export interface BrowseValue {
+  value: string;
+  count: number;
+  sort_value: string | null;
+}
 
 /** User-selectable Track-list sort key (backend `SortKey`). */
 export type SortKey =

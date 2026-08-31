@@ -1,8 +1,12 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, PlayContext};
+use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
 
 fn custom(tag: &str) -> BrowseMode {
     BrowseMode::Custom(tag.into())
+}
+
+fn browse_value(value: &str, count: i64) -> BrowseValue {
+    BrowseValue { value: value.into(), count, sort_value: None }
 }
 
 /// Tracks spanning several per-minute duration buckets across two artists.
@@ -55,10 +59,10 @@ fn duration_browse_buckets_per_minute() {
     assert_eq!(
         values,
         vec![
-            ("0".to_string(), 1, "".to_string()),
-            ("2".to_string(), 2, "".to_string()),
-            ("3".to_string(), 1, "".to_string()),
-            ("10".to_string(), 1, "".to_string()),
+            browse_value("0", 1),
+            browse_value("2", 2),
+            browse_value("3", 1),
+            browse_value("10", 1),
         ]
     );
     // The %length% alias buckets identically.

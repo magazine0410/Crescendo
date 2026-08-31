@@ -2,6 +2,7 @@ import {
   call,
   type Album,
   type BrowseMode,
+  type BrowseValue,
   type LibraryStats,
   type ScanProgress,
   type SortKey,
@@ -121,8 +122,8 @@ function buildRowModel(groups: TrackGroup[]): RowModel {
 
 class LibraryStore {
   mode = $state<BrowseMode>("artist");
-  /** [value, track count, sort/display value ("" when none)] */
-  values = $state<[string, number, string][]>([]);
+  /** Projected values and counts for the active left-panel facet. */
+  values = $state<BrowseValue[]>([]);
   /** Plain-text narrowing of the left-panel value list (not a search query).
       Matches the raw value or its sort/romaji, case-insensitively; in duration
       mode a time like "3:56" matches its minute bucket. */
@@ -196,10 +197,7 @@ class LibraryStore {
 
   /** Whether the active fixed/custom filter browses the grouping tag. */
   get isGroupingMode(): boolean {
-    return (
-      this.mode === "grouping" ||
-      (this.mode === "custom" && this.customTagName === "grouping")
-    );
+    return this.mode === "custom" && this.customTagName === "grouping";
   }
 
   /** Whether the GROUPING custom view is collapsed to primary themes right now.
@@ -345,16 +343,16 @@ class LibraryStore {
       const time = /^(\d+):\d{0,2}$/.exec(f);
       if (time) {
         const bucket = String(parseInt(time[1], 10));
-        return this.values.filter(([v]) => v === bucket);
+        return this.values.filter(({ value }) => value === bucket);
       }
-      return this.values.filter(([v]) =>
-        durationBucketLabel(Number(v)).toLowerCase().includes(f),
+      return this.values.filter(({ value }) =>
+        durationBucketLabel(Number(value)).toLowerCase().includes(f),
       );
     }
     if (this.isLastPlayedMode) {
       // Match the bucket name or the span beside it ("week", "7 days", …).
-      return this.values.filter(([v]) =>
-        `${lastPlayedBucketLabel(Number(v))} ${LAST_PLAYED_SPANS[Number(v)] ?? ""}`
+      return this.values.filter(({ value }) =>
+        `${lastPlayedBucketLabel(Number(value))} ${LAST_PLAYED_SPANS[Number(value)] ?? ""}`
           .toLowerCase()
           .includes(f),
       );
@@ -362,11 +360,13 @@ class LibraryStore {
     if (this.isPlayCountMode) {
       // Match the count itself ("3") or its label ("3 plays", "never").
       return this.values.filter(
-        ([v]) => v === f || playCountLabel(Number(v)).toLowerCase().includes(f),
+        ({ value }) =>
+          value === f || playCountLabel(Number(value)).toLowerCase().includes(f),
       );
     }
     return this.values.filter(
-      ([v, , sort]) => v.toLowerCase().includes(f) || sort.toLowerCase().includes(f),
+      ({ value, sort_value }) =>
+        value.toLowerCase().includes(f) || sort_value?.toLowerCase().includes(f),
     );
   });
 
@@ -401,7 +401,7 @@ class LibraryStore {
     // Drop the parts of the selection the new search filtered away.
     if (this.selectedValues.length > 0) {
       const still = this.selectedValues.filter((v) =>
-        this.values.some(([x]) => x === v),
+        this.values.some(({ value }) => value === v),
       );
       if (still.length !== this.selectedValues.length) {
         this.selectedValues = still;
@@ -430,7 +430,7 @@ class LibraryStore {
       return;
     }
     try {
-      const values = await call<[string, number, string][]>("browse_values", {
+      const values = await call<BrowseValue[]>("browse_values", {
         mode: this.wireMode,
         query: this.query,
         collapse: this.groupingCollapse,
@@ -447,7 +447,7 @@ class LibraryStore {
       so discard any selection that no longer identifies a visible row. */
   async reloadRomanizedView() {
     await this.loadValues();
-    const visible = new Set(this.values.map(([v]) => v));
+    const visible = new Set(this.values.map(({ value }) => value));
     const still = this.selectedValues.filter((v) => visible.has(v));
     if (still.length !== this.selectedValues.length) {
       this.selectedValues = still;
@@ -482,7 +482,7 @@ class LibraryStore {
       list — acts like a plain click. The anchor stays, so a second Shift+click
       re-ranges from the same base (matching the Track-list behavior). */
   async selectValueRange(v: string) {
-    const visible = this.filteredValues.map(([x]) => x);
+    const visible = this.filteredValues.map(({ value }) => value);
     const a = this.valueAnchor === null ? -1 : visible.indexOf(this.valueAnchor);
     const b = visible.indexOf(v);
     if (a < 0 || b < 0) return this.selectValue(v);

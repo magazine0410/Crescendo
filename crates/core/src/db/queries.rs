@@ -1,6 +1,7 @@
 use super::Db;
 use crate::model::{
-    Album, BrowseMode, LibraryStats, PlayContext, SortKey, Track, TrackGroup, TrackSort,
+    Album, BrowseMode, BrowseValue, LibraryStats, PlayContext, SortKey, Track, TrackGroup,
+    TrackSort,
 };
 use crate::search::SearchFilter;
 use anyhow::Result;
@@ -160,46 +161,128 @@ fn last_played_bucket() -> String {
     )
 }
 
-/// Append a `<mode expr> IN (values…)` narrowing to a `track_where` fragment,
-/// in place; a track matches when its value is any of the (Ctrl-multi-selected)
-/// `values`. No-op when `values` is empty (= the "All" row). NULLs collate to ""
-/// (so selecting the "?" group matches untagged tracks) — this is the single
-/// source of the left-panel value filter shared by browse_albums,
-/// track_count/tracks_range, and the ValueTracks play context. When `collapse`
-/// is set for grouping mode, values are matched against the primary theme
-/// (`GROUPING_FIRST_SEG`) instead of the whole tag, so an umbrella row selects
-/// every track whose first theme equals a selected value. Duration mode matches
-/// the per-minute bucket (`DURATION_BUCKET`).
+/// Host-owned facet presentation metadata. It chooses the matching SQL order:
+/// plain tags sort as text, duration buckets numerically, play counts
+/// descending, and the six last-played buckets in their preassigned order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FacetPresentation {
+    Text,
+    DurationBucket,
+    LastPlayedBucket,
+    PlayCount,
+}
+
+impl FacetPresentation {
+    fn order_sql(self, group_expr: &str) -> String {
+        match self {
+            Self::Text => "1 COLLATE NOCASE".into(),
+            Self::DurationBucket | Self::LastPlayedBucket => group_expr.into(),
+            Self::PlayCount => format!("{group_expr} DESC"),
+        }
+    }
+}
+
+/// The complete trusted specification of a Library facet. Every SQL fragment
+/// comes from this module; neither custom tags nor future plugin manifests can
+/// inject an expression. Value and selection expressions deliberately live in
+/// the same plan so a displayed row always round-trips to the same track set.
+/// Search filters remain outside this projection: `grouping:...` and all other
+/// field searches continue to match the raw stored metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FacetPlan {
+    target_column: &'static str,
+    value_expr: String,
+    group_expr: String,
+    selection_expr: String,
+    sort_value_expr: Option<String>,
+    presentation: FacetPresentation,
+}
+
+impl FacetPlan {
+    fn resolve(mode: &BrowseMode, collapse: bool, romanized: bool) -> Option<Self> {
+        let target_column = mode.column()?;
+        let (value_expr, group_expr, presentation) = match mode {
+            BrowseMode::Artist => {
+                let shown = displayed_name_expr("artist", "artistsort", romanized);
+                (shown.clone(), shown, FacetPresentation::Text)
+            }
+            BrowseMode::Albumartist => {
+                let shown = displayed_name_expr("albumartist", "albumartistsort", romanized);
+                (shown.clone(), shown, FacetPresentation::Text)
+            }
+            _ if target_column == "grouping" && collapse => (
+                GROUPING_FIRST_SEG.into(),
+                GROUPING_FIRST_SEG.into(),
+                FacetPresentation::Text,
+            ),
+            _ if mode.is_duration() => (
+                DURATION_BUCKET.into(),
+                "duration_ms / 60000".into(),
+                FacetPresentation::DurationBucket,
+            ),
+            _ if mode.is_last_played() => {
+                let bucket = last_played_bucket();
+                (bucket.clone(), bucket, FacetPresentation::LastPlayedBucket)
+            }
+            _ if mode.is_play_count() => (
+                "CAST(play_count AS TEXT)".into(),
+                "play_count".into(),
+                FacetPresentation::PlayCount,
+            ),
+            _ => {
+                let value = col_expr(target_column);
+                (value.clone(), value, FacetPresentation::Text)
+            }
+        };
+        Some(Self {
+            target_column,
+            selection_expr: value_expr.clone(),
+            value_expr,
+            group_expr,
+            // No current facet needs a distinct visible sort value. Keep the
+            // slot explicit rather than sending the old dead empty string.
+            sort_value_expr: None,
+            presentation,
+        })
+    }
+
+    fn values_sql(&self, where_sql: &str) -> String {
+        let sort_value = self.sort_value_expr.as_deref().unwrap_or("NULL");
+        let order = self.presentation.order_sql(&self.group_expr);
+        format!(
+            "SELECT {}, COUNT(*), {sort_value} FROM tracks WHERE {where_sql} \
+             GROUP BY {} ORDER BY {order}",
+            self.value_expr, self.group_expr
+        )
+    }
+}
+
+/// Append a facet selection to a `track_where` fragment. A track matches when
+/// its projected value is one of the selected rows. Empty values mean "All";
+/// an unresolved custom tag with a non-empty selection deliberately matches
+/// nothing. This clause is shared by albums, counts, pages, indexes, groups,
+/// and playback resolution.
 fn push_values_clause(
     where_sql: &mut String,
     params: &mut Vec<Value>,
-    mode: &BrowseMode,
+    plan: Option<&FacetPlan>,
     values: &[String],
-    collapse: bool,
-    romanized: bool,
 ) {
     if values.is_empty() {
         return;
     }
-    let lhs = if collapse && mode.column() == Some("grouping") {
-        Some(GROUPING_FIRST_SEG.to_string())
-    } else if mode.is_duration() {
-        Some(DURATION_BUCKET.to_string())
-    } else if mode.is_last_played() {
-        Some(last_played_bucket())
-    } else if let Some(expr) = displayed_artist_expr(mode, romanized) {
-        Some(expr)
-    } else {
-        mode.column().map(col_expr)
-    };
-    match lhs {
-        Some(lhs) => {
+    match plan {
+        Some(plan) => {
             let mut placeholders = Vec::with_capacity(values.len());
             for v in values {
                 params.push(Value::from(v.clone()));
                 placeholders.push(format!("?{}", params.len()));
             }
-            *where_sql = format!("{where_sql} AND {lhs} IN ({})", placeholders.join(", "));
+            *where_sql = format!(
+                "{where_sql} AND {} IN ({})",
+                plan.selection_expr,
+                placeholders.join(", ")
+            );
         }
         // Custom tag that resolves to no real column: select nothing.
         None => where_sql.push_str(" AND 0"),
@@ -211,21 +294,6 @@ fn push_values_clause(
 /// the string-based value list and still compare equal to the selected value.
 fn col_expr(col: &str) -> String {
     format!("CAST(COALESCE({col}, '') AS TEXT)")
-}
-
-/// The key an Artist / Album artist row actually displays and filters by.
-/// Romanization is deliberately limited to names containing CJK, matching
-/// `format.ts`: Latin names may carry sort tags too, but the UI shows the raw
-/// name and must therefore also group and order by it. Returning this same
-/// expression from `browse_values` and using it in `push_values_clause` makes
-/// merged rows select every raw tag represented by their visible name.
-fn displayed_artist_expr(mode: &BrowseMode, romanized: bool) -> Option<String> {
-    let (name, sort) = match mode {
-        BrowseMode::Artist => ("artist", "artistsort"),
-        BrowseMode::Albumartist => ("albumartist", "albumartistsort"),
-        _ => return None,
-    };
-    Some(displayed_name_expr(name, sort, romanized))
 }
 
 fn displayed_name_expr(name: &str, sort: &str, romanized: bool) -> String {
@@ -271,57 +339,23 @@ impl Db {
         mode: BrowseMode,
         filter: Option<&SearchFilter>,
         collapse: bool,
-    ) -> Result<Vec<(String, i64, String)>> {
+    ) -> Result<Vec<BrowseValue>> {
         // Unresolvable custom tag (unknown / not a stored column) → empty list.
-        let col = match mode.column() {
-            Some(c) => c,
-            None => return Ok(vec![]),
-        };
-        let (where_sql, params) = track_where(filter);
-        let val = col_expr(col);
         let romanized = self.prefer_romanized();
-        let sql = match &mode {
-            BrowseMode::Artist | BrowseMode::Albumartist => {
-                let shown = displayed_artist_expr(&mode, romanized).expect("fixed artist mode");
-                format!(
-                    "SELECT {shown}, COUNT(*), '' FROM tracks WHERE {where_sql} \
-                     GROUP BY {shown} ORDER BY {shown} COLLATE NOCASE"
-                )
-            }
-            // Collapse multi-theme grouping tags under their primary theme.
-            _ if col == "grouping" && collapse => format!(
-                "SELECT {GROUPING_FIRST_SEG}, COUNT(*), '' FROM tracks WHERE {where_sql} \
-                 GROUP BY {GROUPING_FIRST_SEG} ORDER BY 1 COLLATE NOCASE"
-            ),
-            // Duration buckets one row per whole minute, ordered numerically.
-            _ if mode.is_duration() => format!(
-                "SELECT {DURATION_BUCKET}, COUNT(*), '' FROM tracks WHERE {where_sql} \
-                 GROUP BY duration_ms / 60000 ORDER BY duration_ms / 60000"
-            ),
-            // Play count: one row per distinct count, most-played first, so the
-            // never-played tracks come last however many counts there are.
-            _ if mode.is_play_count() => format!(
-                "SELECT CAST(play_count AS TEXT), COUNT(*), '' FROM tracks WHERE {where_sql} \
-                 GROUP BY play_count ORDER BY play_count DESC"
-            ),
-            // Last played: at most six buckets, newest first. They are single
-            // digits, so ordering them as text keeps them in bucket order.
-            _ if mode.is_last_played() => format!(
-                "SELECT {bucket}, COUNT(*), '' FROM tracks WHERE {where_sql} \
-                 GROUP BY 1 ORDER BY 1",
-                bucket = last_played_bucket()
-            ),
-            // Genre / Album / non-collapsed Grouping / Custom. TEXT-cast so
-            // integer columns (year, rating, …) come back as strings.
-            _ => format!(
-                "SELECT {val}, COUNT(*), '' FROM tracks WHERE {where_sql} \
-                 GROUP BY {val} ORDER BY 1 COLLATE NOCASE"
-            ),
+        let Some(plan) = FacetPlan::resolve(&mode, collapse, romanized) else {
+            return Ok(vec![]);
         };
+        debug_assert_eq!(mode.column(), Some(plan.target_column));
+        let (where_sql, params) = track_where(filter);
+        let sql = plan.values_sql(&where_sql);
         self.with(|conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(params_from_iter(params.iter()), |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
+                Ok(BrowseValue {
+                    value: r.get(0)?,
+                    count: r.get(1)?,
+                    sort_value: r.get(2)?,
+                })
             })?;
             rows.map(|r| Ok(r?)).collect()
         })
@@ -337,14 +371,8 @@ impl Db {
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
         let romanized = self.prefer_romanized();
-        push_values_clause(
-            &mut where_sql,
-            &mut params,
-            &mode,
-            values,
-            collapse,
-            romanized,
-        );
+        let plan = FacetPlan::resolve(&mode, collapse, romanized);
+        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
         // Read before locking: `with` holds the connection mutex.
         let artist_order = displayed_name_expr("a.albumartist", "a.albumartist_sort", romanized);
         self.with(|conn| {
@@ -437,14 +465,8 @@ impl Db {
         collapse: bool,
     ) -> Result<i64> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(
-            &mut where_sql,
-            &mut params,
-            &mode,
-            values,
-            collapse,
-            self.prefer_romanized(),
-        );
+        let plan = FacetPlan::resolve(&mode, collapse, self.prefer_romanized());
+        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
         self.with(|conn| {
             Ok(conn.query_row(
                 &format!("SELECT COUNT(*) FROM tracks WHERE {where_sql}"),
@@ -469,7 +491,8 @@ impl Db {
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
         let romanized = self.prefer_romanized();
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse, romanized);
+        let plan = FacetPlan::resolve(&mode, collapse, romanized);
+        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -501,7 +524,8 @@ impl Db {
     ) -> Result<Option<i64>> {
         let (mut where_sql, mut params) = track_where(filter);
         let romanized = self.prefer_romanized();
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse, romanized);
+        let plan = FacetPlan::resolve(&mode, collapse, romanized);
+        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -535,7 +559,8 @@ impl Db {
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
         let romanized = self.prefer_romanized();
-        push_values_clause(&mut where_sql, &mut params, &mode, values, collapse, romanized);
+        let plan = FacetPlan::resolve(&mode, collapse, romanized);
+        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -624,14 +649,8 @@ impl Db {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
                 let romanized = self.prefer_romanized();
-                push_values_clause(
-                    &mut where_sql,
-                    &mut params,
-                    mode,
-                    values,
-                    *collapse,
-                    romanized,
-                );
+                let plan = FacetPlan::resolve(mode, *collapse, romanized);
+                push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
                 let order = order_sql(*sort, romanized);
                 self.with(|conn| {
                     collect_ids(

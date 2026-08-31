@@ -3,7 +3,16 @@
  * Generates a deterministic fake library big enough to exercise the
  * virtualized lists, and implements the same command surface as src-tauri.
  */
-import type { Album, CollectionInfo, PlaylistInfo, SortKey, Track, TrackSort } from "./api";
+import type {
+  Album,
+  BrowseValue,
+  CollectionInfo,
+  PlaylistInfo,
+  SortKey,
+  Track,
+  TrackSort,
+  WireBrowseMode,
+} from "./api";
 import packageInfo from "../../package.json";
 
 const GENRES = ["Jazz", "Soundtrack", "Pop Rock", "Doujin", "Electronic", "Metal", null];
@@ -122,7 +131,7 @@ function matches(t: Track, query: string | null | undefined): boolean {
 }
 
 /** Wire form of BrowseMode (see api.ts): a fixed mode name, or the custom tag. */
-type WireMode = string | { custom: string };
+type WireMode = WireBrowseMode;
 
 function browseCol(t: Track, mode: string): string {
   const v =
@@ -130,7 +139,7 @@ function browseCol(t: Track, mode: string): string {
     : mode === "artist" ? t.artist
     : mode === "album" ? t.album
     : mode === "albumartist" ? t.albumartist
-    : t.grouping;
+    : null;
   return v ?? "";
 }
 
@@ -210,7 +219,7 @@ function browseKey(t: Track, mode: WireMode, collapse: boolean): string {
   }
   const v = browseCol(t, mode);
   if (mode === "artist" || mode === "albumartist") return artistBrowseKey(t, mode, v);
-  return mode === "grouping" && collapse ? firstSeg(v) : v;
+  return v;
 }
 
 /** Track-list filter: search query AND optional left-panel mode values (a
@@ -322,13 +331,13 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       const numeric = ["duration", "length"].includes(tag);
       const descending = ["playcount", "play_count", "plays"].includes(tag);
       return [...counts.entries()]
-        .map(([v, n]): [string, number, string] => [v, n, ""])
+        .map(([value, count]): BrowseValue => ({ value, count, sort_value: null }))
         .sort((a, b) =>
           numeric
-            ? Number(a[0]) - Number(b[0])
+            ? Number(a.value) - Number(b.value)
             : descending
-              ? Number(b[0]) - Number(a[0])
-              : a[0].localeCompare(b[0]),
+              ? Number(b.value) - Number(a.value)
+              : a.value.localeCompare(b.value),
         ) as T;
     }
     case "browse_albums": {

@@ -67,6 +67,16 @@ pub struct LibraryStats {
     pub formats: std::collections::HashMap<String, i64>,
 }
 
+/// One row in the Library tab's value facet. `sort_value` is separate from the
+/// visible/filter value so a future projection can order or annotate a label
+/// without changing the value that round-trips through selection queries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowseValue {
+    pub value: String,
+    pub count: i64,
+    pub sort_value: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanProgress {
     pub scanned: u64,
@@ -85,7 +95,6 @@ pub enum BrowseMode {
     Artist,
     Album,
     Albumartist,
-    Grouping,
     /// User-defined left-panel filter: browse a single tag the user typed
     /// (e.g. `year`). Serializes as `{"custom": "year"}`. Only tags that map to
     /// a real, stored column are browsable — anything else resolves to `None`
@@ -103,7 +112,6 @@ impl BrowseMode {
             BrowseMode::Artist => Some("artist"),
             BrowseMode::Album => Some("album"),
             BrowseMode::Albumartist => Some("albumartist"),
-            BrowseMode::Grouping => Some("grouping"),
             BrowseMode::Custom(_) if self.is_duration() => Some("duration_ms"),
             BrowseMode::Custom(_) if self.is_last_played() => Some("last_played"),
             BrowseMode::Custom(_) if self.is_play_count() => Some("play_count"),

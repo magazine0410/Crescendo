@@ -115,7 +115,7 @@ fn credit_tags_are_browsable() {
     let (_d, db) = test_db();
     let mode = BrowseMode::Custom("arranger".into());
     let values: Vec<String> =
-        db.browse_values(mode.clone(), None, false).unwrap().into_iter().map(|v| v.0).collect();
+        db.browse_values(mode.clone(), None, false).unwrap().into_iter().map(|v| v.value).collect();
     assert_eq!(values, ["Masayoshi Minoshima", "ShibayanRecords", "暁Records"]);
     // …and selecting one plays back the right count.
     assert_eq!(db.track_count(None, mode, &["暁Records".into()], false).unwrap(), 1);
@@ -137,4 +137,3 @@ fn search_blob_stores_each_value_once() {
     assert_eq!(blob.matches("njk record").count(), 1);
     assert!(blob.contains("shibayanrecords"));
 }
-

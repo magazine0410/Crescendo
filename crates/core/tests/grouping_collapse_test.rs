@@ -1,5 +1,5 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::BrowseMode;
+use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
 use std::collections::HashMap;
 
 fn grouping() -> BrowseMode {
@@ -22,8 +22,10 @@ fn make_db() -> (tempfile::TempDir, Db) {
     let db = Db::open(&dir.path().join("t.db")).unwrap();
     db.with(|conn| {
         let mut ins = conn.prepare(
-            "INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms, grouping)
-             VALUES (?1, ?2, ?3, 0, 0, 'FLAC', 180000, ?4)",
+            "INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms, grouping,
+                                title, artist, albumartist, album, album_id, disc_no, track_no)
+             VALUES (?1, ?2, ?3, 0, 0, 'FLAC', 180000, ?4,
+                     ?3, 'Artist', 'Artist', 'Album', 1, 1, ?5)",
         )?;
         for (i, g) in groupings.iter().enumerate() {
             ins.execute(rusqlite::params![
@@ -31,16 +33,22 @@ fn make_db() -> (tempfile::TempDir, Db) {
                 "/m",
                 format!("{i}.flac"),
                 *g,
+                i as i64 + 1,
             ])?;
         }
+        conn.execute(
+            "INSERT INTO albums(id, key, album, albumartist, track_count)
+             VALUES (1, 'album', 'Album', 'Artist', 5)",
+            [],
+        )?;
         Ok(())
     })
     .unwrap();
     (dir, db)
 }
 
-fn value_counts(vals: &[(String, i64, String)]) -> HashMap<String, i64> {
-    vals.iter().map(|(v, n, _)| (v.clone(), *n)).collect()
+fn value_counts(vals: &[BrowseValue]) -> HashMap<String, i64> {
+    vals.iter().map(|v| (v.value.clone(), v.count)).collect()
 }
 
 #[test]
@@ -90,4 +98,28 @@ fn selecting_umbrella_matches_every_variant() {
         .tracks_range(None, grouping(), &[umbrella.into()], true, None, 0, 100)
         .unwrap();
     assert_eq!(rows.len(), 3);
+    assert_eq!(
+        db.browse_albums(grouping(), &[umbrella.into()], None, true).unwrap().len(),
+        1
+    );
+
+    // Indexes, album runs, and playback resolution use the same FacetPlan as
+    // the value list and windowed rows.
+    let ids: Vec<_> = rows.iter().map(|track| track.id).collect();
+    for (expected, id) in ids.iter().enumerate() {
+        assert_eq!(
+            db.track_index(None, grouping(), &[umbrella.into()], true, None, *id).unwrap(),
+            Some(expected as i64)
+        );
+    }
+    let groups = db.track_groups(None, grouping(), &[umbrella.into()], true, None).unwrap();
+    assert_eq!(groups.iter().map(|group| group.count).sum::<i64>(), 3);
+    let context = PlayContext::ValueTracks {
+        mode: grouping(),
+        values: vec![umbrella.into()],
+        query: None,
+        collapse: true,
+        sort: None,
+    };
+    assert_eq!(db.resolve_context(&context).unwrap(), ids);
 }

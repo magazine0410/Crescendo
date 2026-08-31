@@ -1,5 +1,5 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, PlayContext};
+use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
 use std::collections::HashMap;
 
 /// A tiny library exercising the custom left-panel filter: an INTEGER column
@@ -38,8 +38,12 @@ fn make_db() -> (tempfile::TempDir, Db) {
     (dir, db)
 }
 
-fn counts(vals: &[(String, i64, String)]) -> HashMap<String, i64> {
-    vals.iter().map(|(v, n, _)| (v.clone(), *n)).collect()
+fn counts(vals: &[BrowseValue]) -> HashMap<String, i64> {
+    vals.iter().map(|v| (v.value.clone(), v.count)).collect()
+}
+
+fn browse_value(value: &str, count: i64) -> BrowseValue {
+    BrowseValue { value: value.into(), count, sort_value: None }
 }
 
 fn custom(tag: &str) -> BrowseMode {
@@ -54,9 +58,9 @@ fn fixed_albumartist_uses_romanized_sort_values() {
     assert_eq!(
         vals,
         vec![
-            ("".into(), 1, "".into()),
-            ("Shanghai Alice".into(), 2, "".into()),
-            ("Zulu".into(), 1, "".into()),
+            browse_value("", 1),
+            browse_value("Shanghai Alice", 2),
+            browse_value("Zulu", 1),
         ],
     );
 }
@@ -85,8 +89,8 @@ fn fixed_albumartist_merges_raw_names_that_render_as_the_same_name() {
 
     let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
     assert_eq!(
-        vals.iter().find(|(v, _, _)| v == "Shanghai Alice"),
-        Some(&("Shanghai Alice".into(), 4, "".into())),
+        vals.iter().find(|v| v.value == "Shanghai Alice"),
+        Some(&browse_value("Shanghai Alice", 4)),
     );
     assert_eq!(
         db.track_count(None, BrowseMode::Albumartist, &["Shanghai Alice".into()], false)
@@ -115,9 +119,9 @@ fn prefer_romanized_off_orders_album_artists_by_the_shown_name() {
     assert_eq!(
         vals,
         vec![
-            ("".into(), 1, "".into()),
-            ("Zulu".into(), 1, "".into()),
-            ("上海アリス幻樂団".into(), 2, "".into()),
+            browse_value("", 1),
+            browse_value("Zulu", 1),
+            browse_value("上海アリス幻樂団", 2),
         ],
     );
 }
@@ -138,8 +142,8 @@ fn latin_albumartist_is_ordered_by_its_visible_name_not_its_sort_tag() {
     .unwrap();
 
     let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
-    let ara = vals.iter().position(|(v, _, _)| v == "ARA").unwrap();
-    let shanghai = vals.iter().position(|(v, _, _)| v == "Shanghai Alice").unwrap();
+    let ara = vals.iter().position(|v| v.value == "ARA").unwrap();
+    let shanghai = vals.iter().position(|v| v.value == "Shanghai Alice").unwrap();
     assert!(ara < shanghai, "ARA is displayed and therefore sorted under A, not C");
 }
 
@@ -223,4 +227,13 @@ fn resolve_context_plays_custom_value() {
         sort: None,
     };
     assert!(db.resolve_context(&empty).unwrap().is_empty());
+}
+
+#[test]
+fn grouping_is_reachable_only_through_the_custom_wire_variant() {
+    assert!(serde_json::from_str::<BrowseMode>(r#""grouping""#).is_err());
+    assert_eq!(
+        serde_json::from_str::<BrowseMode>(r#"{"custom":"grouping"}"#).unwrap(),
+        custom("grouping")
+    );
 }

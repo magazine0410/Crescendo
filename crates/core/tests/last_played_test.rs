@@ -1,8 +1,12 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, PlayContext, SortKey, TrackSort};
+use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext, SortKey, TrackSort};
 
 fn custom(tag: &str) -> BrowseMode {
     BrowseMode::Custom(tag.into())
+}
+
+fn browse_value(value: &str, count: i64) -> BrowseValue {
+    BrowseValue { value: value.into(), count, sort_value: None }
 }
 
 /// Nine tracks, one per interesting distance from today. `days` is how long ago
@@ -96,15 +100,15 @@ fn buckets_group_by_days_since_the_last_play() {
     assert_eq!(
         values,
         vec![
-            ("0".to_string(), 1, "".to_string()), // Today
-            ("1".to_string(), 2, "".to_string()), // 3 and 6 days
-            ("2".to_string(), 2, "".to_string()), // 7 and 29 days
-            ("3".to_string(), 2, "".to_string()), // 30 and 364 days
-            ("4".to_string(), 1, "".to_string()), // 365 days
-            ("5".to_string(), 1, "".to_string()), // never played
+            browse_value("0", 1), // Today
+            browse_value("1", 2), // 3 and 6 days
+            browse_value("2", 2), // 7 and 29 days
+            browse_value("3", 2), // 30 and 364 days
+            browse_value("4", 1), // 365 days
+            browse_value("5", 1), // never played
         ]
     );
-    assert_eq!(values.iter().map(|(_, n, _)| n).sum::<i64>(), TRACKS.len() as i64);
+    assert_eq!(values.iter().map(|value| value.count).sum::<i64>(), TRACKS.len() as i64);
     // The %last_played% spelling browses identically.
     assert_eq!(db.browse_values(custom("last_played"), None, false).unwrap(), values);
 }
@@ -161,10 +165,10 @@ fn play_count_lists_most_played_first() {
     assert_eq!(
         values,
         vec![
-            ("3".to_string(), 1, "".to_string()), // Today
-            ("2".to_string(), 1, "".to_string()), // SixDays
-            ("1".to_string(), 6, "".to_string()), // the rest of the played ones
-            ("0".to_string(), 1, "".to_string()), // Never — always at the bottom
+            browse_value("3", 1), // Today
+            browse_value("2", 1), // SixDays
+            browse_value("1", 6), // the rest of the played ones
+            browse_value("0", 1), // Never — always at the bottom
         ]
     );
     // The %plays% spelling browses identically.

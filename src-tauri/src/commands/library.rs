@@ -1,5 +1,7 @@
 use crate::state::AppState;
-use crescendo_core::model::{Album, BrowseMode, LibraryStats, Track, TrackGroup, TrackSort};
+use crescendo_core::model::{
+    Album, BrowseMode, BrowseValue, LibraryStats, Track, TrackGroup, TrackSort,
+};
 use crescendo_core::scanner::{scan, ScanOptions};
 use crescendo_core::search::SearchFilter;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -130,7 +132,7 @@ pub async fn browse_values(
     mode: BrowseMode,
     query: Option<String>,
     collapse: bool,
-) -> Result<Vec<(String, i64, String)>, String> {
+) -> Result<Vec<BrowseValue>, String> {
     let filter = filter_for(query.as_deref())?;
     state
         .db
