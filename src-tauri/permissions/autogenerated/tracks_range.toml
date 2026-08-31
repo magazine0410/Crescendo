@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tracks-range"
+description = "Enables the tracks_range command without any pre-configured scope."
+commands.allow = ["tracks_range"]
+
+[[permission]]
+identifier = "deny-tracks-range"
+description = "Denies the tracks_range command without any pre-configured scope."
+commands.deny = ["tracks_range"]

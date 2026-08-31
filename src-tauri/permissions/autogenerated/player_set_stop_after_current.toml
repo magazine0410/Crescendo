@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-set-stop-after-current"
+description = "Enables the player_set_stop_after_current command without any pre-configured scope."
+commands.allow = ["player_set_stop_after_current"]
+
+[[permission]]
+identifier = "deny-player-set-stop-after-current"
+description = "Denies the player_set_stop_after_current command without any pre-configured scope."
+commands.deny = ["player_set_stop_after_current"]

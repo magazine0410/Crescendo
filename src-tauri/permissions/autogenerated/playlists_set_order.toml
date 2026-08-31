@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-playlists-set-order"
+description = "Enables the playlists_set_order command without any pre-configured scope."
+commands.allow = ["playlists_set_order"]
+
+[[permission]]
+identifier = "deny-playlists-set-order"
+description = "Denies the playlists_set_order command without any pre-configured scope."
+commands.deny = ["playlists_set_order"]

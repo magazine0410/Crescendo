@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-playlist-import-m3u"
+description = "Enables the playlist_import_m3u command without any pre-configured scope."
+commands.allow = ["playlist_import_m3u"]
+
+[[permission]]
+identifier = "deny-playlist-import-m3u"
+description = "Denies the playlist_import_m3u command without any pre-configured scope."
+commands.deny = ["playlist_import_m3u"]

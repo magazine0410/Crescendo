@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lastfm-artist-info"
+description = "Enables the lastfm_artist_info command without any pre-configured scope."
+commands.allow = ["lastfm_artist_info"]
+
+[[permission]]
+identifier = "deny-lastfm-artist-info"
+description = "Denies the lastfm_artist_info command without any pre-configured scope."
+commands.deny = ["lastfm_artist_info"]

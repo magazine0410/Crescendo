@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-projectm-restore-folder"
+description = "Enables the projectm_restore_folder command without any pre-configured scope."
+commands.allow = ["projectm_restore_folder"]
+
+[[permission]]
+identifier = "deny-projectm-restore-folder"
+description = "Denies the projectm_restore_folder command without any pre-configured scope."
+commands.deny = ["projectm_restore_folder"]

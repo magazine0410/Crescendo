@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-projectm-load-preset"
+description = "Enables the projectm_load_preset command without any pre-configured scope."
+commands.allow = ["projectm_load_preset"]
+
+[[permission]]
+identifier = "deny-projectm-load-preset"
+description = "Denies the projectm_load_preset command without any pre-configured scope."
+commands.deny = ["projectm_load_preset"]

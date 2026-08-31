@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-playlist-tracks-multi"
+description = "Enables the playlist_tracks_multi command without any pre-configured scope."
+commands.allow = ["playlist_tracks_multi"]
+
+[[permission]]
+identifier = "deny-playlist-tracks-multi"
+description = "Denies the playlist_tracks_multi command without any pre-configured scope."
+commands.deny = ["playlist_tracks_multi"]

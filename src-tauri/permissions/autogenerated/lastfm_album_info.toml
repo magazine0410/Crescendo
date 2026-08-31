@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lastfm-album-info"
+description = "Enables the lastfm_album_info command without any pre-configured scope."
+commands.allow = ["lastfm_album_info"]
+
+[[permission]]
+identifier = "deny-lastfm-album-info"
+description = "Denies the lastfm_album_info command without any pre-configured scope."
+commands.deny = ["lastfm_album_info"]

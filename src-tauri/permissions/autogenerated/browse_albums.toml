@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browse-albums"
+description = "Enables the browse_albums command without any pre-configured scope."
+commands.allow = ["browse_albums"]
+
+[[permission]]
+identifier = "deny-browse-albums"
+description = "Denies the browse_albums command without any pre-configured scope."
+commands.deny = ["browse_albums"]

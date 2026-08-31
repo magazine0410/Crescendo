@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-set-spectrum-enabled"
+description = "Enables the player_set_spectrum_enabled command without any pre-configured scope."
+commands.allow = ["player_set_spectrum_enabled"]
+
+[[permission]]
+identifier = "deny-player-set-spectrum-enabled"
+description = "Denies the player_set_spectrum_enabled command without any pre-configured scope."
+commands.deny = ["player_set_spectrum_enabled"]

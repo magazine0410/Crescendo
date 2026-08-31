@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-album-by-id"
+description = "Enables the album_by_id command without any pre-configured scope."
+commands.allow = ["album_by_id"]
+
+[[permission]]
+identifier = "deny-album-by-id"
+description = "Denies the album_by_id command without any pre-configured scope."
+commands.deny = ["album_by_id"]

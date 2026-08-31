@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-player-jump-to"
+description = "Enables the player_jump_to command without any pre-configured scope."
+commands.allow = ["player_jump_to"]
+
+[[permission]]
+identifier = "deny-player-jump-to"
+description = "Denies the player_jump_to command without any pre-configured scope."
+commands.deny = ["player_jump_to"]

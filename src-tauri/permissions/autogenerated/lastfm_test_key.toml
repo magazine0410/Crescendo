@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lastfm-test-key"
+description = "Enables the lastfm_test_key command without any pre-configured scope."
+commands.allow = ["lastfm_test_key"]
+
+[[permission]]
+identifier = "deny-lastfm-test-key"
+description = "Denies the lastfm_test_key command without any pre-configured scope."
+commands.deny = ["lastfm_test_key"]

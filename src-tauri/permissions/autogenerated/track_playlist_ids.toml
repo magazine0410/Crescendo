@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-track-playlist-ids"
+description = "Enables the track_playlist_ids command without any pre-configured scope."
+commands.allow = ["track_playlist_ids"]
+
+[[permission]]
+identifier = "deny-track-playlist-ids"
+description = "Denies the track_playlist_ids command without any pre-configured scope."
+commands.deny = ["track_playlist_ids"]
