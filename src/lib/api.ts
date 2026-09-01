@@ -121,6 +121,79 @@ export interface ScanProgress {
   done: boolean;
 }
 
+export type PluginKind = "declarative" | "wasm";
+
+interface PluginSettingBase {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export type PluginSetting =
+  | (PluginSettingBase & { type: "boolean"; default: boolean; value: boolean })
+  | (PluginSettingBase & {
+      type: "string";
+      default: string;
+      min_length: number | null;
+      max_length: number | null;
+      value: string;
+    })
+  | (PluginSettingBase & {
+      type: "number";
+      default: number;
+      min: number | null;
+      max: number | null;
+      step: number | null;
+      value: number;
+    })
+  | (PluginSettingBase & {
+      type: "select";
+      default: string;
+      options: { value: string; label: string }[];
+      value: string;
+    });
+
+export interface PluginPendingStatus {
+  operation: "update" | "uninstall";
+  target_version: string | null;
+}
+
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string | null;
+  description: string;
+  authors: string[];
+  license: string | null;
+  homepage: string | null;
+  kind: PluginKind | null;
+  api_version: string | null;
+  min_crescendo_version: string | null;
+  package_hash: string | null;
+  desired_enabled: boolean;
+  loaded: boolean;
+  compatible: boolean;
+  compatibility_error: string | null;
+  error: string | null;
+  pending: PluginPendingStatus | null;
+  settings: PluginSetting[];
+}
+
+export interface PluginSnapshot {
+  plugins: PluginInfo[];
+  loaded_plugin_ids: string[];
+  safe_mode: boolean;
+  safe_mode_reason: string | null;
+  errors: string[];
+  restart_required: boolean;
+}
+
+export interface PluginMutationResult {
+  changed: boolean;
+  message: string | null;
+  snapshot: PluginSnapshot;
+}
+
 export type RepeatMode = "off" | "all" | "one";
 
 export interface PlayerState {

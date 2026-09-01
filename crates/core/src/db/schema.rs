@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -125,6 +125,27 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
               key TEXT PRIMARY KEY,
               value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS plugin_state (
+              plugin_id TEXT PRIMARY KEY,
+              desired_enabled INTEGER NOT NULL DEFAULT 0,
+              failure_count INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT
+            );
+            CREATE TABLE IF NOT EXISTS plugin_pending (
+              plugin_id TEXT PRIMARY KEY,
+              operation TEXT NOT NULL,
+              staged_path TEXT NOT NULL,
+              target_version TEXT,
+              package_hash TEXT,
+              remove_data INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS plugin_settings (
+              plugin_id TEXT NOT NULL,
+              setting_key TEXT NOT NULL,
+              value_json TEXT NOT NULL,
+              PRIMARY KEY(plugin_id, setting_key)
+            ) WITHOUT ROWID;
             "#,
         )?;
     }
@@ -142,9 +163,7 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     if version < 3 && version >= 1 {
         // v3: per-track play counter (a track counts as played once >50% of it
         // has been heard). Fresh databases get the column from the CREATE above.
-        tx.execute_batch(
-            "ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;",
-        )?;
+        tx.execute_batch("ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;")?;
     }
     if version < 4 && version >= 1 {
         // v4: playlist collections — a named group a playlist can belong to.
@@ -210,6 +229,33 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
              ALTER TABLE tracks ADD COLUMN bpm INTEGER;",
         )?;
     }
+    if version < 8 && version >= 1 {
+        // v8: installed plugin lifecycle state, crash-safe deferred package
+        // operations, and namespaced manifest-declared setting values. Package
+        // metadata itself remains in each installed manifest.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS plugin_state (
+               plugin_id TEXT PRIMARY KEY,
+               desired_enabled INTEGER NOT NULL DEFAULT 0,
+               failure_count INTEGER NOT NULL DEFAULT 0,
+               last_error TEXT
+             );
+             CREATE TABLE IF NOT EXISTS plugin_pending (
+               plugin_id TEXT PRIMARY KEY,
+               operation TEXT NOT NULL,
+               staged_path TEXT NOT NULL,
+               target_version TEXT,
+               package_hash TEXT,
+               remove_data INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE IF NOT EXISTS plugin_settings (
+               plugin_id TEXT NOT NULL,
+               setting_key TEXT NOT NULL,
+               value_json TEXT NOT NULL,
+               PRIMARY KEY(plugin_id, setting_key)
+             ) WITHOUT ROWID;",
+        )?;
+    }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;
     Ok(())
@@ -217,8 +263,31 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::migrate;
+    use super::{migrate, SCHEMA_VERSION};
     use rusqlite::Connection;
+
+    #[test]
+    fn version_seven_database_gains_plugin_tables() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        for table in ["plugin_state", "plugin_pending", "plugin_settings"] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "{table} was not created by the v8 migration");
+        }
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
 
     #[test]
     fn failed_migration_rolls_back_earlier_schema_changes() {

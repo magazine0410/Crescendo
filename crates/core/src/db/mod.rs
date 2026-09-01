@@ -1,6 +1,7 @@
 mod schema;
 pub mod collections;
 pub mod playlists;
+pub mod plugins;
 pub mod prefs;
 pub mod queries;
 

@@ -2,6 +2,7 @@ use crate::player::PlayerHandle;
 use crate::waveform::WaveformStore;
 use crescendo_core::art::ArtStore;
 use crescendo_core::db::Db;
+use crescendo_core::plugins::PluginManager;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -36,6 +37,7 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub art: Arc<ArtStore>,
     pub waveform: Arc<WaveformStore>,
+    pub plugins: Arc<PluginManager>,
     pub player: PlayerHandle,
     pub projectm_grants: Arc<Mutex<ProjectMGrants>>,
     pub scanning: Arc<AtomicBool>,

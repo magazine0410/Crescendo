@@ -8,6 +8,9 @@ import type {
   BrowseValue,
   CollectionInfo,
   PlaylistInfo,
+  PluginInfo,
+  PluginMutationResult,
+  PluginSnapshot,
   SortKey,
   Track,
   TrackSort,
@@ -56,6 +59,67 @@ const playlists: PlaylistInfo[] = [
 const collections: Pick<CollectionInfo, "id" | "name" | "collapsed">[] = [];
 const playlistTracks = new Map<number, number[]>();
 const queue: number[] = [];
+
+const mockPluginPackage: PluginInfo = {
+  id: "dev.crescendo.mock-personalizer",
+  name: "Mock Personalizer",
+  version: "1.0.0",
+  description: "A browser-preview plugin used to exercise Crescendo's plugin manager.",
+  authors: ["Crescendo"],
+  license: "MIT",
+  homepage: "https://example.invalid/crescendo-plugin",
+  kind: "declarative",
+  api_version: "1.0.0",
+  min_crescendo_version: "0.8.0",
+  package_hash: "43e8b6bdfb5f2bfef5f2f9cf70f719b2d686fa158ef72ed8a4d8b43a30193a20",
+  desired_enabled: true,
+  loaded: true,
+  compatible: true,
+  compatibility_error: null,
+  error: null,
+  pending: null,
+  settings: [
+    {
+      type: "boolean",
+      key: "show_extra_detail",
+      label: "Show extra detail",
+      description: "Example live boolean setting.",
+      default: true,
+      value: true,
+    },
+    {
+      type: "select",
+      key: "density",
+      label: "Density",
+      description: "Example host-rendered select setting.",
+      default: "comfortable",
+      value: "comfortable",
+      options: [
+        { value: "compact", label: "Compact" },
+        { value: "comfortable", label: "Comfortable" },
+      ],
+    },
+  ],
+};
+
+let mockPlugins: PluginInfo[] = [structuredClone(mockPluginPackage)];
+
+function pluginSnapshot(): PluginSnapshot {
+  return {
+    plugins: structuredClone(mockPlugins),
+    loaded_plugin_ids: mockPlugins.filter((plugin) => plugin.loaded).map((plugin) => plugin.id),
+    safe_mode: false,
+    safe_mode_reason: null,
+    errors: [],
+    restart_required: mockPlugins.some(
+      (plugin) => plugin.pending !== null || plugin.desired_enabled !== plugin.loaded,
+    ),
+  };
+}
+
+function pluginMutation(changed: boolean, message: string | null): PluginMutationResult {
+  return { changed, message, snapshot: pluginSnapshot() };
+}
 
 function build() {
   if (built) return;
@@ -536,6 +600,64 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return undefined as T;
     case "queue_list":
       return queue.map((id) => tracks[id - 1]).filter(Boolean) as T;
+    case "plugin_list":
+      return pluginSnapshot() as T;
+    case "plugin_choose_install": {
+      const plugin = mockPlugins[0];
+      if (!plugin) {
+        const installed = structuredClone(mockPluginPackage);
+        installed.desired_enabled = false;
+        installed.loaded = false;
+        mockPlugins.push(installed);
+        return pluginMutation(true, `${installed.name} was installed disabled.`) as T;
+      }
+      plugin.pending = { operation: "update", target_version: "1.1.0" };
+      return pluginMutation(true, `${plugin.name} will update after Crescendo restarts.`) as T;
+    }
+    case "plugin_set_enabled": {
+      const plugin = mockPlugins.find((candidate) => candidate.id === args.pluginId);
+      if (!plugin) throw new Error("Plugin is not installed");
+      const enabled = args.enabled as boolean;
+      const changed = plugin.desired_enabled !== enabled;
+      plugin.desired_enabled = enabled;
+      return pluginMutation(
+        changed,
+        changed
+          ? enabled === plugin.loaded
+            ? `The pending change was cancelled; ${plugin.name} remains ${enabled ? "enabled" : "disabled"}.`
+            : `${plugin.name} will be ${enabled ? "enabled" : "disabled"} after Crescendo restarts.`
+          : null,
+      ) as T;
+    }
+    case "plugin_set_setting": {
+      const plugin = mockPlugins.find((candidate) => candidate.id === args.pluginId);
+      const setting = plugin?.settings.find((candidate) => candidate.key === args.key);
+      if (!plugin || !setting) throw new Error("Plugin setting is not declared");
+      const changed = setting.value !== args.value;
+      setting.value = args.value as never;
+      return pluginMutation(changed, null) as T;
+    }
+    case "plugin_uninstall": {
+      const plugin = mockPlugins.find((candidate) => candidate.id === args.pluginId);
+      if (!plugin) throw new Error("Plugin is not installed");
+      if (plugin.loaded) {
+        plugin.desired_enabled = false;
+        plugin.pending = { operation: "uninstall", target_version: null };
+        return pluginMutation(true, `${plugin.name} will be uninstalled after Crescendo restarts.`) as T;
+      }
+      mockPlugins = mockPlugins.filter((candidate) => candidate.id !== plugin.id);
+      return pluginMutation(true, `${plugin.name} was uninstalled.`) as T;
+    }
+    case "plugin_restart_app":
+      mockPlugins = mockPlugins
+        .filter((plugin) => plugin.pending?.operation !== "uninstall")
+        .map((plugin) => ({
+          ...plugin,
+          version: plugin.pending?.target_version ?? plugin.version,
+          pending: null,
+          loaded: plugin.desired_enabled,
+        }));
+      return undefined as T;
     case "prefs_get_all":
       return {} as T;
     case "prefs_set":
@@ -563,6 +685,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           { name: "ureq", version: "2.12.1" },
           { name: "SemVer", version: "1.0.28" },
           { name: "SHA-2", version: "0.10.9" },
+          { name: "ZIP", version: "2.4.2" },
           { name: "walkdir", version: "2.5.0" },
           { name: "regex", version: "1.13.1" },
           { name: "Serde", version: "1.0.229" },

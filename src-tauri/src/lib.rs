@@ -6,6 +6,7 @@ pub mod waveform;
 
 use crescendo_core::art::ArtStore;
 use crescendo_core::db::Db;
+use crescendo_core::plugins::PluginManager;
 use state::AppState;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -29,6 +30,19 @@ pub fn run() {
             }
             let art = Arc::new(ArtStore::new(&state::cache_dir())?);
             let waveform = Arc::new(waveform::WaveformStore::new(&state::cache_dir())?);
+            let plugin_root = state::data_dir().join("plugins");
+            let plugins = Arc::new(
+                PluginManager::start(plugin_root.clone(), db.clone(), env!("CARGO_PKG_VERSION"))
+                    .unwrap_or_else(|error| {
+                        log::error!("plugin system startup failed: {error:#}");
+                        PluginManager::disabled(
+                            plugin_root,
+                            db.clone(),
+                            env!("CARGO_PKG_VERSION"),
+                            format!("{error:#}"),
+                        )
+                    }),
+            );
             let player = player::spawn(app.handle().clone(), db.clone())?;
 
             // Restore persisted volume before the first play.
@@ -44,6 +58,7 @@ pub fn run() {
                 db,
                 art,
                 waveform,
+                plugins,
                 player,
                 projectm_grants: Arc::new(std::sync::Mutex::new(Default::default())),
                 scanning: Arc::new(AtomicBool::new(false)),
@@ -106,6 +121,12 @@ pub fn run() {
             commands::playlists::collection_rename,
             commands::playlists::collection_delete,
             commands::playlists::collection_set_collapsed,
+            commands::plugins::plugin_list,
+            commands::plugins::plugin_choose_install,
+            commands::plugins::plugin_set_enabled,
+            commands::plugins::plugin_set_setting,
+            commands::plugins::plugin_uninstall,
+            commands::plugins::plugin_restart_app,
             commands::misc::prefs_get_all,
             commands::misc::prefs_set,
             commands::misc::about_info,

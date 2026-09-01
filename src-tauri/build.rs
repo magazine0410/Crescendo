@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::{env, fs, path::Path};
 
 /// Every `#[tauri::command]` registered in `lib.rs`'s `generate_handler!`.
@@ -67,6 +68,12 @@ const COMMANDS: &[&str] = &[
     "collection_rename",
     "collection_delete",
     "collection_set_collapsed",
+    "plugin_list",
+    "plugin_choose_install",
+    "plugin_set_enabled",
+    "plugin_set_setting",
+    "plugin_uninstall",
+    "plugin_restart_app",
     "prefs_get_all",
     "prefs_set",
     "about_info",
@@ -116,13 +123,47 @@ fn npm_version(lock: &str, package: &str) -> String {
         .to_owned()
 }
 
+fn handler_commands(source: &str) -> BTreeSet<String> {
+    let body = source
+        .split_once("tauri::generate_handler![")
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split_once("])").map(|(body, _)| body))
+        .expect("src/lib.rs must contain one tauri::generate_handler! block");
+    body.lines()
+        .filter_map(|line| {
+            let line = line.trim().trim_end_matches(',');
+            line.strip_prefix("commands::")
+                .and_then(|command| command.rsplit("::").next())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn verify_command_parity(source: &str) {
+    let handlers = handler_commands(source);
+    let manifest: BTreeSet<String> = COMMANDS
+        .iter()
+        .map(|command| (*command).to_owned())
+        .collect();
+    if handlers != manifest {
+        let missing_acl: Vec<_> = handlers.difference(&manifest).cloned().collect();
+        let missing_handler: Vec<_> = manifest.difference(&handlers).cloned().collect();
+        panic!(
+            "Tauri command registration mismatch; handlers missing from COMMANDS: {missing_acl:?}; COMMANDS entries missing handlers: {missing_handler:?}"
+        );
+    }
+}
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set");
     let root = Path::new(&manifest_dir)
         .parent()
         .expect("src-tauri has a parent directory");
     let cargo_lock = fs::read_to_string(root.join("Cargo.lock")).expect("read Cargo.lock");
-    let npm_lock = fs::read_to_string(root.join("package-lock.json")).expect("read package-lock.json");
+    let npm_lock =
+        fs::read_to_string(root.join("package-lock.json")).expect("read package-lock.json");
+    let lib_rs = fs::read_to_string(root.join("src-tauri/src/lib.rs")).expect("read src/lib.rs");
+    verify_command_parity(&lib_rs);
 
     println!(
         "cargo:rerun-if-changed={}",
@@ -131,6 +172,10 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         root.join("package-lock.json").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        root.join("src-tauri/src/lib.rs").display()
     );
 
     for (env_name, package) in [
@@ -145,6 +190,7 @@ fn main() {
         ("CRESCENDO_DEP_UREQ", "ureq"),
         ("CRESCENDO_DEP_SEMVER", "semver"),
         ("CRESCENDO_DEP_SHA2", "sha2"),
+        ("CRESCENDO_DEP_ZIP", "zip"),
         ("CRESCENDO_DEP_WALKDIR", "walkdir"),
         ("CRESCENDO_DEP_REGEX", "regex"),
         ("CRESCENDO_DEP_SERDE", "serde"),

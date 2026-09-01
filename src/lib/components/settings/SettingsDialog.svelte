@@ -4,6 +4,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { call, isTauri } from "$lib/api";
   import { formatLongDuration } from "$lib/format";
+  import PluginsSettings from "./PluginsSettings.svelte";
 
   interface Props {
     open: boolean;
@@ -17,7 +18,8 @@
     | "playlists"
     | "display"
     | "now-playing"
-    | "visualizer";
+    | "visualizer"
+    | "plugins";
 
   const settingsSections: { id: SettingsSection; label: string }[] = [
     { id: "general", label: "General" },
@@ -26,6 +28,7 @@
     { id: "display", label: "Display" },
     { id: "now-playing", label: "Now playing" },
     { id: "visualizer", label: "Visualizer" },
+    { id: "plugins", label: "Plugins" },
   ];
 
   let keyTest = $state<"idle" | "testing" | "ok" | "bad">("idle");
@@ -407,7 +410,7 @@
         </p>
       </div>
 
-      {:else}
+      {:else if activeSection === "visualizer"}
       <div class="settings-panel"
         id="settings-panel-visualizer"
         role="tabpanel"
@@ -416,6 +419,15 @@
         <p class="hint">
           Change the bar color from the swatch in the Visualizer tab. More options coming here later.
         </p>
+      </div>
+
+      {:else}
+      <div class="settings-panel"
+        id="settings-panel-plugins"
+        role="tabpanel"
+        aria-labelledby="settings-tab-plugins"
+      >
+        <PluginsSettings />
       </div>
       {/if}
       </div>
@@ -438,7 +450,7 @@
     z-index: 300;
   }
   .dialog {
-    width: 520px;
+    width: 640px;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
@@ -464,7 +476,7 @@
   }
   .tabs {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     flex: none;
     border-bottom: 1px solid var(--hairline);
     background: var(--bg-panel);
