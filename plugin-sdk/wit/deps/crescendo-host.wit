@@ -1,0 +1,186 @@
+/// Crescendo host interfaces, runtime API 0.2.0.
+///
+/// A plugin component imports the interfaces it needs and receives them from
+/// the host; there is no WASI. Every capability-gated interface denies calls
+/// unless the user approved the matching manifest permission for this exact
+/// package. The host renders all settings and menu UI: `settings` is an
+/// on-demand read of live values — components must not cache
+/// initialization-time values, because `on-settings-changed` is coalesced,
+/// not guaranteed per change.
+package crescendo:host@0.2.0;
+
+/// Always-available host services: live settings and a bounded log.
+interface host {
+    record setting {
+        key: string,
+        value: string,
+    }
+
+    enum log-level {
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Live values of this plugin's manifest-declared settings.
+    settings: func() -> list<setting>;
+
+    /// Append to this plugin's bounded diagnostic log.
+    log: func(level: log-level, message: string);
+}
+
+/// Namespaced key/value storage. Requires the `storage` permission.
+interface storage {
+    variant storage-error {
+        /// The package was not granted the storage permission.
+        denied,
+        /// The 5 MiB namespace quota would be exceeded.
+        quota-exceeded,
+        /// The key or value violates the size or format limits.
+        invalid-key,
+    }
+
+    get: func(key: string) -> result<option<string>, storage-error>;
+    set: func(key: string, value: string) -> result<_, storage-error>;
+    delete: func(key: string) -> result<_, storage-error>;
+    keys: func() -> result<list<string>, storage-error>;
+}
+
+/// Windowed, read-only library metadata. Requires `library.read`;
+/// `path` is populated only when `library.paths` is also granted.
+interface library {
+    variant library-error {
+        /// The package was not granted the library.read permission.
+        denied,
+        /// The requested page is out of range.
+        invalid-page,
+    }
+
+    record track {
+        id: u64,
+        title: option<string>,
+        artist: option<string>,
+        album: option<string>,
+        album-artist: option<string>,
+        genre: option<string>,
+        grouping: option<string>,
+        duration-ms: u64,
+        year: option<u32>,
+        track-no: option<u32>,
+        disc-no: option<u32>,
+        path: option<string>,
+    }
+
+    record page {
+        tracks: list<track>,
+        /// Total live tracks, so callers can page without guessing.
+        total: u64,
+    }
+
+    track-count: func() -> result<u64, library-error>;
+
+    /// One page of tracks ordered by id. `limit` is clamped to 2000 and
+    /// `offset` must be smaller than the total.
+    tracks: func(offset: u64, limit: u32) -> result<page, library-error>;
+}
+
+/// Playback observation and control. `state` requires `player.read`; every
+/// mutating call requires `player.control`. The two are deliberately separate
+/// capabilities: a scrobbler needs to watch, not to steer.
+interface player {
+    variant player-error {
+        /// The package was not granted the matching permission.
+        denied,
+        /// The host has no player attached (headless tools, early startup).
+        unavailable,
+        /// The argument was out of range.
+        invalid-request,
+    }
+
+    enum repeat-mode {
+        off,
+        all,
+        one,
+    }
+
+    record state {
+        playing: bool,
+        paused: bool,
+        track-id: option<u64>,
+        position-ms: u64,
+        duration-ms: u64,
+        volume: f64,
+        muted: bool,
+        shuffle: bool,
+        repeat: repeat-mode,
+    }
+
+    /// Requires `player.read`.
+    get-state: func() -> result<state, player-error>;
+
+    /// The following require `player.control`.
+    play-pause: func() -> result<_, player-error>;
+    stop: func() -> result<_, player-error>;
+    next: func() -> result<_, player-error>;
+    previous: func() -> result<_, player-error>;
+    seek: func(position-ms: u64) -> result<_, player-error>;
+    set-volume: func(volume: f64) -> result<_, player-error>;
+    /// Append tracks to the ad-hoc queue. Ids are resolved by the host.
+    enqueue: func(track-ids: list<u64>) -> result<_, player-error>;
+}
+
+/// High-level playlist access. Reads require `playlists.read`; the bounded
+/// mutations require `playlists.write`. Deleting a playlist is deliberately
+/// absent from v1: it is irreversible and no contribution type needs it.
+interface playlists {
+    variant playlist-error {
+        denied,
+        not-found,
+        invalid-request,
+    }
+
+    record info {
+        id: u64,
+        name: string,
+        track-count: u64,
+    }
+
+    /// Requires `playlists.read`. (`list` is a WIT keyword, hence `all`.)
+    all: func() -> result<list<info>, playlist-error>;
+    /// Track ids in playlist order. `limit` is clamped to 2000.
+    tracks: func(playlist-id: u64, offset: u64, limit: u32) -> result<list<u64>, playlist-error>;
+
+    /// The following require `playlists.write`.
+    create: func(name: string) -> result<u64, playlist-error>;
+    rename: func(playlist-id: u64, name: string) -> result<_, playlist-error>;
+    add-tracks: func(playlist-id: u64, track-ids: list<u64>) -> result<_, playlist-error>;
+    remove-positions: func(playlist-id: u64, positions: list<u64>) -> result<_, playlist-error>;
+}
+
+/// Outbound HTTPS to manifest-declared, user-approved domains. Requires
+/// `network.http`. Plain HTTP, private and loopback addresses, and hosts
+/// outside the approved list are refused, redirects are revalidated hop by
+/// hop, and no host cookie or credential is ever attached.
+interface net {
+    variant net-error {
+        /// The package was not granted network.http.
+        denied,
+        /// Host is not approved, or resolves to a private/loopback address.
+        blocked-host,
+        /// Bad method, URL, or oversized request body.
+        invalid-request,
+        /// Connection, TLS, or timeout failure.
+        transport(string),
+        /// The response exceeded the 1 MiB body limit.
+        too-large,
+    }
+
+    record response {
+        status: u16,
+        body: string,
+    }
+
+    /// `method` is GET or POST. `url` must be https.
+    fetch: func(method: string, url: string, body: option<string>) -> result<response, net-error>;
+}

@@ -78,6 +78,30 @@ pub enum FacetTransform {
     },
 }
 
+/// One row of the read-only library page served to sandboxed Wasm plugins.
+/// Paths are present only when the `library.paths` permission was granted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginLibraryTrack {
+    pub id: i64,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub albumartist: Option<String>,
+    pub genre: Option<String>,
+    pub grouping: Option<String>,
+    pub duration_ms: i64,
+    pub year: Option<i64>,
+    pub track_no: Option<i64>,
+    pub disc_no: Option<i64>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginLibraryPage {
+    pub tracks: Vec<PluginLibraryTrack>,
+    pub total: i64,
+}
+
 pub fn track_from_row(r: &Row) -> rusqlite::Result<Track> {
     Ok(Track {
         id: r.get(0)?,
@@ -617,6 +641,62 @@ impl Db {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(params_from_iter(params.iter()), track_from_row)?;
             rows.map(|r| Ok(r?)).collect()
+        })
+    }
+
+    /// Count of live tracks for the sandboxed plugin `library.read` host
+    /// interface. No filter, no facet values — plugins see the whole library
+    /// through bounded pages only.
+    pub fn plugin_library_count(&self) -> Result<i64> {
+        self.with(|conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM tracks WHERE missing = 0",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+    }
+
+    /// One id-ordered page of live tracks for the plugin `library.read` host
+    /// interface. `include_paths` is passed only when the separate
+    /// `library.paths` permission was granted; otherwise `path` is `None`.
+    /// Page size is clamped by the caller (the host interface) to 2000 rows.
+    pub fn plugin_library_page(
+        &self,
+        offset: i64,
+        limit: i64,
+        include_paths: bool,
+    ) -> Result<PluginLibraryPage> {
+        self.with(|conn| {
+            let total: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM tracks WHERE missing = 0",
+                [],
+                |row| row.get(0),
+            )?;
+            let path_column = if include_paths { "path" } else { "NULL" };
+            let mut stmt = conn.prepare(&format!(
+                "SELECT id, title, artist, album, albumartist, genre, grouping, \
+                 duration_ms, year, track_no, disc_no, {path_column}
+                 FROM tracks WHERE missing = 0 ORDER BY id LIMIT ?1 OFFSET ?2"
+            ))?;
+            let rows = stmt.query_map(rusqlite::params![limit, offset], |row| {
+                Ok(PluginLibraryTrack {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    artist: row.get(2)?,
+                    album: row.get(3)?,
+                    albumartist: row.get(4)?,
+                    genre: row.get(5)?,
+                    grouping: row.get(6)?,
+                    duration_ms: row.get(7)?,
+                    year: row.get(8)?,
+                    track_no: row.get(9)?,
+                    disc_no: row.get(10)?,
+                    path: row.get(11)?,
+                })
+            })?;
+            let tracks = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(PluginLibraryPage { tracks, total })
         })
     }
 

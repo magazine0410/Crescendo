@@ -81,6 +81,27 @@
     removeData = false;
   }
 
+  async function approveGrants(plugin: PluginInfo) {
+    await run(() => plugins.approveGrants(plugin));
+  }
+
+  let commandOutput = $state<string | null>(null);
+
+  async function runCommand(plugin: PluginInfo, commandId: string) {
+    error = null;
+    commandOutput = null;
+    busy = true;
+    try {
+      const result = await plugins.invoke(plugin.id, commandId, {});
+      commandOutput = JSON.stringify(result, null, 2);
+      await refresh();
+    } catch (reason) {
+      error = String(reason);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function restart() {
     error = null;
     try {
@@ -96,6 +117,8 @@
     if (plugin.pending?.operation === "update") return `Update ${plugin.pending.target_version}`;
     if (plugin.error) return "Error";
     if (!plugin.compatible) return "Incompatible";
+    if (plugin.runtime_error) return "Runtime error";
+    if (!plugin.grants_approved) return "Needs approval";
     if (plugin.loaded && !plugin.desired_enabled) return "Disables after restart";
     if (!plugin.loaded && plugin.desired_enabled) return "Enables after restart";
     return plugin.loaded ? "Enabled" : "Disabled";
@@ -105,7 +128,7 @@
 <div class="plugin-toolbar">
   <div>
     <strong>Plugins</strong>
-    <p class="hint">Install optional Crescendo features from local, declarative packages.</p>
+    <p class="hint">Install optional Crescendo features from local packages. Sandboxed Wasm packages run with only the capabilities you approve.</p>
   </div>
   <button class="btn" disabled={busy} onclick={install}>Install…</button>
 </div>
@@ -175,6 +198,56 @@
           <p class="message warning">{selected.compatibility_error}</p>
         {/if}
         {#if selected.error}<p class="message error">{selected.error}</p>{/if}
+        {#if selected.runtime_error}<p class="message error">{selected.runtime_error}</p>{/if}
+
+        {#if selected.permissions.length}
+          <h4>Capabilities</h4>
+          <p class="hint">
+            This package requests the capabilities below. Approving them grants exactly this
+            package (version and hash); any update must be approved again.
+          </p>
+          <ul class="capability-list">
+            {#each selected.permissions as permission (permission)}
+              <li><code>{permission}</code></li>
+            {/each}
+            {#if selected.network_domains.length}
+              <li>
+                <code>network.http</code> domains:
+                {#each selected.network_domains as domain (domain)}<code>{domain}</code>{/each}
+              </li>
+            {/if}
+          </ul>
+          {#if !selected.grants_approved}
+            <div class="actions">
+              <button class="btn" disabled={busy} onclick={() => approveGrants(selected)}>
+                Approve capabilities…
+              </button>
+            </div>
+          {/if}
+        {/if}
+
+        {#if selected.loaded && selected.commands.length}
+          <h4>Commands</h4>
+          <div class="actions">
+            {#each selected.commands as commandId (commandId)}
+              <button
+                class="btn"
+                disabled={busy || selected.runtime_error !== null}
+                onclick={() => runCommand(selected, commandId)}
+              >
+                {commandId}
+              </button>
+            {/each}
+          </div>
+          {#if commandOutput}<pre class="command-output">{commandOutput}</pre>{/if}
+        {/if}
+
+        {#if selected.diagnostics.length}
+          <details class="diagnostics">
+            <summary>Runtime log ({selected.diagnostics.length})</summary>
+            {#each selected.diagnostics as entry}<p>{entry}</p>{/each}
+          </details>
+        {/if}
 
         <div class="actions">
           <button
@@ -198,7 +271,8 @@
             <p>Uninstall {selected.name}?</p>
             <label class="check">
               <input type="checkbox" bind:checked={removeData} />
-              Also remove this plugin's saved settings
+              Also remove this plugin's saved data — its settings, its stored
+              files, and any permissions you approved for it
             </label>
             <div class="actions">
               <button class="btn danger" disabled={busy} onclick={() => uninstall(selected)}>Uninstall</button>
@@ -366,4 +440,24 @@
   .diagnostics { margin-top: 12px; color: var(--txt-faded); font-size: 10px; }
   .diagnostics p { margin: 5px 0; overflow-wrap: anywhere; }
   .btn.danger { color: var(--search-invalid); }
+  .capability-list {
+    margin: 0 0 9px;
+    padding-left: 18px;
+    color: var(--txt);
+    font-size: 11px;
+  }
+  .capability-list li { margin-bottom: 3px; }
+  .capability-list code { color: var(--txt); font-size: 11px; }
+  .command-output {
+    max-height: 160px;
+    overflow: auto;
+    margin: 8px 0 0;
+    padding: 8px;
+    color: var(--txt);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    font-size: 10px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 </style>

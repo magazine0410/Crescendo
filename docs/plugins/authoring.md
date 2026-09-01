@@ -1,10 +1,13 @@
-# Authoring declarative plugins
+# Authoring plugins
 
 Crescendo v1 plugins are data packages. They declare settings and a small set
-of host-implemented contributions; they do not run JavaScript, HTML, SQL, Wasm,
-or native code. Crescendo compiles accepted facet descriptors into its own SQL
-query plans, renders controls itself, and validates setting values before they
-are stored.
+of host-implemented contributions; they never run JavaScript, HTML, SQL, or
+native code. Crescendo compiles accepted facet descriptors into its own SQL
+query plans and renders controls itself.
+
+A plugin is `kind: "declarative"` or `kind: "wasm"`. Declarative packages are
+pure data. Wasm packages additionally carry one `module.wasm` component which
+Crescendo executes in a sandbox (see *Wasm plugins* below).
 
 ## Source layout
 
@@ -14,17 +17,18 @@ A source directory may contain only:
 manifest.json
 assets/                 # optional passive files
   ...
-module.wasm             # Wasm-kind packages only; unsupported until Stage 5
+module.wasm             # Wasm-kind packages only
 README.md               # optional source documentation; not packaged
 LICENSE or LICENSE.txt  # optional source documentation; not packaged
 ```
 
 Declarative v1 assets are limited to PNG, JPEG, WebP, GIF, BMP, text, Markdown,
-and JSON. SVG, CSS, HTML, JavaScript, Wasm, files without an extension, links,
-and special files are rejected. No v1 contribution serves assets to the
-webview. Host features may load an asset only through a loaded plugin ID plus a
-normalized asset ID; the resolver returns bounded bytes and a host-selected
-media type, never an installed path.
+and JSON. The same passive-asset rule applies to Wasm packages: `module.wasm`
+is the only executable entry. SVG, CSS, HTML, JavaScript, files without an
+extension, links, and special files are rejected. No v1 contribution serves
+assets to the webview. Host features may load an asset only through a loaded
+plugin ID plus a normalized asset ID; the resolver returns bounded bytes and a
+host-selected media type, never an installed path.
 
 Packages have a 32 MiB compressed limit, a 64 MiB extracted limit, a 256 KiB
 manifest limit, and at most 512 entries. Paths must be UTF-8, relative,
@@ -45,8 +49,8 @@ Every manifest supplies:
 - `id`: a lowercase reverse-domain ID with at least three segments.
 - `name`, `description`, `authors`, `license`, and optional HTTP(S) `homepage`.
 - semantic `version`, `api_version`, and `min_crescendo_version` values.
-- `kind`: `declarative` for v1.
-- `permissions`: empty for declarative plugins.
+- `kind`: `declarative` or `wasm`.
+- `permissions`: empty for declarative plugins; see *Capabilities* below.
 - optional `contributes` declarations.
 
 The canonical complete example is
@@ -80,6 +84,59 @@ Only one enabled plugin may own a transform for a given target tag. The app
 rejects conflicting enable requests rather than choosing an order implicitly.
 Plugin data never supplies SQL; delimiters are quoted by trusted host code.
 
+Wasm plugins additionally contribute `commands`: an id list (same key rules as
+settings, at most 32). Only declared command ids are dispatchable through the
+`plugin_invoke` application command, which is main-window only.
+
+## Wasm plugins
+
+Wasm packages carry a `module.wasm` built against the versioned WIT world in
+[`plugin-sdk/wit/`](../../plugin-sdk/wit) (runtime API `0.2.0`, matched by the
+manifest's `api_version`). The component model interface is:
+
+- `crescendo:host/host` — always available: an on-demand `settings` read of the
+  plugin's live setting values and a bounded `log` for the plugin's
+  diagnostics view.
+- `crescendo:host/storage` — namespaced key/value storage (requires
+  `storage`): 256-byte keys, 256 KiB values, 5 MiB quota.
+- `crescendo:host/library` — windowed, id-ordered read-only track metadata
+  (requires `library.read`; `path` fields are filled only with
+  `library.paths`), pages of at most 2000 rows.
+- exported `crescendo:plugin/commands` — `init`, `invoke(command, input)`, and
+  `on-settings-changed`.
+
+There is no WASI: no filesystem, environment, process, socket, clock, or
+database access, and no per-track execution. Each plugin runs as one isolated
+component on a dedicated runtime thread with a 64 MiB memory limit, per-call
+fuel, and a wall-clock deadline. Repeated runtime failures mark the plugin
+unhealthy for the session; repeated startup-init failures auto-disable it.
+
+Build the canonical example from
+[`plugins/dev.crescendo.wasm-demo/`](../../plugins/dev.crescendo.wasm-demo):
+it needs `rustup target add wasm32-unknown-unknown` and
+`cargo install wasm-tools`; run `./build.sh` there, then assemble the package
+source (manifest.json plus the built module.wasm) and pack it with the
+`crescendo-plugin` tool.
+
+## Capabilities
+
+Wasm manifests may request capabilities from the fixed v1 vocabulary:
+`library.read`, `library.paths`, `player.read`, `player.control`,
+`playlists.read`, `playlists.write`, `network.http`, `storage`. Rules:
+
+- `library.paths` requires `library.read`.
+- `network.http` requires a `network_domains` list (lowercase hostnames,
+  at most 32).
+- Declarative packages cannot request capabilities.
+
+Grants are user-approved actions recorded against the plugin identity,
+version, and package hash; any update voids the approval and must be approved
+again before the update can load. Runtime API `0.2.0` provides the host
+interface for every capability in the vocabulary — see the table below. The
+compatibility check remains: a package naming a capability this build does not
+know stays installed but incompatible, and cannot be enabled, until a later
+Crescendo ships that capability.
+
 ## Validate and pack
 
 From a Crescendo checkout:
@@ -102,3 +159,40 @@ Packing fixes ZIP timestamps and permissions, sorts file paths, omits directory
 entries, and validates the completed archive through the runtime staging path.
 Identical source bytes produce an identical archive and SHA-256. The output is
 created without replacing an existing file.
+
+## Capabilities in runtime API 0.2.0
+
+Every permission in the v1 vocabulary now has a host interface. Each is denied
+per call unless the user approved it for this exact package:
+
+| Permission | Interface | Notes |
+| --- | --- | --- |
+| `library.read` | `crescendo:host/library` | Windowed pages, at most 2000 rows. |
+| `library.paths` | same | Adds `path`; requires `library.read`. |
+| `player.read` | `crescendo:host/player` | `get-state` only. |
+| `player.control` | same | Transport, volume, and queue append. |
+| `playlists.read` | `crescendo:host/playlists` | `all` and `tracks`. |
+| `playlists.write` | same | Create, rename, add, remove. No delete in v1. |
+| `network.http` | `crescendo:host/net` | HTTPS only, to approved domains. |
+| `storage` | `crescendo:host/storage` | 5 MiB namespaced, byte-accounted. |
+
+`network.http` also requires `network_domains` in the manifest. A domain
+approves itself and its subdomains, never a bare suffix, and every request —
+including each redirect hop — is re-checked against the list *and* against
+where the host actually resolves, so an approved name pointing at loopback or a
+private range is still refused.
+
+### Events
+
+A component exports five coalesced handlers besides `on-settings-changed`:
+`on-ready`, `on-player-state-changed`, `on-track-changed`,
+`on-library-changed`, and `on-playlist-changed`. They are notifications, not a
+stream: the host drops duplicates under load and may drop an event entirely if
+the runtime queue is full, so re-read what you need instead of accumulating
+state from the callbacks.
+
+Playlist mutations a plugin makes through `crescendo:host/playlists` refresh
+the app's own playlist views: the host emits the same change notification a
+mutation made through the UI does, so the sidebar updates and every plugin
+with an `on-playlist-changed` handler hears it — including the plugin that
+made the change, which should therefore not treat the callback as news.

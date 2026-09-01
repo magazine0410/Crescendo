@@ -178,6 +178,12 @@ export interface PluginInfo {
   error: string | null;
   pending: PluginPendingStatus | null;
   settings: PluginSetting[];
+  permissions: string[];
+  network_domains: string[];
+  grants_approved: boolean;
+  commands: string[];
+  runtime_error: string | null;
+  diagnostics: string[];
 }
 
 export interface PluginSnapshot {

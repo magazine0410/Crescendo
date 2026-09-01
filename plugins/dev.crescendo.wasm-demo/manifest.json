@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "dev.crescendo.wasm-demo",
+  "name": "Wasm Demo Tools",
+  "version": "0.1.0",
+  "description": "Canonical sandboxed Wasm plugin example. Demonstrates host-rendered settings, namespaced storage, windowed library reads, and permission failures.",
+  "authors": ["magazine"],
+  "license": "MIT",
+  "homepage": "https://github.com/magazine0410/Crescendo",
+  "kind": "wasm",
+  "api_version": "0.2.0",
+  "min_crescendo_version": "0.8.0",
+  "permissions": ["library.read", "storage"],
+  "contributes": {
+    "settings": [
+      {
+        "type": "boolean",
+        "key": "demo_flag",
+        "label": "Demo flag",
+        "description": "Example live setting the component can read on demand.",
+        "default": false
+      }
+    ],
+    "commands": [
+      { "id": "identity" },
+      { "id": "settings" },
+      { "id": "storage_roundtrip" },
+      { "id": "library_summary" },
+      { "id": "spin" }
+    ]
+  }
+}

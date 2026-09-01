@@ -354,20 +354,17 @@ pub(super) fn read_manifest(path: &Path) -> Result<PluginManifest> {
     serde_json::from_slice(&bytes).context("manifest.json is not valid schema-version-1 JSON")
 }
 
-/// Declarative packages may carry only passive assets. The v1 host never
-/// serves these files to the webview; future host contributions must resolve
-/// them by plugin/asset id and receive bounded bytes. Keeping the package
-/// allow-list here prevents an apparently declarative package from smuggling
-/// executable or remotely-loading content into a later consumer.
+/// Packages may carry only passive assets, Wasm or declarative alike. The
+/// v1 host never serves these files to the webview; future host contributions
+/// must resolve them by plugin/asset id and receive bounded bytes. Keeping
+/// the package allow-list here prevents an apparently declarative package
+/// from smuggling executable or remotely-loading content into a later
+/// consumer. `module.wasm` is the single executable entry, and only for
+/// `kind: "wasm"` packages.
 pub(super) fn validate_declarative_assets(
     package_root: &Path,
-    manifest: &PluginManifest,
+    _manifest: &PluginManifest,
 ) -> Result<()> {
-    use super::manifest::PluginKind;
-
-    if manifest.kind != PluginKind::Declarative {
-        return Ok(());
-    }
     let assets = package_root.join("assets");
     if !assets.try_exists()? {
         return Ok(());
@@ -382,13 +379,13 @@ pub(super) fn validate_declarative_assets(
             .extension()
             .and_then(|value| value.to_str())
             .map(str::to_ascii_lowercase)
-            .ok_or_else(|| anyhow!("declarative plugin assets must have a supported extension"))?;
+            .ok_or_else(|| anyhow!("plugin assets must have a supported extension"))?;
         if !matches!(
             extension.as_str(),
             "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "txt" | "md" | "json"
         ) {
             bail!(
-                "declarative plugin asset {} has an unsupported or active-content extension",
+                "plugin asset {} has an unsupported or active-content extension",
                 entry.path().strip_prefix(package_root)?.display()
             );
         }
@@ -574,6 +571,7 @@ mod tests {
             api_version: "1.0.0".into(),
             min_crescendo_version: "0.8.0".into(),
             permissions: vec![],
+            network_domains: vec![],
             contributes: PluginContributions::default(),
         }
     }

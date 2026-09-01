@@ -1,4 +1,5 @@
 use super::Db;
+use crate::plugins::{parse_permissions, PluginGrant};
 use anyhow::Result;
 use rusqlite::OptionalExtension;
 use std::collections::HashMap;
@@ -179,11 +180,25 @@ impl Db {
                 [plugin_id],
             )?;
             if remove_data {
+                // "Also remove plugin data" means all of it. Namespaced Wasm
+                // storage is the largest part and was previously left behind,
+                // so a reinstall inherited the old plugin's data. Grants go too:
+                // they are pinned to a package that is being removed, and a
+                // future reinstall must be approved afresh.
                 tx.execute(
                     "DELETE FROM plugin_settings WHERE plugin_id = ?1",
                     [plugin_id],
                 )?;
+                tx.execute(
+                    "DELETE FROM plugin_storage WHERE plugin_id = ?1",
+                    [plugin_id],
+                )?;
+                tx.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1", [plugin_id])?;
                 tx.execute("DELETE FROM plugin_state WHERE plugin_id = ?1", [plugin_id])?;
+            } else {
+                // Even when data is kept, the grant does not outlive the
+                // installed package it was pinned to.
+                tx.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1", [plugin_id])?;
             }
             tx.commit()?;
             Ok(())
@@ -231,6 +246,157 @@ impl Db {
                  ON CONFLICT(plugin_id, setting_key) DO UPDATE SET value_json = excluded.value_json",
                 rusqlite::params![plugin_id, setting_key, json],
             )?;
+            Ok(())
+        })
+    }
+
+    pub fn plugin_grant_get(&self, plugin_id: &str) -> Result<Option<PluginGrant>> {
+        let row = self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT permissions_json, network_domains_json, version, package_hash, granted_at
+                     FROM plugin_grants WHERE plugin_id = ?1",
+                    [plugin_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, i64>(4)?,
+                        ))
+                    },
+                )
+                .optional()?)
+        })?;
+        let Some((permissions_json, domains_json, version, package_hash, granted_at)) = row
+        else {
+            return Ok(None);
+        };
+        // A grant whose stored values no longer parse is treated as absent:
+        // the plugin simply requires a fresh, explicit approval.
+        let (permission_strings, domain_strings): (Vec<String>, Vec<String>) =
+            match (serde_json::from_str(&permissions_json), serde_json::from_str(&domains_json)) {
+                (Ok(permissions), Ok(domains)) => (permissions, domains),
+                _ => {
+                    log::warn!("ignoring invalid stored grant for {plugin_id}");
+                    return Ok(None);
+                }
+            };
+        let (Ok(permissions), Ok(network_domains)) = (
+            parse_permissions(&permission_strings),
+            crate::plugins::parse_stored_network_domains(&domain_strings),
+        ) else {
+            log::warn!("ignoring invalid stored grant for {plugin_id}");
+            return Ok(None);
+        };
+        Ok(Some(PluginGrant {
+            plugin_id: plugin_id.to_string(),
+            permissions,
+            network_domains,
+            version,
+            package_hash,
+            granted_at,
+        }))
+    }
+
+    pub fn plugin_grant_set(&self, grant: &PluginGrant) -> Result<()> {
+        let permissions: Vec<&str> = grant
+            .permissions
+            .iter()
+            .map(|permission| permission.as_str())
+            .collect();
+        let permissions_json = serde_json::to_string(&permissions)?;
+        let domains_json = serde_json::to_string(&grant.network_domains)?;
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO plugin_grants(
+                   plugin_id, permissions_json, network_domains_json, version, package_hash, granted_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(plugin_id) DO UPDATE SET
+                   permissions_json = excluded.permissions_json,
+                   network_domains_json = excluded.network_domains_json,
+                   version = excluded.version,
+                   package_hash = excluded.package_hash,
+                   granted_at = excluded.granted_at",
+                rusqlite::params![
+                    grant.plugin_id,
+                    permissions_json,
+                    domains_json,
+                    grant.version,
+                    grant.package_hash,
+                    grant.granted_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn plugin_storage_get(&self, plugin_id: &str, key: &str) -> Result<Option<String>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT value FROM plugin_storage WHERE plugin_id = ?1 AND storage_key = ?2",
+                    rusqlite::params![plugin_id, key],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        })
+    }
+
+    pub fn plugin_storage_set(&self, plugin_id: &str, key: &str, value: &str) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO plugin_storage(plugin_id, storage_key, value)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(plugin_id, storage_key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![plugin_id, key, value],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn plugin_storage_delete(&self, plugin_id: &str, key: &str) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "DELETE FROM plugin_storage WHERE plugin_id = ?1 AND storage_key = ?2",
+                rusqlite::params![plugin_id, key],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn plugin_storage_keys(&self, plugin_id: &str) -> Result<Vec<String>> {
+        self.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT storage_key FROM plugin_storage WHERE plugin_id = ?1
+                 ORDER BY storage_key",
+            )?;
+            let rows = stmt.query_map([plugin_id], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        })
+    }
+
+    /// Bytes currently used by one plugin's storage namespace (key + value
+    /// bytes), for quota enforcement.
+    pub fn plugin_storage_usage(&self, plugin_id: &str) -> Result<i64> {
+        self.with(|conn| {
+            Ok(conn.query_row(
+                // Byte lengths, matching the Rust-side delta in wasm::storage.
+                // Bare length() counts characters on TEXT, which would charge a
+                // CJK-heavy value a third of what it costs.
+                "SELECT COALESCE(SUM(length(CAST(storage_key AS BLOB))
+                                   + length(CAST(value AS BLOB))), 0)
+                 FROM plugin_storage WHERE plugin_id = ?1",
+                [plugin_id],
+                |row| row.get(0),
+            )?)
+        })
+    }
+
+    pub fn plugin_storage_clear(&self, plugin_id: &str) -> Result<()> {
+        self.with(|conn| {
+            conn.execute("DELETE FROM plugin_storage WHERE plugin_id = ?1", [plugin_id])?;
             Ok(())
         })
     }

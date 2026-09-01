@@ -103,6 +103,12 @@ const mockPluginPackage: PluginInfo = {
       affects_projection: false,
     },
   ],
+  permissions: [],
+  network_domains: [],
+  grants_approved: true,
+  commands: [],
+  runtime_error: null,
+  diagnostics: [],
 };
 
 const mockGroupingPlugin: PluginInfo = {
@@ -134,12 +140,57 @@ const mockGroupingPlugin: PluginInfo = {
       affects_projection: true,
     },
   ],
+  permissions: [],
+  network_domains: [],
+  grants_approved: true,
+  commands: [],
+  runtime_error: null,
+  diagnostics: [],
+};
+
+const mockWasmPlugin: PluginInfo = {
+  id: "dev.crescendo.wasm-demo",
+  name: "Wasm Demo Tools",
+  version: "0.1.0",
+  description:
+    "Browser mock of the sandboxed Wasm plugin: commands, capability approval, and runtime diagnostics.",
+  authors: ["magazine"],
+  license: "MIT",
+  homepage: "https://github.com/magazine0410/Crescendo",
+  kind: "wasm",
+  api_version: "0.1.0",
+  min_crescendo_version: "0.8.0",
+  package_hash: "c0ffee000000000000000000000000000000000000000000000000000000dead",
+  desired_enabled: true,
+  loaded: true,
+  compatible: true,
+  compatibility_error: null,
+  error: null,
+  pending: null,
+  settings: [
+    {
+      type: "boolean",
+      key: "demo_flag",
+      label: "Demo flag",
+      description: "Example live setting the component reads on demand.",
+      default: false,
+      value: false,
+      affects_projection: false,
+    },
+  ],
+  permissions: ["library.read", "storage"],
+  network_domains: [],
+  grants_approved: true,
+  commands: ["identity", "settings", "storage_roundtrip", "library_summary"],
+  runtime_error: null,
+  diagnostics: ["info: demo initialized with 1 live settings"],
 };
 
 let projectionRevision = 0;
 let mockPlugins: PluginInfo[] = [
   structuredClone(mockGroupingPlugin),
   structuredClone(mockPluginPackage),
+  structuredClone(mockWasmPlugin),
 ];
 
 function groupingCollapseEnabled(): boolean {
@@ -752,6 +803,38 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return undefined as T;
     case "plugin_grouping_migration":
       return pluginMutation(false, null) as T;
+    case "plugin_approve_grants": {
+      const plugin = mockPlugins.find((candidate) => candidate.id === args.pluginId);
+      if (!plugin || plugin.permissions.length === 0) {
+        throw new Error("Plugin requests no capabilities");
+      }
+      plugin.grants_approved = true;
+      return pluginMutation(
+        true,
+        `Capabilities approved for ${plugin.name} ${plugin.version}. Enable the plugin and restart to apply.`,
+      ) as T;
+    }
+    case "plugin_invoke": {
+      const plugin = mockPlugins.find(
+        (candidate) => candidate.id === args.pluginId && candidate.loaded,
+      );
+      if (!plugin || !plugin.commands.includes(args.commandId as string)) {
+        throw new Error("Plugin command is not declared");
+      }
+      switch (args.commandId) {
+        case "settings":
+          return {
+            count: plugin.settings.length,
+            keys: plugin.settings.map((setting) => setting.key),
+          } as T;
+        case "storage_roundtrip":
+          return { stored: (args.input as { value?: string }).value ?? null } as T;
+        case "library_summary":
+          return { total: tracks.length, first_title: tracks[0]?.title ?? null } as T;
+        default:
+          return structuredClone(args.input) as T;
+      }
+    }
     case "prefs_get_all":
       return {} as T;
     case "prefs_set":
@@ -790,6 +873,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           { name: "walkdir", version: "2.5.0" },
           { name: "regex", version: "1.13.1" },
           { name: "Serde", version: "1.0.229" },
+          { name: "Wasmtime", version: "48.0.1" },
         ],
       } as T;
     case "update_check":

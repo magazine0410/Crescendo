@@ -5,7 +5,10 @@ use super::manifest::{
 use super::package::{
     create_operation_dir, load_installed, stage_archive, sync_directory, InstalledPackage,
 };
+use super::permissions::PluginGrant;
 use super::PLUGIN_API_VERSION;
+use super::WASM_API_VERSION;
+use super::wasm::{WasmHandle, WasmPluginSpec};
 use crate::db::plugins::PluginPendingRow;
 use crate::db::queries::{FacetPlan, FacetTransform};
 use crate::model::BrowseMode;
@@ -21,6 +24,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 const STARTUP_MARKER: &str = "startup-in-progress";
+/// Written by the Wasm runtime when it auto-disables a plugin, and read (then
+/// consumed) by the *next* start. It is deliberately not the startup marker:
+/// the runtime spawns before `start` removes that one, so a fast failure could
+/// re-arm it only to have this run delete it again.
+const SAFE_MODE_MARKER: &str = "safe-mode-requested";
 pub const GROUPING_PLUGIN_ID: &str = "dev.crescendo.primary-grouping";
 pub const GROUPING_PLUGIN_SETTING: &str = "collapse_multi_tagged_titles";
 const GROUPING_MIGRATION_KEY: &str = "grouping_plugin_migration";
@@ -58,6 +66,21 @@ pub struct PluginInfo {
     pub error: Option<String>,
     pub pending: Option<PluginPendingStatus>,
     pub settings: Vec<PluginSettingValue>,
+    /// Capabilities the package requests (Wasm packages only, always empty
+    /// for declarative ones).
+    pub permissions: Vec<String>,
+    /// Domains a `network.http` package may contact.
+    pub network_domains: Vec<String>,
+    /// True when no permission is requested, or the stored user grant covers
+    /// exactly this package (identity, version, hash, permission set).
+    pub grants_approved: bool,
+    /// Command ids the package declares for `plugin_invoke`.
+    pub commands: Vec<String>,
+    /// Live runtime status of the sandboxed component (startup failure,
+    /// traps, unhealthy session), when the runtime reports one.
+    pub runtime_error: Option<String>,
+    /// Tail of this session's bounded per-plugin diagnostic log.
+    pub diagnostics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,6 +209,9 @@ pub struct PluginManager {
     safe_mode_reason: Option<String>,
     startup_errors: Vec<String>,
     operation_lock: Mutex<()>,
+    wasm: Option<WasmHandle>,
+    player_bridge: Arc<super::bridge::PlayerBridgeSlot>,
+    host_notifier: Arc<super::bridge::HostNotifierSlot>,
 }
 
 #[derive(Debug)]
@@ -213,9 +239,17 @@ impl PluginManager {
         let marker = root.join(STARTUP_MARKER);
         let incomplete = marker.try_exists()?;
         write_startup_marker(&marker)?;
+        // Consume any request left by the previous run *before* the runtime
+        // that writes it can start again, so a request made during this
+        // startup survives into the next one.
+        let safe_mode_marker = root.join(SAFE_MODE_MARKER);
+        let requested = safe_mode_marker.try_exists()?;
+        if requested {
+            fs::remove_file(&safe_mode_marker)?;
+        }
         let env_disabled =
             std::env::var_os("CRESCENDO_DISABLE_PLUGINS").is_some_and(|value| value == "1");
-        let safe_mode = incomplete || env_disabled;
+        let safe_mode = incomplete || env_disabled || requested;
         let safe_mode_reason = if env_disabled {
             Some("Plugins were disabled by CRESCENDO_DISABLE_PLUGINS=1.".into())
         } else if incomplete {
@@ -223,11 +257,21 @@ impl PluginManager {
                 "The previous plugin startup did not finish; plugins are disabled for this run."
                     .into(),
             )
+        } else if requested {
+            Some(
+                "A plugin failed to start repeatedly; plugins are disabled for this run.".into(),
+            )
         } else {
             None
         };
 
         let mut startup_errors = Vec::new();
+        // Filled by the shell once its player thread exists; player.* calls
+        // before that answer Unavailable.
+        let player_bridge = Arc::new(super::bridge::PlayerBridgeSlot::new());
+        // Announces plugin-initiated changes back to the shell, so a playlist a
+        // plugin writes refreshes the UI like any other write.
+        let host_notifier = Arc::new(super::bridge::HostNotifierSlot::new());
         let pending = db.plugin_pending_all()?;
         let mut applied = Vec::new();
         for row in pending {
@@ -317,6 +361,16 @@ impl PluginManager {
                         last_error: None,
                     });
             if state.desired_enabled && !safe_mode {
+                // A Wasm plugin whose requested capabilities are not covered
+                // by a user grant for this exact package stays unloaded. The
+                // desired state is preserved so the restart banner and the
+                // approve action in Settings can resolve it, and the plugin
+                // reserves no facet target while it waits.
+                if package.manifest.kind == PluginKind::Wasm
+                    && !grants_satisfied(&db, package)?
+                {
+                    continue;
+                }
                 let conflict = package
                     .manifest
                     .contributes
@@ -347,6 +401,44 @@ impl PluginManager {
 
         let registry = ContributionRegistry::from_loaded(&loaded);
         let projection = projection_from_loaded(&db, &loaded, 0)?;
+
+        // Sandboxed runtime for the loaded Wasm plugins. Spawning never
+        // blocks startup on guest code: instantiation and `init` run on the
+        // runtime thread, and failures surface through `runtime_info`.
+        let wasm = if loaded
+            .values()
+            .any(|manifest| manifest.kind == PluginKind::Wasm)
+        {
+            let specs = loaded
+                .iter()
+                .filter(|(_, manifest)| manifest.kind == PluginKind::Wasm)
+                .map(|(id, manifest)| WasmPluginSpec {
+                    id: id.clone(),
+                    module_path: installed_root.join(id).join("module.wasm"),
+                    manifest: Arc::new(manifest.clone()),
+                })
+                .collect();
+            match WasmHandle::spawn(
+                specs,
+                db.clone(),
+                Default::default(),
+                player_bridge.clone(),
+                host_notifier.clone(),
+                super::wasm::RuntimePaths {
+                    safe_mode_marker: safe_mode_marker.clone(),
+                },
+            ) {
+                Ok(handle) => Some(handle),
+                Err(error) => {
+                    startup_errors.push(format!(
+                        "The Wasm plugin runtime could not start: {error:#}"
+                    ));
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         for operation in committed {
             if operation.row.operation == "update" {
@@ -379,6 +471,9 @@ impl PluginManager {
             safe_mode_reason,
             startup_errors,
             operation_lock: Mutex::new(()),
+            wasm,
+            player_bridge,
+            host_notifier,
         })
     }
 
@@ -402,6 +497,30 @@ impl PluginManager {
             safe_mode_reason: Some("The plugin system could not initialize.".into()),
             startup_errors: vec![error],
             operation_lock: Mutex::new(()),
+            wasm: None,
+            player_bridge: Arc::new(super::bridge::PlayerBridgeSlot::new()),
+            host_notifier: Arc::new(super::bridge::HostNotifierSlot::new()),
+        }
+    }
+
+    /// Install the shell's player so `player.*` host calls can work. Called
+    /// once, after the player thread spawns; until then those calls answer
+    /// `Unavailable` rather than blocking.
+    pub fn install_player_bridge(&self, bridge: Arc<dyn super::bridge::PlayerBridge>) {
+        self.player_bridge.install(bridge);
+    }
+
+    /// Install the shell's change announcer, so a playlist written by a plugin
+    /// refreshes the app and reaches `on-playlist-changed` subscribers.
+    pub fn install_host_notifier(&self, notifier: Arc<dyn super::bridge::HostNotifier>) {
+        self.host_notifier.install(notifier);
+    }
+
+    /// Broadcast a host event to every ready Wasm plugin. Safe to call from
+    /// any thread and cheap when no Wasm plugin is loaded.
+    pub fn notify_event(&self, event: super::wasm::HostEvent) {
+        if let Some(handle) = self.wasm.as_ref() {
+            handle.notify_event(event);
         }
     }
 
@@ -641,6 +760,12 @@ impl PluginManager {
             if let Some(error) = compatibility_error(&record.manifest, &self.app_version) {
                 bail!("{error}");
             }
+            if record.manifest.kind == PluginKind::Wasm && !grants_satisfied(&self.db, &record)? {
+                bail!(
+                    "{} requests capabilities that require approval before it can be enabled",
+                    record.manifest.name
+                );
+            }
             self.ensure_manifest_has_no_conflict(plugin_id, &record.manifest)?;
         }
         let old = self
@@ -704,6 +829,11 @@ impl PluginManager {
                 .insert((plugin_id.to_string(), key.to_string()), value.clone());
             if affects_projection && previous.as_ref() != Some(&value) {
                 projection.revision = projection.revision.saturating_add(1);
+            }
+            // Sandbox components read live values through the on-demand
+            // settings API; the coalesced notification tells them to look.
+            if let Some(handle) = &self.wasm {
+                handle.notify_settings_changed(plugin_id);
             }
         }
         Ok(PluginMutationResult {
@@ -794,6 +924,81 @@ impl PluginManager {
         })
     }
 
+    /// Record the user's approval of the capabilities requested by the
+    /// currently installed Wasm package. The grant is pinned to the exact
+    /// package version and hash, so any later update voids it and must be
+    /// approved again.
+    pub fn approve_grants(&self, plugin_id: &str) -> Result<PluginMutationResult> {
+        self.ensure_available()?;
+        let _guard = self
+            .operation_lock
+            .lock()
+            .map_err(|_| anyhow!("plugin manager lock poisoned"))?;
+        let record = self.valid_installed(plugin_id)?;
+        if record.manifest.kind != PluginKind::Wasm {
+            bail!("only Wasm plugins request capabilities");
+        }
+        let permissions = super::permissions::parse_permissions(&record.manifest.permissions)?;
+        if permissions.is_empty() {
+            bail!("the plugin requests no capabilities");
+        }
+        if let Some(error) = compatibility_error(&record.manifest, &self.app_version) {
+            bail!("{error}");
+        }
+        let grant = PluginGrant {
+            plugin_id: plugin_id.to_string(),
+            permissions,
+            network_domains: record.manifest.network_domains.clone(),
+            version: record.manifest.version.clone(),
+            package_hash: record.package_hash.clone(),
+            granted_at: super::wasm::now_unix(),
+        };
+        self.db.plugin_grant_set(&grant)?;
+        Ok(PluginMutationResult {
+            changed: true,
+            message: Some(format!(
+                "Capabilities approved for {} {}. Enable the plugin and restart to apply.",
+                record.manifest.name, record.manifest.version
+            )),
+            snapshot: self.snapshot_unlocked()?,
+        })
+    }
+
+    /// Dispatch one host-visible, registered command of a loaded Wasm plugin.
+    /// Input and output are bounded JSON documents; track IDs and other bulk
+    /// data never ride along implicitly.
+    pub fn invoke(&self, plugin_id: &str, command_id: &str, input: &Value) -> Result<Value> {
+        self.ensure_available()?;
+        let manifest = self
+            .loaded
+            .get(plugin_id)
+            .ok_or_else(|| anyhow!("plugin {plugin_id} is not loaded"))?;
+        if manifest.kind != PluginKind::Wasm {
+            bail!("plugin {plugin_id} has no Wasm commands");
+        }
+        if !manifest
+            .contributes
+            .commands
+            .iter()
+            .any(|command| command.id == command_id)
+        {
+            bail!("plugin {plugin_id} does not declare command {command_id:?}");
+        }
+        let payload = serde_json::to_string(input)?;
+        if payload.len() > super::wasm::MAX_INVOKE_INPUT_BYTES {
+            bail!("plugin command input exceeds 1 MiB");
+        }
+        let handle = self
+            .wasm
+            .as_ref()
+            .ok_or_else(|| anyhow!("the Wasm plugin runtime is not running"))?;
+        let output = handle.invoke(plugin_id, command_id, &payload)?;
+        if output.len() > super::wasm::MAX_INVOKE_OUTPUT_BYTES {
+            bail!("plugin command output exceeds 1 MiB");
+        }
+        serde_json::from_str(&output).context("plugin command output is not valid JSON")
+    }
+
     fn snapshot_unlocked(&self) -> Result<PluginSnapshot> {
         let inventory = scan_installed(&self.installed_root).unwrap_or_else(|error| {
             vec![InstalledRecord {
@@ -850,7 +1055,7 @@ impl PluginManager {
                     })
                     .collect();
                 plugins.push(PluginInfo {
-                    id: record.id,
+                    id: record.id.clone(),
                     name: package.manifest.name.clone(),
                     version: Some(package.manifest.version.clone()),
                     description: package.manifest.description.clone(),
@@ -860,7 +1065,7 @@ impl PluginManager {
                     kind: Some(package.manifest.kind),
                     api_version: Some(package.manifest.api_version.clone()),
                     min_crescendo_version: Some(package.manifest.min_crescendo_version.clone()),
-                    package_hash: Some(package.package_hash),
+                    package_hash: Some(package.package_hash.clone()),
                     desired_enabled,
                     loaded,
                     compatible,
@@ -868,6 +1073,27 @@ impl PluginManager {
                     error: state_error,
                     pending: pending_status,
                     settings,
+                    permissions: package.manifest.permissions.clone(),
+                    network_domains: package.manifest.network_domains.clone(),
+                    grants_approved: grants_satisfied(&self.db, &package)?,
+                    commands: package
+                        .manifest
+                        .contributes
+                        .commands
+                        .iter()
+                        .map(|command| command.id.clone())
+                        .collect(),
+                    runtime_error: self
+                        .wasm
+                        .as_ref()
+                        .and_then(|handle| {
+                            handle.runtime_info(&record.id).error
+                        }),
+                    diagnostics: self
+                        .wasm
+                        .as_ref()
+                        .map(|handle| handle.runtime_info(&record.id).diagnostics)
+                        .unwrap_or_default(),
                 });
             } else {
                 let validation_error = record.validation_error.or(state_error);
@@ -893,6 +1119,12 @@ impl PluginManager {
                     error: validation_error,
                     pending: pending_status,
                     settings: vec![],
+                    permissions: vec![],
+                    network_domains: vec![],
+                    grants_approved: true,
+                    commands: vec![],
+                    runtime_error: None,
+                    diagnostics: vec![],
                 });
             }
         }
@@ -1082,15 +1314,43 @@ fn browse_target_tag(mode: &BrowseMode) -> Option<String> {
 }
 
 fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Option<String> {
-    if manifest.kind != PluginKind::Declarative {
-        return Some("This build does not yet include the Wasm plugin runtime.".into());
-    }
+    let (supported, api_label) = match manifest.kind {
+        PluginKind::Declarative => (
+            Version::parse(PLUGIN_API_VERSION).expect("valid host plugin API version"),
+            "plugin API",
+        ),
+        PluginKind::Wasm => {
+            // A Wasm package may also name capabilities this build's host
+            // does not provide yet. It stays installed with an explanation.
+            if let Err(error) = super::permissions::parse_permissions(&manifest.permissions) {
+                return Some(error.to_string());
+            }
+            for permission in manifest.permissions.iter().filter_map(|name| {
+                super::permissions::PluginPermission::parse(name)
+            }) {
+                if !permission.runtime_supported() {
+                    return Some(format!(
+                        "Requests the \"{}\" capability, which this build does not yet provide.",
+                        permission.as_str()
+                    ));
+                }
+            }
+            (
+                Version::parse(WASM_API_VERSION).expect("valid host Wasm API version"),
+                "Wasm runtime API",
+            )
+        }
+    };
     let requested = Version::parse(&manifest.api_version).ok()?;
-    let supported = Version::parse(PLUGIN_API_VERSION).expect("valid host plugin API version");
-    if requested.major != supported.major || requested > supported {
+    // Semver treats a 0.x minor bump as breaking, and the plugin world is
+    // still 0.x: adding an exported event to `commands` makes an older
+    // component fail to instantiate, so it must read as incompatible here
+    // rather than load and trap.
+    let breaking_minor = supported.major == 0 && requested.minor != supported.minor;
+    if requested.major != supported.major || breaking_minor || requested > supported {
         return Some(format!(
-            "Requires plugin API {}, but this build supports {}.",
-            manifest.api_version, PLUGIN_API_VERSION
+            "Requires {api_label} {}, but this build supports {supported}.",
+            manifest.api_version
         ));
     }
     let minimum = Version::parse(&manifest.min_crescendo_version).ok()?;
@@ -1098,6 +1358,27 @@ fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Opti
         return Some(format!("Requires Crescendo {minimum} or newer."));
     }
     None
+}
+
+/// Whether the stored user grant covers exactly the package's requested
+/// capabilities. Plugins that request nothing need no grant.
+fn grants_satisfied(db: &Db, package: &InstalledPackage) -> Result<bool> {
+    let manifest = &package.manifest;
+    let permissions = super::permissions::parse_permissions(&manifest.permissions)?;
+    if permissions.is_empty() {
+        return Ok(true);
+    }
+    Ok(db
+        .plugin_grant_get(&manifest.id)?
+        .is_some_and(|grant| {
+            grant.approves(
+                &manifest.id,
+                &permissions,
+                &manifest.network_domains,
+                &manifest.version,
+                &package.package_hash,
+            )
+        }))
 }
 
 fn scan_installed(installed_root: &Path) -> Result<Vec<InstalledRecord>> {
@@ -1358,6 +1639,7 @@ mod tests {
             api_version: "1.0.0".into(),
             min_crescendo_version: "0.8.0".into(),
             permissions: vec![],
+            network_domains: vec![],
             contributes: PluginContributions {
                 settings: vec![PluginSettingDeclaration::Select {
                     key: "mode".into(),

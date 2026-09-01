@@ -75,6 +75,8 @@ const COMMANDS: &[&str] = &[
     "plugin_uninstall",
     "plugin_grouping_migration",
     "plugin_restart_app",
+    "plugin_approve_grants",
+    "plugin_invoke",
     "prefs_get_all",
     "prefs_set",
     "about_info",
@@ -228,6 +230,7 @@ fn main() {
         ("CRESCENDO_DEP_WALKDIR", "walkdir"),
         ("CRESCENDO_DEP_REGEX", "regex"),
         ("CRESCENDO_DEP_SERDE", "serde"),
+        ("CRESCENDO_DEP_WASMTIME", "wasmtime"),
     ] {
         println!(
             "cargo:rustc-env={env_name}={}",

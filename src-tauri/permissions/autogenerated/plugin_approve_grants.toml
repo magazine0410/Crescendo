@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugin-approve-grants"
+description = "Enables the plugin_approve_grants command without any pre-configured scope."
+commands.allow = ["plugin_approve_grants"]
+
+[[permission]]
+identifier = "deny-plugin-approve-grants"
+description = "Denies the plugin_approve_grants command without any pre-configured scope."
+commands.deny = ["plugin_approve_grants"]

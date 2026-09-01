@@ -69,6 +69,8 @@
     "allow-plugin-uninstall",
     "allow-plugin-grouping-migration",
     "allow-plugin-restart-app",
+    "allow-plugin-approve-grants",
+    "allow-plugin-invoke",
     "allow-prefs-get-all",
     "allow-prefs-set",
     "allow-waveform-get",

@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -146,6 +146,20 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
               value_json TEXT NOT NULL,
               PRIMARY KEY(plugin_id, setting_key)
             ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS plugin_grants (
+              plugin_id TEXT PRIMARY KEY,
+              permissions_json TEXT NOT NULL,
+              network_domains_json TEXT NOT NULL,
+              version TEXT NOT NULL,
+              package_hash TEXT NOT NULL,
+              granted_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS plugin_storage (
+              plugin_id TEXT NOT NULL,
+              storage_key TEXT NOT NULL,
+              value TEXT NOT NULL,
+              PRIMARY KEY(plugin_id, storage_key)
+            ) WITHOUT ROWID;
             "#,
         )?;
     }
@@ -287,6 +301,29 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
                );",
         )?;
     }
+    if version < 10 && version >= 1 {
+        // v10: Stage 5 capability grants (pinned to the exact approved package)
+        // and namespaced key/value storage for sandboxed Wasm plugins. Grant
+        // approval is an explicit user action, so an upgrading database starts
+        // with no grants; Wasm plugins that request permissions stay disabled
+        // until approved.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS plugin_grants (
+               plugin_id TEXT PRIMARY KEY,
+               permissions_json TEXT NOT NULL,
+               network_domains_json TEXT NOT NULL,
+               version TEXT NOT NULL,
+               package_hash TEXT NOT NULL,
+               granted_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS plugin_storage (
+               plugin_id TEXT NOT NULL,
+               storage_key TEXT NOT NULL,
+               value TEXT NOT NULL,
+               PRIMARY KEY(plugin_id, storage_key)
+             ) WITHOUT ROWID;",
+        )?;
+    }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;
     Ok(())
@@ -296,6 +333,38 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
 mod tests {
     use super::{migrate, SCHEMA_VERSION};
     use rusqlite::Connection;
+
+    #[test]
+    fn version_nine_database_gains_grant_and_storage_tables() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE prefs(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+              CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+              CREATE TABLE plugin_state(plugin_id TEXT PRIMARY KEY, desired_enabled INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0, last_error TEXT);
+              CREATE TABLE plugin_pending(plugin_id TEXT PRIMARY KEY, operation TEXT NOT NULL, staged_path TEXT NOT NULL, target_version TEXT, package_hash TEXT, remove_data INTEGER NOT NULL DEFAULT 0);
+              CREATE TABLE plugin_settings(plugin_id TEXT NOT NULL, setting_key TEXT NOT NULL, value_json TEXT NOT NULL, PRIMARY KEY(plugin_id, setting_key)) WITHOUT ROWID;
+              PRAGMA user_version = 9;",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        for table in ["plugin_grants", "plugin_storage"] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "{table} was not created by the v10 migration");
+        }
+        // Approval is deliberate: an upgrading database starts with no grants.
+        let grants: i64 = conn
+            .query_row("SELECT COUNT(*) FROM plugin_grants", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(grants, 0);
+    }
 
     #[test]
     fn version_seven_database_gains_plugin_tables() {

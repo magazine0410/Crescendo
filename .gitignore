@@ -7,6 +7,11 @@ node_modules
 # Rust build artifacts (workspace target/ — ~9 GB, never commit)
 /target
 src-tauri/target
+plugins/*/target
+
+# The demo Wasm plugin's built component: regenerate with build.sh, commit
+# only the test fixture copy under crates/core/tests/fixtures/.
+plugins/dev.crescendo.wasm-demo/module.wasm
 .env
 .env.*
 !.env.example

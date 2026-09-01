@@ -23,6 +23,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 anyhow = "1"
 thiserror = "2"
 log = "0.4"
+wasmtime = { version = "48", default-features = false, features = ["cranelift", "component-model", "runtime", "std"] }
 
 [dev-dependencies]
 tempfile = "3"

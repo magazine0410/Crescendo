@@ -7,12 +7,14 @@ on:
       - "crates/core/**"
       - "plugin-sdk/**"
       - "plugins/**"
+      - "crates/core/tests/fixtures/**"
   push:
     paths:
       - ".github/workflows/plugin-sdk.yml"
       - "crates/core/**"
       - "plugin-sdk/**"
       - "plugins/**"
+      - "crates/core/tests/fixtures/**"
   release:
     types: [published]
 
@@ -37,6 +39,33 @@ jobs:
           name: official-crescendo-plugins
           path: plugin-artifacts/*.crescendo-plugin
           if-no-files-found: error
+
+  wasm-fixture-provenance:
+    # The committed component is both the demo plugin's artifact and the
+    # runtime test fixture. Nothing in cargo can rebuild it (the host has no
+    # wasm target), so verify here that it still matches its source.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-tools
+        run: cargo install wasm-tools --locked
+      - name: Rebuild the demo component
+        run: sh plugins/dev.crescendo.wasm-demo/build.sh
+      - name: Compare against the committed fixture
+        run: |
+          if ! cmp -s plugins/dev.crescendo.wasm-demo/module.wasm \
+                      crates/core/tests/fixtures/wasm-demo-module.wasm; then
+            echo "::error::wasm-demo-module.wasm no longer matches its source."
+            echo "Rebuild with plugins/dev.crescendo.wasm-demo/build.sh and copy"
+            echo "module.wasm to crates/core/tests/fixtures/wasm-demo-module.wasm."
+            exit 1
+          fi
+          echo "fixture matches its source"
 
   publish-release-asset:
     if: github.event_name == 'release'

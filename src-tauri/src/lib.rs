@@ -2,12 +2,15 @@ mod art_protocol;
 mod commands;
 mod player;
 mod state;
+pub mod plugin_bridge;
 pub mod waveform;
 
 use crescendo_core::art::ArtStore;
 use crescendo_core::db::Db;
+use crescendo_core::plugins::wasm::HostEvent;
 use crescendo_core::plugins::PluginManager;
 use state::AppState;
+use tauri::Listener;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::Manager;
@@ -44,6 +47,72 @@ pub fn run() {
                     }),
             );
             let player = player::spawn(app.handle().clone(), db.clone())?;
+            // The manager starts before the player thread exists, so the
+            // bridge is installed here; player.* calls before this point
+            // answer Unavailable rather than blocking.
+            plugins.install_host_notifier(Arc::new(plugin_bridge::ShellHostNotifier::new(
+                app.handle().clone(),
+            )));
+            let position_mirror = Arc::new(plugin_bridge::PositionMirror::default());
+            plugins.install_player_bridge(Arc::new(
+                plugin_bridge::ShellPlayerBridge::new(player.clone(), position_mirror.clone()),
+            ));
+            {
+                let mirror = position_mirror.clone();
+                app.listen("player:position", move |event| {
+                    if let Ok(value) =
+                        serde_json::from_str::<serde_json::Value>(event.payload())
+                    {
+                        mirror.record(
+                            value.get("ms").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            value
+                                .get("duration_ms")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0),
+                        );
+                    }
+                });
+            }
+            // Player events reach plugins by listening to the same Tauri event
+            // the webview gets, so the player thread keeps no plugin coupling.
+            // Both are coalesced by the runtime, so a 250 ms tick cannot flood
+            // a guest.
+            {
+                let event_plugins = plugins.clone();
+                // `listen` takes an Fn, so the last-seen track lives behind a
+                // mutex rather than in the closure.
+                let last_track: Arc<std::sync::Mutex<Option<i64>>> = Arc::default();
+                app.listen("player:state", move |event| {
+                    event_plugins.notify_event(HostEvent::PlayerStateChanged);
+                    let track_id = serde_json::from_str::<serde_json::Value>(event.payload())
+                        .ok()
+                        .and_then(|state| {
+                            state.get("track")?.get("id")?.as_i64()
+                        });
+                    if let Ok(mut previous) = last_track.lock() {
+                        if *previous != track_id {
+                            *previous = track_id;
+                            event_plugins.notify_event(HostEvent::TrackChanged(track_id));
+                        }
+                    }
+                });
+            }
+            {
+                let scan_plugins = plugins.clone();
+                app.listen("scan:done", move |_| {
+                    scan_plugins.notify_event(HostEvent::LibraryChanged);
+                });
+            }
+            {
+                let playlist_plugins = plugins.clone();
+                app.listen("playlist:changed", move |event| {
+                    let id = serde_json::from_str::<serde_json::Value>(event.payload())
+                        .ok()
+                        .and_then(|value| value.as_i64());
+                    playlist_plugins.notify_event(HostEvent::PlaylistChanged(id));
+                });
+            }
+            plugins.notify_event(HostEvent::Ready);
 
             // Restore persisted volume before the first play.
             if let Ok(Some(v)) = db.prefs_get("volume") {
@@ -128,6 +197,8 @@ pub fn run() {
             commands::plugins::plugin_uninstall,
             commands::plugins::plugin_grouping_migration,
             commands::plugins::plugin_restart_app,
+            commands::plugins::plugin_approve_grants,
+            commands::plugins::plugin_invoke,
             commands::misc::prefs_get_all,
             commands::misc::prefs_set,
             commands::misc::about_info,

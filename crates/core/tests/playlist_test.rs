@@ -246,3 +246,18 @@ fn reorder_failure_rolls_back_and_leaves_the_connection_usable() {
     db.playlist_add_tracks(pid, &[4]).unwrap();
     assert_eq!(ids(&db, pid), vec![1, 2, 3, 4]);
 }
+
+#[test]
+fn a_checked_add_that_fails_validation_inserts_nothing() {
+    let (_d, db) = test_db();
+    let pid = db.playlist_create("P").unwrap();
+    db.playlist_add_tracks_checked(pid, &[1, 2]).unwrap();
+
+    // One unknown id rejects the whole batch, and the valid ids in front of it
+    // must not survive: validation and insertion share one transaction.
+    assert!(db.playlist_add_tracks_checked(pid, &[3, 4_242, 4]).is_err());
+    assert_eq!(ids(&db, pid), vec![1, 2]);
+
+    assert!(db.playlist_add_tracks_checked(9_999, &[1]).is_err());
+    assert_eq!(ids(&db, pid), vec![1, 2]);
+}

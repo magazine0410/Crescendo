@@ -1,0 +1,47 @@
+/// Crescendo sandboxed Wasm plugin world, runtime API 0.2.0.
+///
+/// A plugin component imports the `crescendo:host` interfaces it needs and
+/// exports the `commands` interface below. The host compiles and instantiates
+/// one isolated component per plugin, away from the UI and player threads,
+/// with memory, fuel, and wall-clock limits.
+package crescendo:plugin@0.2.0;
+
+/// The single interface every Wasm plugin exports.
+interface commands {
+    /// Called once after instantiation. Returning an error or trapping
+    /// marks the plugin as failed for the session.
+    init: func() -> result;
+
+    /// Dispatch one registered command. Input and output are bounded JSON
+    /// documents produced and consumed by the host.
+    invoke: func(command: string, input: string) -> result<string, string>;
+
+    /// Coalesced notification that this plugin's live settings changed.
+    on-settings-changed: func();
+
+    /// The host finished startup and every plugin is instantiated.
+    on-ready: func();
+
+    /// Coalesced: playback started, paused, stopped, or changed volume.
+    on-player-state-changed: func();
+
+    /// The playing track changed. `none` means playback stopped.
+    on-track-changed: func(track-id: option<u64>);
+
+    /// A library scan committed changes.
+    on-library-changed: func();
+
+    /// A playlist was created, renamed, reordered, or had tracks change.
+    /// `none` means several playlists changed at once.
+    on-playlist-changed: func(playlist-id: option<u64>);
+}
+
+world crescendo-plugin {
+    import crescendo:host/host@0.2.0;
+    import crescendo:host/storage@0.2.0;
+    import crescendo:host/library@0.2.0;
+    import crescendo:host/player@0.2.0;
+    import crescendo:host/playlists@0.2.0;
+    import crescendo:host/net@0.2.0;
+    export commands;
+}

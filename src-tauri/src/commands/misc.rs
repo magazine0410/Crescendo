@@ -164,6 +164,10 @@ pub async fn about_info() -> AboutInfo {
                 name: "Serde",
                 version: env!("CRESCENDO_DEP_SERDE"),
             },
+            AboutDependency {
+                name: "Wasmtime",
+                version: env!("CRESCENDO_DEP_WASMTIME"),
+            },
         ],
     }
 }

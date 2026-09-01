@@ -30,6 +30,10 @@ pub struct PluginManifest {
     pub min_crescendo_version: String,
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// Domains a `network.http` plugin may contact. Required exactly when the
+    /// manifest requests `network.http`; ignored otherwise.
+    #[serde(default)]
+    pub network_domains: Vec<String>,
     #[serde(default)]
     pub contributes: PluginContributions,
 }
@@ -40,6 +44,17 @@ pub struct PluginContributions {
     pub settings: Vec<PluginSettingDeclaration>,
     pub facet_transforms: Vec<PluginFacetTransform>,
     pub menu_controls: Vec<PluginMenuControl>,
+    /// Wasm-only: commands the host may dispatch to the plugin's module.
+    /// Declarative plugins cannot contribute commands.
+    pub commands: Vec<PluginCommandDeclaration>,
+}
+
+/// A host-dispatchable command exposed by a Wasm plugin. The id is the only
+/// surface; labels, UI, and arguments stay host-owned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCommandDeclaration {
+    pub id: String,
 }
 
 /// A deliberately small vocabulary compiled by Crescendo into trusted query
@@ -206,12 +221,28 @@ impl PluginManifest {
             if !self.permissions.is_empty() {
                 bail!("declarative plugins cannot request permissions");
             }
+            if !self.network_domains.is_empty() {
+                bail!("declarative plugins cannot declare network domains");
+            }
+            if !self.contributes.commands.is_empty() {
+                bail!("declarative plugins cannot contribute commands");
+            }
         } else if !has_module {
             bail!("Wasm plugins must contain module.wasm");
         }
 
         if self.permissions.len() > 128 {
             bail!("permissions cannot contain more than 128 entries");
+        }
+        super::permissions::parse_permissions(&self.permissions)?;
+        if self
+            .permissions
+            .iter()
+            .any(|permission| permission == "network.http")
+        {
+            super::permissions::parse_network_domains(&self.network_domains)?;
+        } else if !self.network_domains.is_empty() {
+            bail!("network domains require the network.http permission");
         }
         if self.contributes.settings.len() > 128 {
             bail!("plugins cannot declare more than 128 settings");
@@ -221,6 +252,16 @@ impl PluginManifest {
         }
         if self.contributes.menu_controls.len() > 64 {
             bail!("plugins cannot declare more than 64 menu controls");
+        }
+        let mut command_ids = HashSet::new();
+        for command in &self.contributes.commands {
+            validate_setting_key(&command.id)?;
+            if !command_ids.insert(command.id.as_str()) {
+                bail!("duplicate command id {:?}", command.id);
+            }
+        }
+        if self.contributes.commands.len() > 32 {
+            bail!("plugins cannot declare more than 32 commands");
         }
         let mut settings = HashSet::new();
         for setting in &self.contributes.settings {
@@ -509,6 +550,7 @@ mod tests {
             api_version: "1.0.0".into(),
             min_crescendo_version: "0.8.0".into(),
             permissions: vec![],
+            network_domains: vec![],
             contributes: PluginContributions::default(),
         }
     }
@@ -639,5 +681,65 @@ mod tests {
         let mut bad = value;
         bad.contributes.menu_controls[0].checked_setting = "missing".into();
         assert!(bad.validate(false).is_err());
+    }
+
+    fn wasm_manifest() -> PluginManifest {
+        let mut value = manifest();
+        value.id = "dev.crescendo.wasm-test".into();
+        value.kind = PluginKind::Wasm;
+        value.api_version = "0.1.0".into();
+        value
+    }
+
+    #[test]
+    fn wasm_manifests_declare_commands_and_known_permissions() {
+        let mut value = wasm_manifest();
+        value.permissions = vec!["storage".into(), "library.read".into()];
+        value.contributes.commands = vec![
+            PluginCommandDeclaration { id: "summarize".into() },
+            PluginCommandDeclaration { id: "refresh".into() },
+        ];
+        value.validate(true).unwrap();
+
+        // Unknown capability names, duplicates, and inconsistent pairs are
+        // rejected at package-validation time, not at runtime.
+        let mut bad = value.clone();
+        bad.permissions = vec!["fs.read".into()];
+        assert!(bad.validate(true).is_err());
+
+        let mut bad = value.clone();
+        bad.permissions = vec!["storage".into(), "storage".into()];
+        assert!(bad.validate(true).is_err());
+
+        let mut bad = value.clone();
+        bad.permissions = vec!["library.paths".into()];
+        assert!(bad.validate(true).is_err());
+
+        // network.http requires declared domains, and domains require
+        // network.http.
+        let mut bad = value.clone();
+        bad.permissions = vec!["network.http".into()];
+        assert!(bad.validate(true).is_err());
+
+        let mut good = value.clone();
+        good.permissions = vec!["network.http".into()];
+        good.network_domains = vec!["example.com".into()];
+        // Structurally valid; whether this build's runtime provides
+        // network.http is decided by the compatibility check, not here.
+        good.validate(true).unwrap();
+
+        let mut bad = value.clone();
+        bad.network_domains = vec!["example.com".into()];
+        assert!(bad.validate(true).is_err());
+
+        // Commands are wasm-only: a declarative package cannot declare them.
+        let mut bad = manifest();
+        bad.contributes.commands = vec![PluginCommandDeclaration { id: "cmd".into() }];
+        assert!(bad.validate(false).is_err());
+
+        // Wasm command ids follow the same key rules as settings.
+        let mut bad = wasm_manifest();
+        bad.contributes.commands = vec![PluginCommandDeclaration { id: "bad id".into() }];
+        assert!(bad.validate(true).is_err());
     }
 }

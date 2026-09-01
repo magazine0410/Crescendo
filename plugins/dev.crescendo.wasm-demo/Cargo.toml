@@ -1,0 +1,19 @@
+[package]
+name = "crescendo-wasm-demo"
+version = "0.1.0"
+edition = "2021"
+description = "Canonical sandboxed Wasm plugin example for Crescendo"
+license = "MIT"
+
+# Deliberately excluded from the Crescendo workspace: this crate only builds
+# for the wasm32-unknown-unknown target and is never compiled by the app.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.48"
+
+[profile.release]
+opt-level = "s"

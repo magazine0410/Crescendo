@@ -6,11 +6,31 @@ Crescendo uses three independent versions in `manifest.json`.
 version 1. A different value, an unknown field, or an unknown contribution is a
 validation error; Crescendo leaves the package disabled and reports the error.
 
-`api_version` identifies contribution semantics. The host currently implements
-`1.0.0`. A plugin is compatible when its API major matches the host and its
-version is not newer than the host API. For example, an API `1.0.0` package is
-accepted by host `1.1.0`, while `1.1.0` is not accepted by host `1.0.0`, and
-API `2.x` requires an explicit new compatibility contract.
+`api_version` identifies contribution semantics. For declarative packages the
+host currently implements `1.0.0`. A plugin is compatible when its API major
+matches the host and its version is not newer than the host API. For example,
+an API `1.0.0` package is accepted by host `1.1.0`, while `1.1.0` is not
+accepted by host `1.0.0`, and API `2.x` requires an explicit new compatibility
+contract.
+
+For `kind: "wasm"` packages, `api_version` is checked the same way against the
+sandbox runtime API (`0.2.0` in this release), which versions the WIT world
+independently of the declarative manifest API. A Wasm package is additionally
+incompatible when it requests a capability this build's runtime does not yet
+provide (`player.*`, `playlists.*`, `network.http`); it stays installed with
+that explanation until a newer Crescendo provides the interface.
+
+While the runtime API is below `1.0.0`, a differing **minor** is breaking:
+`0.2.0` added exported event handlers to the `commands` interface, so a
+component built against `0.1.0` no longer instantiates and is reported as
+incompatible rather than loaded. Rebuild against the current WIT and raise
+`api_version` to `0.2.0`.
+
+As of runtime API `0.2.0` every capability in the v1 vocabulary has a host
+interface, so no permission is refused for being unimplemented. The check
+remains: a package naming a capability a future build has not shipped stays
+installed and unenableable rather than loading against a host that would
+silently ignore it.
 
 `min_crescendo_version` is the oldest application version the author supports.
 It must not be newer than the running Crescendo version. The package can remain

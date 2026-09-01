@@ -113,11 +113,37 @@ pub async fn plugin_restart_app(app: AppHandle) -> Result<(), String> {
     app.restart()
 }
 
+#[tauri::command]
+pub async fn plugin_approve_grants(
+    state: State<'_, AppState>,
+    plugin_id: String,
+) -> Result<PluginMutationResult, String> {
+    let plugins = state.plugins.clone();
+    tauri::async_runtime::spawn_blocking(move || plugins.approve_grants(&plugin_id))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(plugin_error)
+}
+
+#[tauri::command]
+pub async fn plugin_invoke(
+    state: State<'_, AppState>,
+    plugin_id: String,
+    command_id: String,
+    input: Value,
+) -> Result<Value, String> {
+    let plugins = state.plugins.clone();
+    tauri::async_runtime::spawn_blocking(move || plugins.invoke(&plugin_id, &command_id, &input))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(plugin_error)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
 
-    const PLUGIN_PERMISSIONS: [&str; 7] = [
+    const PLUGIN_PERMISSIONS: [&str; 9] = [
         "allow-plugin-list",
         "allow-plugin-choose-install",
         "allow-plugin-set-enabled",
@@ -125,6 +151,8 @@ mod tests {
         "allow-plugin-uninstall",
         "allow-plugin-grouping-migration",
         "allow-plugin-restart-app",
+        "allow-plugin-approve-grants",
+        "allow-plugin-invoke",
     ];
 
     fn capability(source: &str) -> Value {

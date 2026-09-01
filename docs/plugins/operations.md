@@ -15,6 +15,16 @@ and completed on the next start. A disabled plugin can be removed immediately.
 Setting values apply live; changing them does not require a restart or replace
 the current playback queue.
 
+Wasm packages list the capabilities they request in **Capabilities**. The
+approval action records exactly that package — its version and SHA-256 — and
+any update must be approved again before it can load. Enabling a Wasm plugin
+that requests capabilities is rejected until they are approved. A sandboxed
+plugin that traps, exceeds its fuel or wall-clock budget, or fails to
+initialize is reported under its entry; after repeated runtime failures it is
+marked unhealthy for the session, and after repeated startup-init failures it
+is disabled automatically. Its bounded runtime log is shown in Settings, and a
+plugin failure never interrupts playback or blocks startup.
+
 The official Primary Grouping package is published with Crescendo releases and
 its source lives under `plugins/dev.crescendo.primary-grouping/`. Existing
 installations that had the former collapse preference receive a one-time offer
@@ -28,6 +38,11 @@ builds the immutable loaded registry. If the previous startup did not finish,
 the next launch enters plugin safe mode for one run: installed packages remain
 available for inspection, but no contributions load. A clean following launch
 tries the desired set again.
+
+A Wasm plugin that fails to initialize twice is disabled and asks for the same
+one cautious run. That request is a separate marker, written by the runtime and
+consumed at the start of the next launch, so it cannot be erased by the very
+startup that caused it.
 
 To force the same diagnostic mode, start Crescendo from a terminal with:
 

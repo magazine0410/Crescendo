@@ -60,6 +60,16 @@ class PluginsStore {
       await call<PluginMutationResult>("plugin_grouping_migration", { action }),
     );
   }
+
+  async approveGrants(plugin: PluginInfo): Promise<PluginMutationResult> {
+    return this.apply(
+      await call<PluginMutationResult>("plugin_approve_grants", { pluginId: plugin.id }),
+    );
+  }
+
+  async invoke(pluginId: string, commandId: string, input: unknown): Promise<unknown> {
+    return call<unknown>("plugin_invoke", { pluginId, commandId, input });
+  }
 }
 
 export const plugins = new PluginsStore();

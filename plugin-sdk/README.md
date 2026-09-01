@@ -1,15 +1,19 @@
-# Crescendo declarative plugin SDK
+# Crescendo plugin SDK
 
-This directory is the versioned authoring contract for Crescendo's declarative
-plugin API. The current contract is manifest schema version 1 and plugin API
-`1.0.0`.
+This directory is the versioned authoring contract for Crescendo's plugin
+system. The current contracts are manifest schema version 1, declarative plugin
+API `1.0.0`, and the sandboxed Wasm runtime API `0.2.0`.
 
 - [`manifest-v1.schema.json`](manifest-v1.schema.json) is the editor-facing
   JSON Schema.
+- [`wit/`](wit/) is the versioned WIT world every Wasm plugin component
+  imports and exports (see `wit/crescendo-plugin.wit`).
 - [`../plugins/dev.crescendo.primary-grouping/`](../plugins/dev.crescendo.primary-grouping/)
-  is the canonical source example.
+  is the canonical declarative source example.
+- [`../plugins/dev.crescendo.wasm-demo/`](../plugins/dev.crescendo.wasm-demo/)
+  is the canonical sandboxed Wasm source example.
 - [`../docs/plugins/authoring.md`](../docs/plugins/authoring.md) explains the
-  supported contribution vocabulary and package command.
+  supported contribution vocabulary, capabilities, and package command.
 - [`../docs/plugins/compatibility.md`](../docs/plugins/compatibility.md)
   defines version compatibility.
 - [`../docs/plugins/operations.md`](../docs/plugins/operations.md) covers
