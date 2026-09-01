@@ -94,7 +94,7 @@ fn titles(rows: Vec<crescendo_core::model::Track>) -> Vec<String> {
 #[test]
 fn buckets_group_by_days_since_the_last_play() {
     let (_d, db) = test_db();
-    let values = db.browse_values(custom("lastplayed"), None, false).unwrap();
+    let values = db.browse_values_exact(custom("lastplayed"), None).unwrap();
     // "0" today, "1" within 7 days, "2" within 30, "3" within 365, "4" longer
     // ago, "5" never — newest bucket first, and every track in exactly one.
     assert_eq!(
@@ -110,14 +110,14 @@ fn buckets_group_by_days_since_the_last_play() {
     );
     assert_eq!(values.iter().map(|value| value.count).sum::<i64>(), TRACKS.len() as i64);
     // The %last_played% spelling browses identically.
-    assert_eq!(db.browse_values(custom("last_played"), None, false).unwrap(), values);
+    assert_eq!(db.browse_values_exact(custom("last_played"), None).unwrap(), values);
 }
 
 #[test]
 fn bucket_edges_fall_on_whole_days() {
     let (_d, db) = test_db();
     let in_bucket = |b: &str| {
-        titles(db.tracks_range(None, custom("lastplayed"), &[b.into()], false, None, 0, 100).unwrap())
+        titles(db.tracks_range_exact(None, custom("lastplayed"), &[b.into()], None, 0, 100).unwrap())
     };
     // A span holds the days below its edge, and the edge itself moves on.
     assert_eq!(in_bucket("0"), ["Today"]);
@@ -132,18 +132,18 @@ fn bucket_edges_fall_on_whole_days() {
 fn several_buckets_select_together() {
     let (_d, db) = test_db();
     let both = &["0".to_string(), "1".to_string()];
-    assert_eq!(db.track_count(None, custom("lastplayed"), both, false).unwrap(), 3);
+    assert_eq!(db.track_count_exact(None, custom("lastplayed"), both).unwrap(), 3);
 
     // Playback resolves the same set, in the same order the view shows.
     let ctx = PlayContext::ValueTracks {
         mode: custom("lastplayed"),
         values: both.to_vec(),
         query: None,
-        collapse: false,
+        projection_revision: 0,
         sort: None,
     };
-    let ids = db.resolve_context(&ctx).unwrap();
-    let view = db.tracks_range(None, custom("lastplayed"), both, false, None, 0, 100).unwrap();
+    let ids = db.resolve_context_exact(&ctx).unwrap();
+    let view = db.tracks_range_exact(None, custom("lastplayed"), both, None, 0, 100).unwrap();
     assert_eq!(ids, view.iter().map(|t| t.id).collect::<Vec<_>>());
 }
 
@@ -161,7 +161,7 @@ fn play_count_lists_most_played_first() {
     }
     db.record_play(id_of("SixDays")).unwrap(); // 2 plays
 
-    let values = db.browse_values(custom("playcount"), None, false).unwrap();
+    let values = db.browse_values_exact(custom("playcount"), None).unwrap();
     assert_eq!(
         values,
         vec![
@@ -172,12 +172,12 @@ fn play_count_lists_most_played_first() {
         ]
     );
     // The %plays% spelling browses identically.
-    assert_eq!(db.browse_values(custom("plays"), None, false).unwrap(), values);
+    assert_eq!(db.browse_values_exact(custom("plays"), None).unwrap(), values);
 
     // Selecting a count narrows the view to exactly those tracks.
-    let rows = db.tracks_range(None, custom("playcount"), &["0".into()], false, None, 0, 100).unwrap();
+    let rows = db.tracks_range_exact(None, custom("playcount"), &["0".into()], None, 0, 100).unwrap();
     assert_eq!(titles(rows), ["Never"]);
-    assert_eq!(db.track_count(None, custom("playcount"), &["1".into()], false).unwrap(), 6);
+    assert_eq!(db.track_count_exact(None, custom("playcount"), &["1".into()]).unwrap(), 6);
 }
 
 #[test]
@@ -185,12 +185,12 @@ fn album_wall_narrows_to_the_selected_span() {
     let (_d, db) = test_db();
     // The default Library view lists albums, not tracks: a span with plays in it
     // shows its album, an empty one shows nothing.
-    let albums = db.browse_albums(custom("lastplayed"), &["0".into()], None, false).unwrap();
+    let albums = db.browse_albums_exact(custom("lastplayed"), &["0".into()], None).unwrap();
     assert_eq!(albums.len(), 1);
     // Every track here shares one album, so no span is empty; a filter that
     // matches nothing still has to come back empty.
     let none = db
-        .browse_albums(custom("lastplayed"), &["4".into()], Some(&search_for("nothingmatches")), false)
+        .browse_albums_exact(custom("lastplayed"), &["4".into()], Some(&search_for("nothingmatches")))
         .unwrap();
     assert_eq!(none.len(), 0);
 }
@@ -210,7 +210,7 @@ fn sort_orders_by_the_time_of_the_last_play() {
             secondary_descending: None,
         };
         titles(
-            db.tracks_range(None, BrowseMode::Artist, &[], false, Some(sort), 0, 100).unwrap(),
+            db.tracks_range_exact(None, BrowseMode::Artist, &[], Some(sort), 0, 100).unwrap(),
         )
     };
     // Descending: the most recent play first, never-played tracks at the bottom.
@@ -237,7 +237,7 @@ fn a_new_play_moves_a_track_to_today() {
     db.record_play(ancient).unwrap();
 
     let today =
-        db.tracks_range(None, custom("lastplayed"), &["0".into()], false, None, 0, 100).unwrap();
+        db.tracks_range_exact(None, custom("lastplayed"), &["0".into()], None, 0, 100).unwrap();
     assert_eq!(titles(today), ["Today", "Ancient"]);
     // Its older play is still on the record — the bucket reads the newest one.
     let plays: i64 = db
@@ -251,7 +251,7 @@ fn a_new_play_moves_a_track_to_today() {
         .unwrap();
     assert_eq!(plays, 2);
     assert_eq!(
-        db.tracks_range(None, custom("lastplayed"), &["4".into()], false, None, 0, 100)
+        db.tracks_range_exact(None, custom("lastplayed"), &["4".into()], None, 0, 100)
             .unwrap()
             .len(),
         0

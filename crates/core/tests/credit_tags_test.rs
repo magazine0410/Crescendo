@@ -65,7 +65,7 @@ fn test_db() -> (tempfile::TempDir, Db) {
 
 fn count(db: &Db, q: &str) -> i64 {
     let filter = search::compile(q).unwrap();
-    db.track_count(Some(&filter), BrowseMode::Artist, &[], false).unwrap()
+    db.track_count_exact(Some(&filter), BrowseMode::Artist, &[]).unwrap()
 }
 
 #[test]
@@ -115,10 +115,10 @@ fn credit_tags_are_browsable() {
     let (_d, db) = test_db();
     let mode = BrowseMode::Custom("arranger".into());
     let values: Vec<String> =
-        db.browse_values(mode.clone(), None, false).unwrap().into_iter().map(|v| v.value).collect();
+        db.browse_values_exact(mode.clone(), None).unwrap().into_iter().map(|v| v.value).collect();
     assert_eq!(values, ["Masayoshi Minoshima", "ShibayanRecords", "暁Records"]);
     // …and selecting one plays back the right count.
-    assert_eq!(db.track_count(None, mode, &["暁Records".into()], false).unwrap(), 1);
+    assert_eq!(db.track_count_exact(None, mode, &["暁Records".into()]).unwrap(), 1);
 }
 
 #[test]

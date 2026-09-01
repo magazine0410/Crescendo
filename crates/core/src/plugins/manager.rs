@@ -1,9 +1,14 @@
-use super::manifest::{PluginKind, PluginManifest, PluginSettingValue};
+use super::manifest::{
+    PluginFacetTransform, PluginKind, PluginManifest, PluginMenuAction, PluginMenuSlot,
+    PluginSettingValue,
+};
 use super::package::{
     create_operation_dir, load_installed, stage_archive, sync_directory, InstalledPackage,
 };
 use super::PLUGIN_API_VERSION;
 use crate::db::plugins::PluginPendingRow;
+use crate::db::queries::{FacetPlan, FacetTransform};
+use crate::model::BrowseMode;
 use crate::Db;
 use anyhow::{anyhow, bail, Context, Result};
 use semver::Version;
@@ -13,9 +18,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 const STARTUP_MARKER: &str = "startup-in-progress";
+pub const GROUPING_PLUGIN_ID: &str = "dev.crescendo.primary-grouping";
+pub const GROUPING_PLUGIN_SETTING: &str = "collapse_multi_tagged_titles";
+const GROUPING_MIGRATION_KEY: &str = "grouping_plugin_migration";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginSnapshot {
@@ -25,6 +33,9 @@ pub struct PluginSnapshot {
     pub safe_mode_reason: Option<String>,
     pub errors: Vec<String>,
     pub restart_required: bool,
+    pub projection_revision: u64,
+    pub menu_controls: Vec<PluginMenuControlInfo>,
+    pub grouping_migration_pending: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,12 +73,105 @@ pub struct PluginMutationResult {
     pub snapshot: PluginSnapshot,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginMenuControlInfo {
+    pub plugin_id: String,
+    pub id: String,
+    pub slot: String,
+    pub label: String,
+    pub target_tag: String,
+    pub setting_key: String,
+    pub checked: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RegisteredFacetTransform {
+    plugin_id: String,
+    contribution: PluginFacetTransform,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ContributionRegistry {
+    facets: BTreeMap<String, RegisteredFacetTransform>,
+    menus: Vec<(String, super::manifest::PluginMenuControl)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectionSnapshot {
+    pub revision: u64,
+    settings: BTreeMap<(String, String), Value>,
+    pub prefer_romanized: bool,
+}
+
+pub struct ProjectionReadGuard<'a> {
+    snapshot: RwLockReadGuard<'a, ProjectionSnapshot>,
+    registry: &'a ContributionRegistry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StaleProjection {
+    pub current_revision: u64,
+}
+
+impl std::fmt::Display for StaleProjection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "stale projection; current revision is {}",
+            self.current_revision
+        )
+    }
+}
+
+impl std::error::Error for StaleProjection {}
+
+impl ProjectionReadGuard<'_> {
+    pub fn revision(&self) -> u64 {
+        self.snapshot.revision
+    }
+
+    pub fn prefer_romanized(&self) -> bool {
+        self.snapshot.prefer_romanized
+    }
+
+    pub fn facet_plan(&self, mode: &BrowseMode) -> Option<FacetPlan> {
+        let target = browse_target_tag(mode);
+        let transform = target
+            .as_deref()
+            .and_then(|target| self.registry.facets.get(target))
+            .and_then(|registered| {
+                let enabled = self
+                    .snapshot
+                    .settings
+                    .get(&(
+                        registered.plugin_id.clone(),
+                        registered.contribution.enabled_setting().to_string(),
+                    ))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                enabled.then(|| match &registered.contribution {
+                    PluginFacetTransform::TextFirstSegment {
+                        delimiter,
+                        trim_whitespace,
+                        ..
+                    } => FacetTransform::TextFirstSegment {
+                        delimiter: delimiter.clone(),
+                        trim_whitespace: *trim_whitespace,
+                    },
+                })
+            });
+        FacetPlan::resolve(mode, transform.as_ref(), self.snapshot.prefer_romanized)
+    }
+}
+
 pub struct PluginManager {
     installed_root: PathBuf,
     staging_root: PathBuf,
     db: Arc<Db>,
     app_version: Version,
     loaded: BTreeMap<String, PluginManifest>,
+    registry: ContributionRegistry,
+    projection: RwLock<ProjectionSnapshot>,
     available: bool,
     safe_mode: bool,
     safe_mode_reason: Option<String>,
@@ -186,6 +290,7 @@ impl PluginManager {
         }
 
         let mut loaded = BTreeMap::new();
+        let mut reserved_targets = BTreeMap::<String, String>::new();
         for record in &inventory {
             let Some(package) = &record.package else {
                 continue;
@@ -203,9 +308,36 @@ impl PluginManager {
                         last_error: None,
                     });
             if state.desired_enabled && !safe_mode {
+                let conflict = package
+                    .manifest
+                    .contributes
+                    .facet_transforms
+                    .iter()
+                    .find_map(|transform| {
+                        reserved_targets
+                            .get(transform.target_tag())
+                            .map(|owner| (transform.target_tag(), owner.clone()))
+                    });
+                if let Some((target, owner)) = conflict {
+                    let message = format!(
+                        "Could not enable {} because {owner} already owns the {target} facet transform.",
+                        record.id
+                    );
+                    db.plugin_set_desired_enabled(&record.id, false)?;
+                    db.plugin_record_error(&record.id, Some(&message))?;
+                    startup_errors.push(message);
+                    continue;
+                }
+                for transform in &package.manifest.contributes.facet_transforms {
+                    reserved_targets
+                        .insert(transform.target_tag().to_string(), record.id.clone());
+                }
                 loaded.insert(record.id.clone(), package.manifest.clone());
             }
         }
+
+        let registry = ContributionRegistry::from_loaded(&loaded);
+        let projection = projection_from_loaded(&db, &loaded, 0)?;
 
         for operation in committed {
             if operation.row.operation == "update" {
@@ -231,6 +363,8 @@ impl PluginManager {
             db,
             app_version,
             loaded,
+            registry,
+            projection: RwLock::new(projection),
             available: true,
             safe_mode,
             safe_mode_reason,
@@ -241,12 +375,19 @@ impl PluginManager {
 
     pub fn disabled(root: PathBuf, db: Arc<Db>, app_version: &str, error: String) -> Self {
         let app_version = Version::parse(app_version).unwrap_or_else(|_| Version::new(0, 0, 0));
+        let prefer_romanized = db.prefer_romanized();
         Self {
             installed_root: root.join("installed"),
             staging_root: root.join("staging"),
             db,
             app_version,
             loaded: BTreeMap::new(),
+            registry: ContributionRegistry::default(),
+            projection: RwLock::new(ProjectionSnapshot {
+                revision: 0,
+                settings: BTreeMap::new(),
+                prefer_romanized,
+            }),
             available: false,
             safe_mode: true,
             safe_mode_reason: Some("The plugin system could not initialize.".into()),
@@ -261,6 +402,83 @@ impl PluginManager {
             .lock()
             .map_err(|_| anyhow!("plugin manager lock poisoned"))?;
         self.snapshot_unlocked()
+    }
+
+    /// Capture one immutable projection generation. The returned guard keeps
+    /// publication blocked until its complete query has finished.
+    pub fn projection(&self, expected_revision: Option<u64>) -> Result<ProjectionReadGuard<'_>> {
+        let snapshot = self
+            .projection
+            .read()
+            .map_err(|_| anyhow!("plugin projection lock poisoned"))?;
+        if let Some(expected) = expected_revision {
+            if expected != snapshot.revision {
+                return Err(StaleProjection {
+                    current_revision: snapshot.revision,
+                }
+                .into());
+            }
+        }
+        Ok(ProjectionReadGuard {
+            snapshot,
+            registry: &self.registry,
+        })
+    }
+
+    /// Persist and publish the host romanization preference through the same
+    /// generation boundary as plugin projection settings.
+    pub fn set_prefer_romanized(&self, value: bool) -> Result<u64> {
+        let _guard = self
+            .operation_lock
+            .lock()
+            .map_err(|_| anyhow!("plugin manager lock poisoned"))?;
+        self.db
+            .prefs_set("prefer_romanized", if value { "true" } else { "false" })?;
+        let mut projection = self
+            .projection
+            .write()
+            .map_err(|_| anyhow!("plugin projection lock poisoned"))?;
+        if projection.prefer_romanized != value {
+            projection.prefer_romanized = value;
+            projection.revision = projection.revision.saturating_add(1);
+        }
+        Ok(projection.revision)
+    }
+
+    pub fn complete_grouping_migration(
+        &self,
+        bundled_archive: Option<&Path>,
+    ) -> Result<PluginMutationResult> {
+        if self.db.meta_get(GROUPING_MIGRATION_KEY)?.as_deref() != Some("pending") {
+            return Ok(PluginMutationResult {
+                changed: false,
+                message: None,
+                snapshot: self.snapshot()?,
+            });
+        }
+
+        if let Some(archive) = bundled_archive {
+            if !self.installed_root.join(GROUPING_PLUGIN_ID).try_exists()? {
+                self.install(archive)?;
+            }
+            self.set_setting(
+                GROUPING_PLUGIN_ID,
+                GROUPING_PLUGIN_SETTING,
+                Value::Bool(true),
+            )?;
+            self.set_enabled(GROUPING_PLUGIN_ID, true)?;
+        }
+        self.db.meta_set(GROUPING_MIGRATION_KEY, "completed")?;
+        self.db.prefs_delete("grouping_split_multi")?;
+        Ok(PluginMutationResult {
+            changed: true,
+            message: Some(if bundled_archive.is_some() {
+                "The grouping plugin will be enabled after Crescendo restarts.".into()
+            } else {
+                "The grouping plugin notice was dismissed.".into()
+            }),
+            snapshot: self.snapshot()?,
+        })
     }
 
     pub fn install(&self, archive_path: &Path) -> Result<PluginMutationResult> {
@@ -292,6 +510,13 @@ impl PluginManager {
                         "updates must have a higher version than the installed {}",
                         current.manifest.version
                     );
+                }
+                if self
+                    .db
+                    .plugin_state_get(&plugin_id)?
+                    .is_some_and(|state| state.desired_enabled)
+                {
+                    self.ensure_manifest_has_no_conflict(&plugin_id, &staged.manifest)?;
                 }
                 let pending = PluginPendingRow {
                     plugin_id: plugin_id.clone(),
@@ -366,6 +591,7 @@ impl PluginManager {
             if let Some(error) = compatibility_error(&record.manifest, &self.app_version) {
                 bail!("{error}");
             }
+            self.ensure_manifest_has_no_conflict(plugin_id, &record.manifest)?;
         }
         let old = self
             .db
@@ -417,6 +643,19 @@ impl PluginManager {
         declaration.validate_value(&value)?;
         let previous = self.db.plugin_settings_get(plugin_id)?.get(key).cloned();
         self.db.plugin_setting_set(plugin_id, key, &value)?;
+        if self.loaded.contains_key(plugin_id) {
+            let affects_projection = self.registry.setting_affects_projection(plugin_id, key);
+            let mut projection = self
+                .projection
+                .write()
+                .map_err(|_| anyhow!("plugin projection lock poisoned"))?;
+            projection
+                .settings
+                .insert((plugin_id.to_string(), key.to_string()), value.clone());
+            if affects_projection && previous.as_ref() != Some(&value) {
+                projection.revision = projection.revision.saturating_add(1);
+            }
+        }
         Ok(PluginMutationResult {
             changed: previous.as_ref() != Some(&value),
             message: None,
@@ -550,7 +789,14 @@ impl PluginManager {
                             .filter(|value| declaration.validate_value(value).is_ok())
                             .cloned()
                             .unwrap_or_else(|| declaration.default_value());
-                        PluginSettingValue { declaration, value }
+                        let affects_projection = self
+                            .registry
+                            .setting_affects_projection(&record.id, declaration.key());
+                        PluginSettingValue {
+                            declaration,
+                            value,
+                            affects_projection,
+                        }
                     })
                     .collect();
                 plugins.push(PluginInfo {
@@ -613,6 +859,17 @@ impl PluginManager {
             safe_mode_reason: self.safe_mode_reason.clone(),
             errors,
             restart_required,
+            projection_revision: self
+                .projection
+                .read()
+                .map_err(|_| anyhow!("plugin projection lock poisoned"))?
+                .revision,
+            menu_controls: self.menu_controls()?,
+            grouping_migration_pending: self
+                .db
+                .meta_get(GROUPING_MIGRATION_KEY)?
+                .as_deref()
+                == Some("pending"),
         })
     }
 
@@ -632,6 +889,145 @@ impl PluginManager {
             bail!("the plugin system is unavailable; restart Crescendo after resolving the startup error");
         }
         Ok(())
+    }
+
+    fn ensure_manifest_has_no_conflict(
+        &self,
+        plugin_id: &str,
+        manifest: &PluginManifest,
+    ) -> Result<()> {
+        let targets: HashSet<&str> = manifest
+            .contributes
+            .facet_transforms
+            .iter()
+            .map(PluginFacetTransform::target_tag)
+            .collect();
+        if targets.is_empty() {
+            return Ok(());
+        }
+        for record in scan_installed(&self.installed_root)? {
+            if record.id == plugin_id
+                || !self
+                    .db
+                    .plugin_state_get(&record.id)?
+                    .is_some_and(|state| state.desired_enabled)
+            {
+                continue;
+            }
+            let Some(package) = record.package else {
+                continue;
+            };
+            if let Some(target) = package
+                .manifest
+                .contributes
+                .facet_transforms
+                .iter()
+                .map(PluginFacetTransform::target_tag)
+                .find(|target| targets.contains(target))
+            {
+                bail!(
+                    "{} already owns the {target} facet transform; disable it before enabling {plugin_id}",
+                    record.id
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn menu_controls(&self) -> Result<Vec<PluginMenuControlInfo>> {
+        let projection = self
+            .projection
+            .read()
+            .map_err(|_| anyhow!("plugin projection lock poisoned"))?;
+        Ok(self
+            .registry
+            .menus
+            .iter()
+            .map(|(plugin_id, control)| PluginMenuControlInfo {
+                plugin_id: plugin_id.clone(),
+                id: control.id.clone(),
+                slot: match control.slot {
+                    PluginMenuSlot::LibraryFilter => "library.filter".into(),
+                },
+                label: control.label.clone(),
+                target_tag: control.visible_when.active_tag.clone(),
+                setting_key: match &control.action {
+                    PluginMenuAction::ToggleSetting { setting } => setting.clone(),
+                },
+                checked: projection
+                    .settings
+                    .get(&(plugin_id.clone(), control.checked_setting.clone()))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+            .collect())
+    }
+}
+
+impl ContributionRegistry {
+    fn from_loaded(loaded: &BTreeMap<String, PluginManifest>) -> Self {
+        let mut registry = Self::default();
+        for (plugin_id, manifest) in loaded {
+            for contribution in &manifest.contributes.facet_transforms {
+                registry.facets.insert(
+                    contribution.target_tag().to_string(),
+                    RegisteredFacetTransform {
+                        plugin_id: plugin_id.clone(),
+                        contribution: contribution.clone(),
+                    },
+                );
+            }
+            registry.menus.extend(
+                manifest
+                    .contributes
+                    .menu_controls
+                    .iter()
+                    .cloned()
+                    .map(|control| (plugin_id.clone(), control)),
+            );
+        }
+        registry
+    }
+
+    fn setting_affects_projection(&self, plugin_id: &str, key: &str) -> bool {
+        self.facets.values().any(|registered| {
+            registered.plugin_id == plugin_id && registered.contribution.enabled_setting() == key
+        })
+    }
+}
+
+fn projection_from_loaded(
+    db: &Db,
+    loaded: &BTreeMap<String, PluginManifest>,
+    revision: u64,
+) -> Result<ProjectionSnapshot> {
+    let mut settings = BTreeMap::new();
+    for (plugin_id, manifest) in loaded {
+        let stored = db.plugin_settings_get(plugin_id)?;
+        for declaration in &manifest.contributes.settings {
+            let value = stored
+                .get(declaration.key())
+                .filter(|value| declaration.validate_value(value).is_ok())
+                .cloned()
+                .unwrap_or_else(|| declaration.default_value());
+            settings.insert((plugin_id.clone(), declaration.key().to_string()), value);
+        }
+    }
+    Ok(ProjectionSnapshot {
+        revision,
+        settings,
+        prefer_romanized: db.prefer_romanized(),
+    })
+}
+
+fn browse_target_tag(mode: &BrowseMode) -> Option<String> {
+    match mode {
+        BrowseMode::Genre => Some("genre".into()),
+        BrowseMode::Artist => Some("artist".into()),
+        BrowseMode::Album => Some("album".into()),
+        BrowseMode::Albumartist => Some("albumartist".into()),
+        BrowseMode::Custom(tag) if mode.column().is_some() => Some(tag.trim().to_ascii_lowercase()),
+        BrowseMode::Custom(_) => None,
     }
 }
 
@@ -884,8 +1280,60 @@ mod tests {
                         },
                     ],
                 }],
+                ..PluginContributions::default()
             },
         }
+    }
+
+    fn transform_manifest(id: &str) -> PluginManifest {
+        let mut value = manifest("1.0.0");
+        value.id = id.into();
+        value.name = id.into();
+        value.contributes.settings.push(PluginSettingDeclaration::Boolean {
+            key: "collapse_titles".into(),
+            label: "Collapse titles".into(),
+            description: String::new(),
+            default: true,
+        });
+        value
+            .contributes
+            .facet_transforms
+            .push(PluginFacetTransform::TextFirstSegment {
+                target_tag: "grouping".into(),
+                delimiter: ";".into(),
+                trim_whitespace: true,
+                enabled_setting: "collapse_titles".into(),
+            });
+        value.contributes.menu_controls.push(super::super::manifest::PluginMenuControl {
+            id: "collapse_titles".into(),
+            slot: PluginMenuSlot::LibraryFilter,
+            label: "Collapse titles".into(),
+            visible_when: super::super::manifest::PluginMenuVisibility {
+                active_tag: "grouping".into(),
+            },
+            checked_setting: "collapse_titles".into(),
+            action: PluginMenuAction::ToggleSetting {
+                setting: "collapse_titles".into(),
+            },
+        });
+        value
+    }
+
+    fn official_grouping_manifest() -> PluginManifest {
+        let mut value = transform_manifest(GROUPING_PLUGIN_ID);
+        if let PluginSettingDeclaration::Boolean { key, .. } = &mut value.contributes.settings[1]
+        {
+            *key = GROUPING_PLUGIN_SETTING.into();
+        }
+        let PluginFacetTransform::TextFirstSegment {
+            enabled_setting, ..
+        } = &mut value.contributes.facet_transforms[0];
+        *enabled_setting = GROUPING_PLUGIN_SETTING.into();
+        value.contributes.menu_controls[0].checked_setting = GROUPING_PLUGIN_SETTING.into();
+        value.contributes.menu_controls[0].action = PluginMenuAction::ToggleSetting {
+            setting: GROUPING_PLUGIN_SETTING.into(),
+        };
+        value
     }
 
     fn setup() -> (tempfile::TempDir, Arc<Db>, PluginManager) {
@@ -1058,6 +1506,208 @@ mod tests {
                 Value::String("invalid".into())
             )
             .is_err());
+    }
+
+    #[test]
+    fn loaded_transform_settings_publish_one_revision_and_stale_guards_fail() {
+        let (dir, db, manager) = setup();
+        db.with(|connection| {
+            for (id, grouping) in [(1, "Theme; Variant"), (2, "Theme; Other")] {
+                connection.execute(
+                    "INSERT INTO tracks(id, path, dir, filename, mtime, size, format, duration_ms, grouping)
+                     VALUES (?1, ?2, '/m', ?3, 0, 0, 'FLAC', 1, ?4)",
+                    rusqlite::params![id, format!("/m/{id}.flac"), format!("{id}.flac"), grouping],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let package = dir.path().join("transform.crescendo-plugin");
+        write_test_package(
+            &package,
+            &transform_manifest("dev.crescendo.transform-test"),
+            &[],
+        );
+        manager.install(&package).unwrap();
+        manager
+            .set_enabled("dev.crescendo.transform-test", true)
+            .unwrap();
+        drop(manager);
+
+        let manager =
+            PluginManager::start(dir.path().join("plugins"), db.clone(), "0.8.0").unwrap();
+        let mode = BrowseMode::Custom("grouping".into());
+        let projection = manager.projection(Some(0)).unwrap();
+        let plan = projection.facet_plan(&mode).unwrap();
+        assert_eq!(
+            db.browse_values_with_plan(Some(&plan), None).unwrap()[0].count,
+            2
+        );
+        drop(projection);
+
+        let mutation = manager
+            .set_setting(
+                "dev.crescendo.transform-test",
+                "collapse_titles",
+                Value::Bool(false),
+            )
+            .unwrap();
+        assert_eq!(mutation.snapshot.projection_revision, 1);
+        assert!(!mutation.snapshot.menu_controls[0].checked);
+        let stale = manager.projection(Some(0)).err().unwrap();
+        assert!(stale.downcast_ref::<StaleProjection>().is_some());
+        let projection = manager.projection(Some(1)).unwrap();
+        let plan = projection.facet_plan(&mode).unwrap();
+        assert_eq!(
+            db.browse_values_with_plan(Some(&plan), None).unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn projection_publication_waits_for_an_in_flight_query_generation() {
+        let (dir, db, manager) = setup();
+        db.with(|connection| {
+            for (id, grouping) in [(1, "Theme; A"), (2, "Theme; B")] {
+                connection.execute(
+                    "INSERT INTO tracks(id, path, dir, filename, mtime, size, format, duration_ms, grouping)
+                     VALUES (?1, ?2, '/m', ?3, 0, 0, 'FLAC', 1, ?4)",
+                    rusqlite::params![id, format!("/m/{id}.flac"), format!("{id}.flac"), grouping],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let package = dir.path().join("transform.crescendo-plugin");
+        write_test_package(
+            &package,
+            &transform_manifest("dev.crescendo.transform-lock"),
+            &[],
+        );
+        manager.install(&package).unwrap();
+        manager
+            .set_enabled("dev.crescendo.transform-lock", true)
+            .unwrap();
+        drop(manager);
+        let manager = Arc::new(
+            PluginManager::start(dir.path().join("plugins"), db.clone(), "0.8.0").unwrap(),
+        );
+        let mode = BrowseMode::Custom("grouping".into());
+        let old_projection = manager.projection(Some(0)).unwrap();
+        let old_plan = old_projection.facet_plan(&mode).unwrap();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = manager.clone();
+        std::thread::spawn(move || {
+            let result = worker.set_setting(
+                "dev.crescendo.transform-lock",
+                "collapse_titles",
+                Value::Bool(false),
+            );
+            done_tx.send(result.is_ok()).unwrap();
+        });
+        for _ in 0..10_000 {
+            if db
+                .plugin_settings_get("dev.crescendo.transform-lock")
+                .unwrap()
+                .get("collapse_titles")
+                == Some(&Value::Bool(false))
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            db.plugin_settings_get("dev.crescendo.transform-lock")
+                .unwrap()
+                .get("collapse_titles"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            db.browse_values_with_plan(Some(&old_plan), None)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(done_rx.try_recv().is_err());
+        drop(old_projection);
+        assert!(done_rx.recv().unwrap());
+        assert_eq!(manager.projection(Some(1)).unwrap().revision(), 1);
+    }
+
+    #[test]
+    fn enabling_a_conflicting_facet_transform_is_rejected_transactionally() {
+        let (dir, _db, manager) = setup();
+        for id in ["dev.crescendo.transform-a", "dev.crescendo.transform-b"] {
+            let package = dir.path().join(format!("{id}.crescendo-plugin"));
+            write_test_package(&package, &transform_manifest(id), &[]);
+            manager.install(&package).unwrap();
+        }
+        manager
+            .set_enabled("dev.crescendo.transform-a", true)
+            .unwrap();
+        assert!(manager
+            .set_enabled("dev.crescendo.transform-b", true)
+            .is_err());
+        let snapshot = manager.snapshot().unwrap();
+        assert!(
+            snapshot
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == "dev.crescendo.transform-a")
+                .unwrap()
+                .desired_enabled
+        );
+        assert!(
+            !snapshot
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == "dev.crescendo.transform-b")
+                .unwrap()
+                .desired_enabled
+        );
+    }
+
+    #[test]
+    fn grouping_migration_is_opt_in_and_never_returns_after_install_or_dismiss() {
+        let (dir, db, manager) = setup();
+        db.meta_set(GROUPING_MIGRATION_KEY, "pending").unwrap();
+        db.prefs_set("grouping_split_multi", "false").unwrap();
+        let package = dir.path().join("grouping.crescendo-plugin");
+        write_test_package(&package, &official_grouping_manifest(), &[]);
+
+        let installed = manager
+            .complete_grouping_migration(Some(&package))
+            .unwrap();
+        assert!(!installed.snapshot.grouping_migration_pending);
+        let plugin = installed
+            .snapshot
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == GROUPING_PLUGIN_ID)
+            .unwrap();
+        assert!(plugin.desired_enabled);
+        assert!(!plugin.loaded);
+        assert_eq!(plugin.settings[1].value, Value::Bool(true));
+        assert!(installed.snapshot.restart_required);
+        assert!(db.prefs_get("grouping_split_multi").unwrap().is_none());
+        assert!(!manager
+            .complete_grouping_migration(None)
+            .unwrap()
+            .changed);
+
+        let (dismiss_dir, dismiss_db, dismiss_manager) = setup();
+        dismiss_db
+            .meta_set(GROUPING_MIGRATION_KEY, "pending")
+            .unwrap();
+        let dismissed = dismiss_manager
+            .complete_grouping_migration(None)
+            .unwrap();
+        assert!(!dismissed.snapshot.grouping_migration_pending);
+        assert!(dismissed.snapshot.plugins.is_empty());
+        drop(dismiss_manager);
+        drop(dismiss_db);
+        drop(dismiss_dir);
     }
 
     #[test]

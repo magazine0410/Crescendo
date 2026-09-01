@@ -54,7 +54,7 @@ fn test_db() -> (tempfile::TempDir, Db) {
 
 fn count(db: &Db, q: &str) -> i64 {
     let filter = search::compile(q).unwrap();
-    db.track_count(Some(&filter), crescendo_core::model::BrowseMode::Artist, &[], false).unwrap()
+    db.track_count_exact(Some(&filter), crescendo_core::model::BrowseMode::Artist, &[]).unwrap()
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn track_index_locates_row_in_view() {
             .unwrap()
     };
     let index_of = |title: &str| {
-        db.track_index(None, BrowseMode::Artist, &[], false, None, id_of(title)).unwrap()
+        db.track_index_exact(None, BrowseMode::Artist, &[], None, id_of(title)).unwrap()
     };
     // Full library, LIBRARY_SORT by albumartist: Charlie Parker, Joe Hisaishi,
     // Maroon 5, ZUN.
@@ -208,8 +208,8 @@ fn track_index_locates_row_in_view() {
     let filter = search::compile("artist=zun").unwrap();
     let charlie = id_of("Now's The Time");
     let zun = id_of("ネイティブフェイス");
-    assert_eq!(db.track_index(Some(&filter), BrowseMode::Artist, &[], false, None, charlie).unwrap(), None);
-    assert_eq!(db.track_index(Some(&filter), BrowseMode::Artist, &[], false, None, zun).unwrap(), Some(0));
+    assert_eq!(db.track_index_exact(Some(&filter), BrowseMode::Artist, &[], None, charlie).unwrap(), None);
+    assert_eq!(db.track_index_exact(Some(&filter), BrowseMode::Artist, &[], None, zun).unwrap(), Some(0));
 }
 
 #[test]

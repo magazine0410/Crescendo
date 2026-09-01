@@ -39,7 +39,8 @@ fn sort_key_sql(key: SortKey, romanized: bool) -> &'static str {
 /// sort is chosen, otherwise the chosen key(s) — each with its direction —
 /// followed by the LIBRARY_SORT tiebreakers the chosen keys don't already cover.
 /// `romanized` is the `prefer_romanized` pref; pass the same value to the view
-/// and to `resolve_context` or a row's index stops matching its queue position.
+/// and to `resolve_context_with_projection` or a row's index stops matching
+/// its queue position.
 pub fn order_sql(sort: Option<TrackSort>, romanized: bool) -> String {
     let Some(s) = sort else { return LIBRARY_SORT.into() };
     let dir = if s.descending { " DESC" } else { "" };
@@ -67,15 +68,15 @@ pub fn order_sql(sort: Option<TrackSort>, romanized: bool) -> String {
     out
 }
 
-/// SQL for the "primary theme" of a grouping tag: the text before the first
-/// ';' (trimmed). Used to collapse multi-theme grouping tags (Touhou remixes
-/// tagged `A; B; C`) under one umbrella. `;` is ASCII so INSTR/SUBSTR stay
-/// Unicode-safe on the CJK-heavy library; NULL/empty grouping folds to '' (the
-/// "?" bucket the UI already renders).
-const GROUPING_FIRST_SEG: &str =
-    "TRIM(CASE WHEN INSTR(COALESCE(grouping, ''), ';') > 0 \
-              THEN SUBSTR(COALESCE(grouping, ''), 1, INSTR(COALESCE(grouping, ''), ';') - 1) \
-              ELSE COALESCE(grouping, '') END)";
+/// Host-implemented facet transforms. Plugin manifests can select one of these
+/// bounded descriptors, but cannot supply an expression or column name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FacetTransform {
+    TextFirstSegment {
+        delimiter: String,
+        trim_whitespace: bool,
+    },
+}
 
 pub fn track_from_row(r: &Row) -> rusqlite::Result<Track> {
     Ok(Track {
@@ -189,7 +190,7 @@ impl FacetPresentation {
 /// Search filters remain outside this projection: `grouping:...` and all other
 /// field searches continue to match the raw stored metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FacetPlan {
+pub struct FacetPlan {
     target_column: &'static str,
     value_expr: String,
     group_expr: String,
@@ -199,9 +200,13 @@ struct FacetPlan {
 }
 
 impl FacetPlan {
-    fn resolve(mode: &BrowseMode, collapse: bool, romanized: bool) -> Option<Self> {
+    pub fn resolve(
+        mode: &BrowseMode,
+        transform: Option<&FacetTransform>,
+        romanized: bool,
+    ) -> Option<Self> {
         let target_column = mode.column()?;
-        let (value_expr, group_expr, presentation) = match mode {
+        let (base_expr, base_group_expr, base_presentation) = match mode {
             BrowseMode::Artist => {
                 let shown = displayed_name_expr("artist", "artistsort", romanized);
                 (shown.clone(), shown, FacetPresentation::Text)
@@ -210,11 +215,6 @@ impl FacetPlan {
                 let shown = displayed_name_expr("albumartist", "albumartistsort", romanized);
                 (shown.clone(), shown, FacetPresentation::Text)
             }
-            _ if target_column == "grouping" && collapse => (
-                GROUPING_FIRST_SEG.into(),
-                GROUPING_FIRST_SEG.into(),
-                FacetPresentation::Text,
-            ),
             _ if mode.is_duration() => (
                 DURATION_BUCKET.into(),
                 "duration_ms / 60000".into(),
@@ -234,6 +234,17 @@ impl FacetPlan {
                 (value.clone(), value, FacetPresentation::Text)
             }
         };
+        // Compose a contributed transform over the host's normal visible
+        // expression. This keeps transforms meaningful for artist facets too:
+        // when romanization is enabled they see the same label the user sees,
+        // rather than silently being ignored or operating on a hidden raw tag.
+        let (value_expr, group_expr, presentation) = match transform {
+            Some(transform) => {
+                let projected = transform_expr(&base_expr, transform);
+                (projected.clone(), projected, FacetPresentation::Text)
+            }
+            None => (base_expr, base_group_expr, base_presentation),
+        };
         Some(Self {
             target_column,
             selection_expr: value_expr.clone(),
@@ -246,6 +257,10 @@ impl FacetPlan {
         })
     }
 
+    pub fn exact(mode: &BrowseMode, romanized: bool) -> Option<Self> {
+        Self::resolve(mode, None, romanized)
+    }
+
     fn values_sql(&self, where_sql: &str) -> String {
         let sort_value = self.sort_value_expr.as_deref().unwrap_or("NULL");
         let order = self.presentation.order_sql(&self.group_expr);
@@ -254,6 +269,29 @@ impl FacetPlan {
              GROUP BY {} ORDER BY {order}",
             self.value_expr, self.group_expr
         )
+    }
+}
+
+fn transform_expr(input_expr: &str, transform: &FacetTransform) -> String {
+    match transform {
+        FacetTransform::TextFirstSegment {
+            delimiter,
+            trim_whitespace,
+        } => {
+            // The delimiter is data, not SQL. Quoting it here is the only path
+            // from a validated descriptor into the trusted host expression.
+            let delimiter = format!("'{}'", delimiter.replace('\'', "''"));
+            let split = format!(
+                "CASE WHEN INSTR({input_expr}, {delimiter}) > 0 \
+                 THEN SUBSTR({input_expr}, 1, INSTR({input_expr}, {delimiter}) - 1) \
+                 ELSE {input_expr} END"
+            );
+            if *trim_whitespace {
+                format!("TRIM({split})")
+            } else {
+                split
+            }
+        }
     }
 }
 
@@ -334,18 +372,34 @@ impl Db {
     /// Artist modes return the final visible label as the value, merging raw
     /// CJK names that render through the same sort tag. NULL values group under
     /// "" (rendered as "?" by the UI).
-    pub fn browse_values(
+    /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
+    /// the stored `prefer_romanized` preference, so a plugin projecting this tag
+    /// has no effect here. The app never calls it — the Tauri commands use
+    /// `browse_values_with_plan` under a held projection guard, which is what
+    /// keeps the value list, counts, rows and playback on one revision. This
+    /// exists for tests, examples, and headless harnesses that have no plugin
+    /// registry.
+    pub fn browse_values_exact(
         &self,
         mode: BrowseMode,
         filter: Option<&SearchFilter>,
-        collapse: bool,
+    ) -> Result<Vec<BrowseValue>> {
+        let romanized = self.prefer_romanized();
+        let plan = FacetPlan::exact(&mode, romanized);
+        self.browse_values_with_plan(plan.as_ref(), filter)
+    }
+
+    /// Projection-explicit form used by the Tauri boundary while it holds the
+    /// matching plugin projection read guard.
+    pub fn browse_values_with_plan(
+        &self,
+        plan: Option<&FacetPlan>,
+        filter: Option<&SearchFilter>,
     ) -> Result<Vec<BrowseValue>> {
         // Unresolvable custom tag (unknown / not a stored column) → empty list.
-        let romanized = self.prefer_romanized();
-        let Some(plan) = FacetPlan::resolve(&mode, collapse, romanized) else {
+        let Some(plan) = plan else {
             return Ok(vec![]);
         };
-        debug_assert_eq!(mode.column(), Some(plan.target_column));
         let (where_sql, params) = track_where(filter);
         let sql = plan.values_sql(&where_sql);
         self.with(|conn| {
@@ -362,17 +416,33 @@ impl Db {
     }
 
     /// Albums that contain at least one track matching (mode in values AND search).
-    pub fn browse_albums(
+    /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
+    /// the stored `prefer_romanized` preference, so a plugin projecting this tag
+    /// has no effect here. The app never calls it — the Tauri commands use
+    /// `browse_albums_with_plan` under a held projection guard, which is what
+    /// keeps the value list, counts, rows and playback on one revision. This
+    /// exists for tests, examples, and headless harnesses that have no plugin
+    /// registry.
+    pub fn browse_albums_exact(
         &self,
         mode: BrowseMode,
         values: &[String],
         filter: Option<&SearchFilter>,
-        collapse: bool,
+    ) -> Result<Vec<Album>> {
+        let romanized = self.prefer_romanized();
+        let plan = FacetPlan::exact(&mode, romanized);
+        self.browse_albums_with_plan(plan.as_ref(), values, filter, romanized)
+    }
+
+    pub fn browse_albums_with_plan(
+        &self,
+        plan: Option<&FacetPlan>,
+        values: &[String],
+        filter: Option<&SearchFilter>,
+        romanized: bool,
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
-        let romanized = self.prefer_romanized();
-        let plan = FacetPlan::resolve(&mode, collapse, romanized);
-        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
+        push_values_clause(&mut where_sql, &mut params, plan, values);
         // Read before locking: `with` holds the connection mutex.
         let artist_order = displayed_name_expr("a.albumartist", "a.albumartist_sort", romanized);
         self.with(|conn| {
@@ -457,16 +527,30 @@ impl Db {
     }
 
     /// Count of live tracks matching (search filter AND optional mode values).
-    pub fn track_count(
+    /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
+    /// the stored `prefer_romanized` preference, so a plugin projecting this tag
+    /// has no effect here. The app never calls it — the Tauri commands use
+    /// `track_count_with_plan` under a held projection guard, which is what keeps
+    /// the value list, counts, rows and playback on one revision. This exists for
+    /// tests, examples, and headless harnesses that have no plugin registry.
+    pub fn track_count_exact(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
         values: &[String],
-        collapse: bool,
+    ) -> Result<i64> {
+        let plan = FacetPlan::exact(&mode, self.prefer_romanized());
+        self.track_count_with_plan(filter, plan.as_ref(), values)
+    }
+
+    pub fn track_count_with_plan(
+        &self,
+        filter: Option<&SearchFilter>,
+        plan: Option<&FacetPlan>,
+        values: &[String],
     ) -> Result<i64> {
         let (mut where_sql, mut params) = track_where(filter);
-        let plan = FacetPlan::resolve(&mode, collapse, self.prefer_romanized());
-        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
+        push_values_clause(&mut where_sql, &mut params, plan, values);
         self.with(|conn| {
             Ok(conn.query_row(
                 &format!("SELECT COUNT(*) FROM tracks WHERE {where_sql}"),
@@ -477,22 +561,49 @@ impl Db {
     }
 
     /// Windowed page of the library view (search filter + optional mode values +
-    /// stable sort). The sort matches `resolve_context` so a row's index is its
+    /// stable sort). The sort matches context resolution so a row's index is its
     /// index in the resolved play queue.
-    pub fn tracks_range(
+    /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
+    /// the stored `prefer_romanized` preference, so a plugin projecting this tag
+    /// has no effect here. The app never calls it — the Tauri commands use
+    /// `tracks_range_with_plan` under a held projection guard, which is what
+    /// keeps the value list, counts, rows and playback on one revision. This
+    /// exists for tests, examples, and headless harnesses that have no plugin
+    /// registry.
+    pub fn tracks_range_exact(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
         values: &[String],
-        collapse: bool,
+        sort: Option<TrackSort>,
+        offset: i64,
+        limit: i64,
+    ) -> Result<Vec<Track>> {
+        let romanized = self.prefer_romanized();
+        let plan = FacetPlan::exact(&mode, romanized);
+        self.tracks_range_with_plan(
+            filter,
+            plan.as_ref(),
+            values,
+            romanized,
+            sort,
+            offset,
+            limit,
+        )
+    }
+
+    pub fn tracks_range_with_plan(
+        &self,
+        filter: Option<&SearchFilter>,
+        plan: Option<&FacetPlan>,
+        values: &[String],
+        romanized: bool,
         sort: Option<TrackSort>,
         offset: i64,
         limit: i64,
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
-        let romanized = self.prefer_romanized();
-        let plan = FacetPlan::resolve(&mode, collapse, romanized);
-        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
+        push_values_clause(&mut where_sql, &mut params, plan, values);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -513,19 +624,36 @@ impl Db {
     /// order as `tracks_range`), or `None` when the track isn't in that set.
     /// Lets the Track-list view scroll to the now-playing track after a filter
     /// change (e.g. clearing the search).
-    pub fn track_index(
+    /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
+    /// the stored `prefer_romanized` preference, so a plugin projecting this tag
+    /// has no effect here. The app never calls it — the Tauri commands use
+    /// `track_index_with_plan` under a held projection guard, which is what keeps
+    /// the value list, counts, rows and playback on one revision. This exists for
+    /// tests, examples, and headless harnesses that have no plugin registry.
+    pub fn track_index_exact(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
         values: &[String],
-        collapse: bool,
+        sort: Option<TrackSort>,
+        track_id: i64,
+    ) -> Result<Option<i64>> {
+        let romanized = self.prefer_romanized();
+        let plan = FacetPlan::exact(&mode, romanized);
+        self.track_index_with_plan(filter, plan.as_ref(), values, romanized, sort, track_id)
+    }
+
+    pub fn track_index_with_plan(
+        &self,
+        filter: Option<&SearchFilter>,
+        plan: Option<&FacetPlan>,
+        values: &[String],
+        romanized: bool,
         sort: Option<TrackSort>,
         track_id: i64,
     ) -> Result<Option<i64>> {
         let (mut where_sql, mut params) = track_where(filter);
-        let romanized = self.prefer_romanized();
-        let plan = FacetPlan::resolve(&mode, collapse, romanized);
-        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
+        push_values_clause(&mut where_sql, &mut params, plan, values);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -549,18 +677,35 @@ impl Db {
     /// the same filtered + ordered set as `tracks_range`. Uses the
     /// gaps-and-islands pattern so a re-appearing album_id (e.g. split by a year
     /// change) and scattered NULL-album tracks each form their own run.
-    pub fn track_groups(
+    /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
+    /// the stored `prefer_romanized` preference, so a plugin projecting this tag
+    /// has no effect here. The app never calls it — the Tauri commands use
+    /// `track_groups_with_plan` under a held projection guard, which is what
+    /// keeps the value list, counts, rows and playback on one revision. This
+    /// exists for tests, examples, and headless harnesses that have no plugin
+    /// registry.
+    pub fn track_groups_exact(
         &self,
         filter: Option<&SearchFilter>,
         mode: BrowseMode,
         values: &[String],
-        collapse: bool,
+        sort: Option<TrackSort>,
+    ) -> Result<Vec<TrackGroup>> {
+        let romanized = self.prefer_romanized();
+        let plan = FacetPlan::exact(&mode, romanized);
+        self.track_groups_with_plan(filter, plan.as_ref(), values, romanized, sort)
+    }
+
+    pub fn track_groups_with_plan(
+        &self,
+        filter: Option<&SearchFilter>,
+        plan: Option<&FacetPlan>,
+        values: &[String],
+        romanized: bool,
         sort: Option<TrackSort>,
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
-        let romanized = self.prefer_romanized();
-        let plan = FacetPlan::resolve(&mode, collapse, romanized);
-        push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
+        push_values_clause(&mut where_sql, &mut params, plan, values);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -606,7 +751,30 @@ impl Db {
     }
 
     /// Resolve a play context to the ordered track-id list playback walks.
-    pub fn resolve_context(&self, ctx: &PlayContext) -> Result<Vec<i64>> {
+    /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
+    /// the stored `prefer_romanized` preference, so a plugin projecting this tag
+    /// has no effect here. The app never calls it — the Tauri commands use
+    /// `resolve_context_with_projection` under a held projection guard, which is
+    /// what keeps the value list, counts, rows and playback on one revision. This
+    /// exists for tests, examples, and headless harnesses that have no plugin
+    /// registry.
+    pub fn resolve_context_exact(&self, ctx: &PlayContext) -> Result<Vec<i64>> {
+        let romanized = self.prefer_romanized();
+        let plan = match ctx {
+            PlayContext::ValueTracks { mode, .. } => FacetPlan::exact(mode, romanized),
+            _ => None,
+        };
+        self.resolve_context_with_projection(ctx, plan.as_ref(), romanized)
+    }
+
+    /// Projection-explicit context resolution used before the Tauri command
+    /// hands concrete IDs to the player thread.
+    pub fn resolve_context_with_projection(
+        &self,
+        ctx: &PlayContext,
+        plan: Option<&FacetPlan>,
+        romanized: bool,
+    ) -> Result<Vec<i64>> {
         match ctx {
             PlayContext::Album { id } => self.with(|conn| {
                 collect_ids(
@@ -633,10 +801,10 @@ impl Db {
             PlayContext::FilteredPlaylists { ids, query } => {
                 self.with(|conn| collect_playlist_ids(conn, ids, Some(query)))
             }
-            PlayContext::LibraryView { query, sort } => {
+            PlayContext::LibraryView { query, sort, .. } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (where_sql, params) = track_where(filter.as_ref());
-                let order = order_sql(*sort, self.prefer_romanized());
+                let order = order_sql(*sort, romanized);
                 self.with(|conn| {
                     collect_ids(
                         conn,
@@ -645,12 +813,12 @@ impl Db {
                     )
                 })
             }
-            PlayContext::ValueTracks { mode, values, query, collapse, sort } => {
+            PlayContext::ValueTracks {
+                values, query, sort, ..
+            } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                let romanized = self.prefer_romanized();
-                let plan = FacetPlan::resolve(mode, *collapse, romanized);
-                push_values_clause(&mut where_sql, &mut params, plan.as_ref(), values);
+                push_values_clause(&mut where_sql, &mut params, plan, values);
                 let order = order_sql(*sort, romanized);
                 self.with(|conn| {
                     collect_ids(

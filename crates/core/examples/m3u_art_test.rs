@@ -31,14 +31,14 @@ fn main() -> anyhow::Result<()> {
         tracks.first().and_then(|t| t.artist.clone()),
         tracks.first().and_then(|t| t.title.clone()));
     // context resolution for playback
-    let ids = db.resolve_context(&crescendo_core::model::PlayContext::Playlist { id: r.playlist_id })?;
-    println!("  resolve_context: {} ids", ids.len());
+    let ids = db.resolve_context_exact(&crescendo_core::model::PlayContext::Playlist { id: r.playlist_id })?;
+    println!("  resolve_context_exact: {} ids", ids.len());
     // clean up the test playlist
     db.playlist_delete(r.playlist_id)?;
     println!("  deleted test playlist");
 
     // --- thumbnails at scale: first 100 albums ---
-    let albums = db.browse_albums(BrowseMode::Album, &[], None, false)?;
+    let albums = db.browse_albums_exact(BrowseMode::Album, &[], None)?;
     let store = ArtStore::new(std::path::Path::new(&cache))?;
     let n = albums.len().min(100);
     let t0 = Instant::now();

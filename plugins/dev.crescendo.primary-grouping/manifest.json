@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "dev.crescendo.primary-grouping",
+  "name": "Primary Grouping",
+  "version": "1.0.0",
+  "description": "Optionally collapses semicolon-separated grouping titles under their first value.",
+  "authors": ["Crescendo"],
+  "license": "MIT",
+  "homepage": "https://github.com/magazine0410/Crescendo",
+  "kind": "declarative",
+  "api_version": "1.0.0",
+  "min_crescendo_version": "0.8.0",
+  "permissions": [],
+  "contributes": {
+    "settings": [
+      {
+        "type": "boolean",
+        "key": "collapse_multi_tagged_titles",
+        "label": "Collapse multi-tagged titles under their first grouping",
+        "description": "Groups semicolon-separated GROUPING values by the text before the first semicolon.",
+        "default": true
+      }
+    ],
+    "facet_transforms": [
+      {
+        "type": "text.first_segment",
+        "target_tag": "grouping",
+        "delimiter": ";",
+        "trim_whitespace": true,
+        "enabled_setting": "collapse_multi_tagged_titles"
+      }
+    ],
+    "menu_controls": [
+      {
+        "id": "collapse_multi_tagged_titles",
+        "slot": "library.filter",
+        "label": "Collapse multi-tagged titles under their first grouping",
+        "visible_when": { "active_tag": "grouping" },
+        "checked_setting": "collapse_multi_tagged_titles",
+        "action": {
+          "type": "toggle_setting",
+          "setting": "collapse_multi_tagged_titles"
+        }
+      }
+    ]
+  }
+}

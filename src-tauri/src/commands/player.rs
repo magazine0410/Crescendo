@@ -1,3 +1,4 @@
+use crate::commands::library::{projection_error, ProjectionCommandError};
 use crate::player::{Cmd, PlayerState};
 use crate::state::{AppState, ProjectMGrants};
 use crescendo_core::model::{PlayContext, Track};
@@ -49,8 +50,36 @@ pub async fn player_play_context(
     state: State<'_, AppState>,
     ctx: PlayContext,
     start_index: usize,
-) -> Result<(), String> {
-    state.player.send(Cmd::PlayContext { ctx, start_index })
+) -> Result<(), ProjectionCommandError> {
+    let expected_revision = match &ctx {
+        PlayContext::LibraryView {
+            projection_revision,
+            ..
+        }
+        | PlayContext::ValueTracks {
+            projection_revision,
+            ..
+        } => Some(*projection_revision),
+        _ => None,
+    };
+    let projection = state
+        .plugins
+        .projection(expected_revision)
+        .map_err(projection_error)?;
+    let plan = match &ctx {
+        PlayContext::ValueTracks { mode, .. } => projection.facet_plan(mode),
+        _ => None,
+    };
+    let ids = state
+        .db
+        .resolve_context_with_projection(&ctx, plan.as_ref(), projection.prefer_romanized())
+        .map_err(|error| ProjectionCommandError::Operation {
+            message: error.to_string(),
+        })?;
+    state
+        .player
+        .send(Cmd::PlayResolvedContext { ids, start_index })
+        .map_err(|message| ProjectionCommandError::Operation { message })
 }
 
 #[tauri::command]

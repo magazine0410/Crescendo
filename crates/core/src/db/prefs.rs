@@ -56,4 +56,30 @@ impl Db {
             Ok(())
         })
     }
+
+    pub fn prefs_delete(&self, key: &str) -> Result<()> {
+        self.with(|conn| {
+            conn.execute("DELETE FROM prefs WHERE key = ?1", [key])?;
+            Ok(())
+        })
+    }
+
+    pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| row.get(0))
+                .ok())
+        })
+    }
+
+    pub fn meta_set(&self, key: &str, value: &str) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO meta(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [key, value],
+            )?;
+            Ok(())
+        })
+    }
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugin-grouping-migration"
+description = "Enables the plugin_grouping_migration command without any pre-configured scope."
+commands.allow = ["plugin_grouping_migration"]
+
+[[permission]]
+identifier = "deny-plugin-grouping-migration"
+description = "Denies the plugin_grouping_migration command without any pre-configured scope."
+commands.deny = ["plugin_grouping_migration"]

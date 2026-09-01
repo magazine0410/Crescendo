@@ -67,6 +67,7 @@
     "allow-plugin-set-enabled",
     "allow-plugin-set-setting",
     "allow-plugin-uninstall",
+    "allow-plugin-grouping-migration",
     "allow-plugin-restart-app",
     "allow-prefs-get-all",
     "allow-prefs-set",

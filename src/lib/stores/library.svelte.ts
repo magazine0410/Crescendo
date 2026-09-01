@@ -3,6 +3,7 @@ import {
   type Album,
   type BrowseMode,
   type BrowseValue,
+  type BrowseValuesResult,
   type LibraryStats,
   type ScanProgress,
   type SortKey,
@@ -10,6 +11,7 @@ import {
   type TrackGroup,
   type TrackSort,
   type WireBrowseMode,
+  staleProjectionRevision,
 } from "../api";
 import {
   durationBucketLabel,
@@ -163,6 +165,13 @@ class LibraryStore {
   private valuesReqId = 0;
   private albumsReqId = 0;
   private albumTracksReqId = 0;
+  private staleRecovery: Promise<void> | null = null;
+  private projectionTransition: Promise<void> = Promise.resolve();
+
+  /** One revision backs every projection-dependent object currently rendered. */
+  projectionRevision = $state(0);
+  projectionChanging = $state(false);
+  projectionNotice = $state<string | null>(null);
 
   /** Track-list selection, by (flat) track index. `selectionAnchor` is the
       base row for Shift-range selects. Reset whenever the view reloads. */
@@ -198,12 +207,6 @@ class LibraryStore {
   /** Whether the active fixed/custom filter browses the grouping tag. */
   get isGroupingMode(): boolean {
     return this.mode === "custom" && this.customTagName === "grouping";
-  }
-
-  /** Whether the GROUPING custom view is collapsed to primary themes right now.
-      Other modes always match exactly. */
-  get groupingCollapse(): boolean {
-    return this.isGroupingMode && !prefs.values.grouping_split_multi;
   }
 
   /** Whether the custom filter browses per-minute duration buckets
@@ -430,34 +433,91 @@ class LibraryStore {
       return;
     }
     try {
-      const values = await call<BrowseValue[]>("browse_values", {
+      const result = await call<BrowseValuesResult>("browse_values", {
         mode: this.wireMode,
         query: this.query,
-        collapse: this.groupingCollapse,
       });
-      if (request === this.valuesReqId) this.values = values;
+      if (request === this.valuesReqId) {
+        this.projectionRevision = result.projection_revision;
+        this.values = result.values;
+      }
     } catch (e) {
       // invalid search query mid-typing — keep the previous list
       console.debug("browse_values failed:", e);
     }
   }
 
-  /** Reload after the romanized-display preference changes. Artist facet keys
-      can change from a merged sort name to several raw names (or vice versa),
-      so discard any selection that no longer identifies a visible row. */
-  async reloadRomanizedView() {
-    await this.loadValues();
-    const visible = new Set(this.values.map(({ value }) => value));
-    const still = this.selectedValues.filter((v) => visible.has(v));
-    if (still.length !== this.selectedValues.length) {
-      this.selectedValues = still;
-      this.valueAnchor = null;
-      this.selectedAlbum = null;
-      this.albumTracks = [];
+  /** Serialize a setting write with complete invalidation and reconstruction
+      of every object whose identity depends on the projection. */
+  changeProjection(write: () => Promise<number>): Promise<void> {
+    const transition = this.projectionTransition.then(() => this.runProjectionChange(write));
+    this.projectionTransition = transition.catch(() => {});
+    return transition;
+  }
+
+  private async runProjectionChange(write: () => Promise<number>): Promise<void> {
+    this.projectionChanging = true;
+    this.projectionNotice = null;
+    this.invalidateProjectionRequests();
+    try {
+      this.projectionRevision = await write();
+      this.clearProjectionState();
+      await this.loadValues();
+      await Promise.all([
+        this.loadAlbums(),
+        this.reloadTrackView(prefs.values.track_separators),
+      ]);
+    } finally {
+      this.projectionChanging = false;
     }
+  }
+
+  /** Refresh exactly once after a backend stale-revision rejection. */
+  async recoverStaleProjection(reason: unknown): Promise<boolean> {
+    const revision = staleProjectionRevision(reason);
+    if (revision == null) return false;
+    if (!this.staleRecovery) {
+      this.staleRecovery = (async () => {
+        this.projectionChanging = true;
+        this.invalidateProjectionRequests();
+        try {
+          this.projectionRevision = revision;
+          this.clearProjectionState();
+          await this.loadValues();
+          await Promise.all([
+            this.loadAlbums(),
+            this.reloadTrackView(prefs.values.track_separators),
+          ]);
+        } finally {
+          this.projectionChanging = false;
+          this.staleRecovery = null;
+        }
+      })();
+    }
+    await this.staleRecovery;
+    return true;
+  }
+
+  private invalidateProjectionRequests() {
+    this.valuesReqId++;
+    this.albumsReqId++;
+    this.albumTracksReqId++;
+    this.trackReqId++;
+    this.pagePromises.clear();
+  }
+
+  private clearProjectionState() {
+    this.values = [];
+    this.selectedValues = [];
+    this.valueAnchor = null;
+    this.albums = [];
+    this.selectedAlbum = null;
+    this.albumTracks = [];
+    this.trackModel = null;
+    this.trackCount = 0;
+    this.tracks = [];
+    this.clearSelection();
     this.resetScroll();
-    await this.loadAlbums();
-    await this.reloadTrackView(prefs.values.track_separators);
   }
 
   /** Plain click: select exactly this value (or "All" for null). */
@@ -505,10 +565,11 @@ class LibraryStore {
         mode: this.wireMode,
         values: this.selectedValues,
         query: this.query,
-        collapse: this.groupingCollapse,
+        projectionRevision: this.projectionRevision,
       });
       if (request === this.albumsReqId) this.albums = albums;
     } catch (e) {
+      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
       console.debug("browse_albums failed:", e);
     }
   }
@@ -574,11 +635,25 @@ class LibraryStore {
         query: this.query,
         mode: this.wireMode,
         values: this.selectedValues,
-        collapse: this.groupingCollapse,
+        projectionRevision: this.projectionRevision,
         sort: this.sort,
         trackId: id,
       });
     } catch (e) {
+      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) {
+        try {
+          return await call<number | null>("track_index", {
+            query: this.query,
+            mode: this.wireMode,
+            values: this.selectedValues,
+            projectionRevision: this.projectionRevision,
+            sort: this.sort,
+            trackId: id,
+          });
+        } catch {
+          return null;
+        }
+      }
       console.debug("track_index failed:", e);
       return null;
     }
@@ -618,9 +693,10 @@ class LibraryStore {
         query: this.query,
         mode: this.wireMode,
         values: this.selectedValues,
-        collapse: this.groupingCollapse,
+        projectionRevision: this.projectionRevision,
       });
     } catch (e) {
+      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
       console.debug("track_count failed:", e);
       return;
     }
@@ -633,12 +709,13 @@ class LibraryStore {
           query: this.query,
           mode: this.wireMode,
           values: this.selectedValues,
-          collapse: this.groupingCollapse,
+          projectionRevision: this.projectionRevision,
           sort: this.sort,
         });
         if (reqId !== this.trackReqId) return;
         model = buildRowModel(groups);
       } catch (e) {
+        if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
         console.debug("track_groups failed:", e);
         // fall back to a flat list rather than leaving the view empty
       }
@@ -744,13 +821,14 @@ class LibraryStore {
         query: this.query,
         mode: this.wireMode,
         values: this.selectedValues,
-        collapse: this.groupingCollapse,
+        projectionRevision: this.projectionRevision,
         sort: this.sort,
         offset,
         limit: TRACK_PAGE,
       });
     } catch (e) {
       this.pagePromises.delete(page); // let a later pass retry
+      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
       console.debug("tracks_range failed:", e);
       return;
     }

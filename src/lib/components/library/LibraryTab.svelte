@@ -15,6 +15,7 @@
 
   $effect(() => {
     const q = ui.searchQuery;
+    if (library.projectionChanging) return;
     const t = setTimeout(() => {
       // Clearing an active search while a track plays in the Track-list view:
       // scroll to the now-playing song's spot in the full library instead of
@@ -77,6 +78,17 @@
 
 <div class="tab">
   <ScanProgress />
+  {#if library.projectionChanging || library.projectionNotice}
+    <button
+      class="projection-status"
+      class:error={!!library.projectionNotice}
+      disabled={library.projectionChanging}
+      title={library.projectionNotice ? "Dismiss" : undefined}
+      onclick={() => (library.projectionNotice = null)}
+    >
+      {library.projectionNotice ?? "Updating library view…"}
+    </button>
+  {/if}
   <div class="cols">
     <CollapsiblePanel
       side="left"
@@ -135,6 +147,19 @@
     flex: 1;
     display: flex;
     min-height: 0;
+  }
+  .projection-status {
+    flex: none;
+    width: 100%;
+    min-height: 24px;
+    padding: 3px 12px;
+    text-align: left;
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg-panel));
+    color: var(--txt);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .projection-status.error {
+    color: var(--warning, #ffba66);
   }
   .left {
     width: 100%;

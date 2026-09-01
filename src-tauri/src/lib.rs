@@ -126,6 +126,7 @@ pub fn run() {
             commands::plugins::plugin_set_enabled,
             commands::plugins::plugin_set_setting,
             commands::plugins::plugin_uninstall,
+            commands::plugins::plugin_grouping_migration,
             commands::plugins::plugin_restart_app,
             commands::misc::prefs_get_all,
             commands::misc::prefs_set,

@@ -38,6 +38,75 @@ pub struct PluginManifest {
 #[serde(default, deny_unknown_fields)]
 pub struct PluginContributions {
     pub settings: Vec<PluginSettingDeclaration>,
+    pub facet_transforms: Vec<PluginFacetTransform>,
+    pub menu_controls: Vec<PluginMenuControl>,
+}
+
+/// A deliberately small vocabulary compiled by Crescendo into trusted query
+/// plans. Descriptors carry data only; they never contain SQL or code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PluginFacetTransform {
+    #[serde(rename = "text.first_segment")]
+    TextFirstSegment {
+        target_tag: String,
+        delimiter: String,
+        trim_whitespace: bool,
+        enabled_setting: String,
+    },
+}
+
+impl PluginFacetTransform {
+    pub fn target_tag(&self) -> &str {
+        match self {
+            Self::TextFirstSegment { target_tag, .. } => target_tag,
+        }
+    }
+
+    pub fn enabled_setting(&self) -> &str {
+        match self {
+            Self::TextFirstSegment {
+                enabled_setting, ..
+            } => enabled_setting,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PluginMenuSlot {
+    #[serde(rename = "library.filter")]
+    LibraryFilter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginMenuVisibility {
+    pub active_tag: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PluginMenuAction {
+    ToggleSetting { setting: String },
+}
+
+impl PluginMenuAction {
+    pub fn setting(&self) -> &str {
+        match self {
+            Self::ToggleSetting { setting } => setting,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginMenuControl {
+    pub id: String,
+    pub slot: PluginMenuSlot,
+    pub label: String,
+    pub visible_when: PluginMenuVisibility,
+    pub checked_setting: String,
+    pub action: PluginMenuAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,6 +165,7 @@ pub struct PluginSettingValue {
     #[serde(flatten)]
     pub declaration: PluginSettingDeclaration,
     pub value: Value,
+    pub affects_projection: bool,
 }
 
 impl PluginManifest {
@@ -146,11 +216,71 @@ impl PluginManifest {
         if self.contributes.settings.len() > 128 {
             bail!("plugins cannot declare more than 128 settings");
         }
+        if self.contributes.facet_transforms.len() > 32 {
+            bail!("plugins cannot declare more than 32 facet transforms");
+        }
+        if self.contributes.menu_controls.len() > 64 {
+            bail!("plugins cannot declare more than 64 menu controls");
+        }
         let mut settings = HashSet::new();
         for setting in &self.contributes.settings {
             setting.validate_declaration()?;
             if !settings.insert(setting.key()) {
                 bail!("duplicate setting key {:?}", setting.key());
+            }
+        }
+        let boolean_settings: HashSet<&str> = self
+            .contributes
+            .settings
+            .iter()
+            .filter_map(|setting| match setting {
+                PluginSettingDeclaration::Boolean { key, .. } => Some(key.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut transform_targets = HashSet::new();
+        for transform in &self.contributes.facet_transforms {
+            match transform {
+                PluginFacetTransform::TextFirstSegment {
+                    target_tag,
+                    delimiter,
+                    enabled_setting,
+                    ..
+                } => {
+                    validate_target_tag(target_tag)?;
+                    if delimiter.is_empty()
+                        || delimiter.len() > 32
+                        || delimiter.chars().any(char::is_control)
+                    {
+                        bail!("facet-transform delimiters must contain 1 to 32 printable bytes");
+                    }
+                    if !boolean_settings.contains(enabled_setting.as_str()) {
+                        bail!(
+                            "facet transform setting {enabled_setting:?} must name a declared boolean setting"
+                        );
+                    }
+                    if !transform_targets.insert(target_tag.as_str()) {
+                        bail!("a plugin cannot transform target tag {target_tag:?} more than once");
+                    }
+                }
+            }
+        }
+        let mut menu_ids = HashSet::new();
+        for control in &self.contributes.menu_controls {
+            validate_setting_key(&control.id)?;
+            validate_text("menu label", &control.label, false)?;
+            validate_target_tag(&control.visible_when.active_tag)?;
+            if !menu_ids.insert(control.id.as_str()) {
+                bail!("duplicate menu control id {:?}", control.id);
+            }
+            if !boolean_settings.contains(control.checked_setting.as_str()) {
+                bail!(
+                    "menu checked_setting {:?} must name a declared boolean setting",
+                    control.checked_setting
+                );
+            }
+            if control.action.setting() != control.checked_setting {
+                bail!("a toggle_setting menu action must toggle its checked_setting");
             }
         }
         Ok(())
@@ -340,6 +470,17 @@ fn validate_setting_key(key: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_target_tag(tag: &str) -> Result<()> {
+    if tag.is_empty()
+        || tag.len() > 64
+        || tag != tag.trim().to_ascii_lowercase()
+        || crate::search::browse_column(tag).is_none()
+    {
+        bail!("contribution target tags must be canonical browsable tag names");
+    }
+    Ok(())
+}
+
 fn validate_text(field: &str, value: &str, allow_empty: bool) -> Result<()> {
     if (!allow_empty && value.trim().is_empty()) || value.len() > MAX_TEXT_LEN {
         bail!("{field} is empty or too long");
@@ -438,6 +579,7 @@ mod tests {
                 default: false,
             },
             value: Value::Bool(true),
+            affects_projection: false,
         };
         assert_eq!(
             serde_json::to_value(value).unwrap(),
@@ -447,8 +589,55 @@ mod tests {
                 "label": "Enabled",
                 "description": "",
                 "default": false,
-                "value": true
+                "value": true,
+                "affects_projection": false
             })
         );
+    }
+
+    #[test]
+    fn facet_and_menu_contributions_are_bounded_and_reference_boolean_settings() {
+        let mut value = manifest();
+        value.contributes.settings.push(PluginSettingDeclaration::Boolean {
+            key: "collapse_titles".into(),
+            label: "Collapse titles".into(),
+            description: String::new(),
+            default: true,
+        });
+        value
+            .contributes
+            .facet_transforms
+            .push(PluginFacetTransform::TextFirstSegment {
+                target_tag: "grouping".into(),
+                delimiter: ";".into(),
+                trim_whitespace: true,
+                enabled_setting: "collapse_titles".into(),
+            });
+        value.contributes.menu_controls.push(PluginMenuControl {
+            id: "collapse_titles".into(),
+            slot: PluginMenuSlot::LibraryFilter,
+            label: "Collapse multi-tagged titles under their first grouping.".into(),
+            visible_when: PluginMenuVisibility {
+                active_tag: "grouping".into(),
+            },
+            checked_setting: "collapse_titles".into(),
+            action: PluginMenuAction::ToggleSetting {
+                setting: "collapse_titles".into(),
+            },
+        });
+        value.validate(false).unwrap();
+
+        let mut bad = value.clone();
+        bad.contributes.facet_transforms[0] = PluginFacetTransform::TextFirstSegment {
+            target_tag: "not_a_real_tag".into(),
+            delimiter: ";".into(),
+            trim_whitespace: true,
+            enabled_setting: "collapse_titles".into(),
+        };
+        assert!(bad.validate(false).is_err());
+
+        let mut bad = value;
+        bad.contributes.menu_controls[0].checked_setting = "missing".into();
+        assert!(bad.validate(false).is_err());
     }
 }

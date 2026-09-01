@@ -22,9 +22,15 @@
     placeholder="Filter {noun}…"
     spellcheck="false"
     autocomplete="off"
+    disabled={library.projectionChanging}
   />
   {#if library.valueFilter}
-    <button class="clear" onclick={() => (library.valueFilter = "")} title="Clear filter">✕</button>
+    <button
+      class="clear"
+      disabled={library.projectionChanging}
+      onclick={() => (library.valueFilter = "")}
+      title="Clear filter"
+    >✕</button>
   {/if}
 </div>
 

@@ -6,6 +6,7 @@
 import type {
   Album,
   BrowseValue,
+  BrowseValuesResult,
   CollectionInfo,
   PlaylistInfo,
   PluginInfo,
@@ -86,6 +87,7 @@ const mockPluginPackage: PluginInfo = {
       description: "Example live boolean setting.",
       default: true,
       value: true,
+      affects_projection: false,
     },
     {
       type: "select",
@@ -98,11 +100,54 @@ const mockPluginPackage: PluginInfo = {
         { value: "compact", label: "Compact" },
         { value: "comfortable", label: "Comfortable" },
       ],
+      affects_projection: false,
     },
   ],
 };
 
-let mockPlugins: PluginInfo[] = [structuredClone(mockPluginPackage)];
+const mockGroupingPlugin: PluginInfo = {
+  id: "dev.crescendo.primary-grouping",
+  name: "Primary Grouping",
+  version: "1.0.0",
+  description: "Collapses multi-tagged grouping titles in the browser preview.",
+  authors: ["Crescendo"],
+  license: "MIT",
+  homepage: "https://github.com/magazine0410/Crescendo",
+  kind: "declarative",
+  api_version: "1.0.0",
+  min_crescendo_version: "0.8.0",
+  package_hash: "bf986e4f9d78e60e6d22db26b58a4fa25dd4606905603ba0b6cb1e66e9fe655f",
+  desired_enabled: true,
+  loaded: true,
+  compatible: true,
+  compatibility_error: null,
+  error: null,
+  pending: null,
+  settings: [
+    {
+      type: "boolean",
+      key: "collapse_multi_tagged_titles",
+      label: "Collapse multi-tagged titles under their first grouping",
+      description: "Browser mock of the text.first_segment contribution.",
+      default: true,
+      value: true,
+      affects_projection: true,
+    },
+  ],
+};
+
+let projectionRevision = 0;
+let mockPlugins: PluginInfo[] = [
+  structuredClone(mockGroupingPlugin),
+  structuredClone(mockPluginPackage),
+];
+
+function groupingCollapseEnabled(): boolean {
+  const plugin = mockPlugins.find(
+    (candidate) => candidate.id === "dev.crescendo.primary-grouping" && candidate.loaded,
+  );
+  return Boolean(plugin?.settings[0]?.value);
+}
 
 function pluginSnapshot(): PluginSnapshot {
   return {
@@ -114,6 +159,35 @@ function pluginSnapshot(): PluginSnapshot {
     restart_required: mockPlugins.some(
       (plugin) => plugin.pending !== null || plugin.desired_enabled !== plugin.loaded,
     ),
+    projection_revision: projectionRevision,
+    menu_controls: groupingCollapseEnabled()
+      ? [
+          {
+            plugin_id: "dev.crescendo.primary-grouping",
+            id: "collapse_multi_tagged_titles",
+            slot: "library.filter",
+            label: "Collapse multi-tagged titles under their first grouping",
+            target_tag: "grouping",
+            setting_key: "collapse_multi_tagged_titles",
+            checked: true,
+          },
+        ]
+      : mockPlugins.some(
+            (candidate) => candidate.id === "dev.crescendo.primary-grouping" && candidate.loaded,
+          )
+        ? [
+            {
+              plugin_id: "dev.crescendo.primary-grouping",
+              id: "collapse_multi_tagged_titles",
+              slot: "library.filter",
+              label: "Collapse multi-tagged titles under their first grouping",
+              target_tag: "grouping",
+              setting_key: "collapse_multi_tagged_titles",
+              checked: false,
+            },
+          ]
+        : [],
+    grouping_migration_pending: false,
   };
 }
 
@@ -272,14 +346,16 @@ function artistBrowseKey(t: Track, mode: string, raw: string): string {
   return sort || raw;
 }
 
-/** The value a track buckets under. Collapses grouping to its primary theme when
-    `collapse` is set (mirrors GROUPING_FIRST_SEG); routes custom modes through
-    the resolved tag (unbrowsable tag → "", never selected in practice). */
-function browseKey(t: Track, mode: WireMode, collapse: boolean): string {
+/** The value a track buckets under. The loaded grouping contribution can
+    collapse it to its primary theme; custom modes still route through the
+    resolved tag (unbrowsable tag → "", never selected in practice). */
+function browseKey(t: Track, mode: WireMode): string {
   if (typeof mode === "object") {
     const f = customField(mode.custom);
     const v = f ? f(t) : "";
-    return mode.custom.trim().toLowerCase() === "grouping" && collapse ? firstSeg(v) : v;
+    return mode.custom.trim().toLowerCase() === "grouping" && groupingCollapseEnabled()
+      ? firstSeg(v)
+      : v;
   }
   const v = browseCol(t, mode);
   if (mode === "artist" || mode === "albumartist") return artistBrowseKey(t, mode, v);
@@ -294,8 +370,14 @@ function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
   return (
     values == null ||
     values.length === 0 ||
-    values.includes(browseKey(t, args.mode as WireMode, args.collapse as boolean))
+    values.includes(browseKey(t, args.mode as WireMode))
   );
+}
+
+function requireProjection(args: Record<string, unknown>) {
+  if (args.projectionRevision !== projectionRevision) {
+    throw { kind: "stale_projection", current_revision: projectionRevision };
+  }
 }
 
 /** Mirror the backend LIBRARY_SORT so the dev track list groups by album. */
@@ -379,13 +461,17 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       } as T;
     case "browse_values": {
       const mode = args.mode as WireMode;
-      const collapse = args.collapse as boolean;
       // Unresolvable custom tag → empty list (mirrors the backend).
-      if (typeof mode === "object" && customField(mode.custom) === null) return [] as T;
+      if (typeof mode === "object" && customField(mode.custom) === null) {
+        return {
+          projection_revision: projectionRevision,
+          values: [],
+        } as BrowseValuesResult as T;
+      }
       const counts = new Map<string, number>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
-        const v = browseKey(t, mode, collapse);
+        const v = browseKey(t, mode);
         counts.set(v, (counts.get(v) ?? 0) + 1);
       }
       // Duration buckets order numerically ("10" after "3") and play counts do
@@ -394,7 +480,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         typeof mode === "object" ? mode.custom.trim().toLowerCase() : "";
       const numeric = ["duration", "length"].includes(tag);
       const descending = ["playcount", "play_count", "plays"].includes(tag);
-      return [...counts.entries()]
+      const values = [...counts.entries()]
         .map(([value, count]): BrowseValue => ({ value, count, sort_value: null }))
         .sort((a, b) =>
           numeric
@@ -402,16 +488,17 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
             : descending
               ? Number(b.value) - Number(a.value)
               : a.value.localeCompare(b.value),
-        ) as T;
+        );
+      return { projection_revision: projectionRevision, values } as BrowseValuesResult as T;
     }
     case "browse_albums": {
+      requireProjection(args);
       const mode = args.mode as WireMode;
       const values = (args.values as string[] | null) ?? [];
-      const collapse = args.collapse as boolean;
       const ids = new Set<number>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
-        if (values.length > 0 && !values.includes(browseKey(t, mode, collapse))) continue;
+        if (values.length > 0 && !values.includes(browseKey(t, mode))) continue;
         if (t.album_id != null) ids.add(t.album_id);
       }
       return albums.filter((a) => ids.has(a.id)) as T;
@@ -419,8 +506,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "album_tracks":
       return tracks.filter((t) => t.album_id === (args.albumId as number)) as T;
     case "track_count":
+      requireProjection(args);
       return tracks.filter((t) => trackListMatch(t, args)).length as T;
     case "tracks_range": {
+      requireProjection(args);
       const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(viewSort(args));
       const offset = args.offset as number;
       const limit = args.limit as number;
@@ -429,6 +518,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "album_by_id":
       return (albums.find((a) => a.id === (args.albumId as number)) ?? null) as T;
     case "track_groups": {
+      requireProjection(args);
       const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(viewSort(args));
       const groups: {
         album_id: number | null;
@@ -456,6 +546,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return groups as T;
     }
     case "track_index": {
+      requireProjection(args);
       const filtered = tracks.filter((t) => trackListMatch(t, args)).sort(viewSort(args));
       const idx = filtered.findIndex((t) => t.id === (args.trackId as number));
       return (idx < 0 ? null : idx) as T;
@@ -635,6 +726,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       if (!plugin || !setting) throw new Error("Plugin setting is not declared");
       const changed = setting.value !== args.value;
       setting.value = args.value as never;
+      if (changed && plugin.loaded && setting.affects_projection) projectionRevision++;
       return pluginMutation(changed, null) as T;
     }
     case "plugin_uninstall": {
@@ -658,12 +750,21 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           loaded: plugin.desired_enabled,
         }));
       return undefined as T;
+    case "plugin_grouping_migration":
+      return pluginMutation(false, null) as T;
     case "prefs_get_all":
       return {} as T;
     case "prefs_set":
-      if (args.key === "prefer_romanized") preferRomanized = args.value !== "false";
+      if (args.key === "prefer_romanized") {
+        const next = args.value !== "false";
+        if (preferRomanized !== next) projectionRevision++;
+        preferRomanized = next;
+      }
       if (args.key === "lyrics_online") lyricsOnline = args.value !== "false";
-      return undefined as T;
+      return {
+        projection_revision: projectionRevision,
+        projection_changed: args.key === "prefer_romanized",
+      } as T;
     case "about_info":
       return {
         version: packageInfo.version,
@@ -752,7 +853,17 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return undefined as T;
     case "scan_start":
     case "scan_cancel":
-    case "player_play_context":
+      return undefined as T;
+    case "player_play_context": {
+      const ctx = args.ctx as { type?: string; projection_revision?: number };
+      if (
+        (ctx.type === "library_view" || ctx.type === "value_tracks") &&
+        ctx.projection_revision !== projectionRevision
+      ) {
+        throw { kind: "stale_projection", current_revision: projectionRevision };
+      }
+      return undefined as T;
+    }
     case "player_jump_to":
       return undefined as T;
     default:

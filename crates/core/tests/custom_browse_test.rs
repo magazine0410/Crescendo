@@ -54,7 +54,7 @@ fn custom(tag: &str) -> BrowseMode {
 fn fixed_albumartist_uses_romanized_sort_values() {
     let (_d, db) = make_db();
 
-    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
     assert_eq!(
         vals,
         vec![
@@ -87,13 +87,13 @@ fn fixed_albumartist_merges_raw_names_that_render_as_the_same_name() {
     })
     .unwrap();
 
-    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
     assert_eq!(
         vals.iter().find(|v| v.value == "Shanghai Alice"),
         Some(&browse_value("Shanghai Alice", 4)),
     );
     assert_eq!(
-        db.track_count(None, BrowseMode::Albumartist, &["Shanghai Alice".into()], false)
+        db.track_count_exact(None, BrowseMode::Albumartist, &["Shanghai Alice".into()])
             .unwrap(),
         4,
         "selecting the merged row must include every raw albumartist"
@@ -103,10 +103,10 @@ fn fixed_albumartist_merges_raw_names_that_render_as_the_same_name() {
         mode: BrowseMode::Albumartist,
         values: vec!["Shanghai Alice".into()],
         query: None,
-        collapse: false,
+        projection_revision: 0,
         sort: None,
     };
-    assert_eq!(db.resolve_context(&ctx).unwrap().len(), 4);
+    assert_eq!(db.resolve_context_exact(&ctx).unwrap().len(), 4);
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn prefer_romanized_off_orders_album_artists_by_the_shown_name() {
     db.prefs_set("prefer_romanized", "false").unwrap();
 
     // Rows use and order by the untouched name: 上海… falls after the Latin ones.
-    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
     assert_eq!(
         vals,
         vec![
@@ -141,7 +141,7 @@ fn latin_albumartist_is_ordered_by_its_visible_name_not_its_sort_tag() {
     })
     .unwrap();
 
-    let vals = db.browse_values(BrowseMode::Albumartist, None, false).unwrap();
+    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
     let ara = vals.iter().position(|v| v.value == "ARA").unwrap();
     let shanghai = vals.iter().position(|v| v.value == "Shanghai Alice").unwrap();
     assert!(ara < shanghai, "ARA is displayed and therefore sorted under A, not C");
@@ -152,7 +152,7 @@ fn custom_year_browses_integer_column_as_text() {
     let (_d, db) = make_db();
 
     // INTEGER `year` values come back as strings, NULL folds to the "" bucket.
-    let vals = db.browse_values(custom("year"), None, false).unwrap();
+    let vals = db.browse_values_exact(custom("year"), None).unwrap();
     let c = counts(&vals);
     assert_eq!(vals.len(), 3);
     assert_eq!(c.get("1999"), Some(&2));
@@ -165,8 +165,8 @@ fn custom_tag_is_normalized_and_date_aliases_year() {
     let (_d, db) = make_db();
 
     // Leading/trailing space + case are normalized, and `date` aliases `year`.
-    let year = counts(&db.browse_values(custom("  YeAr "), None, false).unwrap());
-    let date = counts(&db.browse_values(custom("date"), None, false).unwrap());
+    let year = counts(&db.browse_values_exact(custom("  YeAr "), None).unwrap());
+    let date = counts(&db.browse_values_exact(custom("date"), None).unwrap());
     assert_eq!(year.get("1999"), Some(&2));
     assert_eq!(date, year);
 }
@@ -177,21 +177,21 @@ fn selecting_custom_integer_value_matches_via_text_compare() {
 
     // The selected value is a string ("1999") compared against an INTEGER column
     // — the CAST-to-TEXT is what makes this equal.
-    assert_eq!(db.track_count(None, custom("year"), &["1999".into()], false).unwrap(), 2);
-    assert_eq!(db.track_count(None, custom("year"), &["2000".into()], false).unwrap(), 1);
-    assert_eq!(db.track_count(None, custom("year"), &["".into()], false).unwrap(), 1);
+    assert_eq!(db.track_count_exact(None, custom("year"), &["1999".into()]).unwrap(), 2);
+    assert_eq!(db.track_count_exact(None, custom("year"), &["2000".into()]).unwrap(), 1);
+    assert_eq!(db.track_count_exact(None, custom("year"), &["".into()]).unwrap(), 1);
 }
 
 #[test]
 fn custom_genre_handles_non_ascii_values() {
     let (_d, db) = make_db();
 
-    let vals = db.browse_values(custom("genre"), None, false).unwrap();
+    let vals = db.browse_values_exact(custom("genre"), None).unwrap();
     let c = counts(&vals);
     assert_eq!(c.get("ジャズ"), Some(&2));
     assert_eq!(c.get("Rock"), Some(&1));
     // Selecting a CJK value round-trips.
-    assert_eq!(db.track_count(None, custom("genre"), &["ジャズ".into()], false).unwrap(), 2);
+    assert_eq!(db.track_count_exact(None, custom("genre"), &["ジャズ".into()]).unwrap(), 2);
 }
 
 #[test]
@@ -199,9 +199,9 @@ fn unresolvable_custom_tag_yields_nothing() {
     let (_d, db) = make_db();
 
     // Unknown tag → empty value list …
-    assert!(db.browse_values(custom("mood"), None, false).unwrap().is_empty());
+    assert!(db.browse_values_exact(custom("mood"), None).unwrap().is_empty());
     // … and selecting against it matches no tracks (the `AND 0` guard).
-    assert_eq!(db.track_count(None, custom("nope"), &["x".into()], false).unwrap(), 0);
+    assert_eq!(db.track_count_exact(None, custom("nope"), &["x".into()]).unwrap(), 0);
 }
 
 #[test]
@@ -212,10 +212,10 @@ fn resolve_context_plays_custom_value() {
         mode: custom("year"),
         values: vec!["1999".into()],
         query: None,
-        collapse: false,
+        projection_revision: 0,
         sort: None,
     };
-    let ids = db.resolve_context(&ctx).unwrap();
+    let ids = db.resolve_context_exact(&ctx).unwrap();
     assert_eq!(ids.len(), 2, "both 1999 tracks resolve for playback");
 
     // An unresolvable custom tag resolves to an empty queue rather than erroring.
@@ -223,10 +223,10 @@ fn resolve_context_plays_custom_value() {
         mode: custom("composer"),
         values: vec!["whoever".into()],
         query: None,
-        collapse: false,
+        projection_revision: 0,
         sort: None,
     };
-    assert!(db.resolve_context(&empty).unwrap().is_empty());
+    assert!(db.resolve_context_exact(&empty).unwrap().is_empty());
 }
 
 #[test]

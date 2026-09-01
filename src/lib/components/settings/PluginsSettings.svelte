@@ -5,10 +5,11 @@
     type PluginInfo,
     type PluginMutationResult,
     type PluginSetting,
-    type PluginSnapshot,
   } from "$lib/api";
+  import { library } from "$lib/stores/library.svelte";
+  import { plugins } from "$lib/stores/plugins.svelte";
 
-  let snapshot = $state<PluginSnapshot | null>(null);
+  const snapshot = $derived(plugins.snapshot);
   let selectedId = $state<string | null>(null);
   let busy = $state(false);
   let error = $state<string | null>(null);
@@ -26,7 +27,7 @@
 
   async function refresh() {
     try {
-      snapshot = await call<PluginSnapshot>("plugin_list");
+      const snapshot = await plugins.refresh();
       if (!snapshot.plugins.some((plugin) => plugin.id === selectedId)) {
         selectedId = snapshot.plugins[0]?.id ?? null;
       }
@@ -41,10 +42,9 @@
     notice = null;
     try {
       const result = await action();
-      snapshot = result.snapshot;
       notice = result.message;
-      if (!snapshot.plugins.some((plugin) => plugin.id === selectedId)) {
-        selectedId = snapshot.plugins[0]?.id ?? null;
+      if (!result.snapshot.plugins.some((plugin) => plugin.id === selectedId)) {
+        selectedId = result.snapshot.plugins[0]?.id ?? null;
       }
     } catch (reason) {
       error = String(reason);
@@ -54,35 +54,29 @@
   }
 
   async function install() {
-    await run(() => call<PluginMutationResult>("plugin_choose_install"));
+    await run(() => plugins.install());
   }
 
   async function setEnabled(plugin: PluginInfo, enabled: boolean) {
-    await run(() =>
-      call<PluginMutationResult>("plugin_set_enabled", {
-        pluginId: plugin.id,
-        enabled,
-      }),
-    );
+    await run(() => plugins.setEnabled(plugin, enabled));
   }
 
   async function setSetting(plugin: PluginInfo, setting: PluginSetting, value: unknown) {
-    await run(() =>
-      call<PluginMutationResult>("plugin_set_setting", {
-        pluginId: plugin.id,
-        key: setting.key,
-        value,
-      }),
-    );
+    await run(async () => {
+      if (!setting.affects_projection || !plugin.loaded) {
+        return plugins.setSetting(plugin.id, setting.key, value);
+      }
+      let mutation: PluginMutationResult | null = null;
+      await library.changeProjection(async () => {
+        mutation = await plugins.setSetting(plugin.id, setting.key, value);
+        return mutation.snapshot.projection_revision;
+      });
+      return mutation!;
+    });
   }
 
   async function uninstall(plugin: PluginInfo) {
-    await run(() =>
-      call<PluginMutationResult>("plugin_uninstall", {
-        pluginId: plugin.id,
-        removeData,
-      }),
-    );
+    await run(() => plugins.uninstall(plugin, removeData));
     confirmingUninstall = false;
     removeData = false;
   }

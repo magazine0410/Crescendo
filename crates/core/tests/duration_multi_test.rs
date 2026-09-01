@@ -54,7 +54,7 @@ fn test_db() -> (tempfile::TempDir, Db) {
 #[test]
 fn duration_browse_buckets_per_minute() {
     let (_d, db) = test_db();
-    let values = db.browse_values(custom("duration"), None, false).unwrap();
+    let values = db.browse_values_exact(custom("duration"), None).unwrap();
     // One row per whole minute, numerically ordered ("10" after "3", not "1x").
     assert_eq!(
         values,
@@ -66,15 +66,15 @@ fn duration_browse_buckets_per_minute() {
         ]
     );
     // The %length% alias buckets identically.
-    assert_eq!(db.browse_values(custom("length"), None, false).unwrap(), values);
+    assert_eq!(db.browse_values_exact(custom("length"), None).unwrap(), values);
 }
 
 #[test]
 fn duration_value_selects_bucket_tracks() {
     let (_d, db) = test_db();
-    assert_eq!(db.track_count(None, custom("duration"), &["2".into()], false).unwrap(), 2);
+    assert_eq!(db.track_count_exact(None, custom("duration"), &["2".into()]).unwrap(), 2);
     let rows = db
-        .tracks_range(None, custom("duration"), &["2".into()], false, None, 0, 100)
+        .tracks_range_exact(None, custom("duration"), &["2".into()], None, 0, 100)
         .unwrap();
     let titles: Vec<_> = rows.into_iter().map(|t| t.title.unwrap()).collect();
     assert_eq!(titles, ["TwoA", "TwoB"]);
@@ -85,23 +85,23 @@ fn multi_select_unions_values() {
     let (_d, db) = test_db();
     // Two duration buckets at once (Ctrl-multi-select).
     let both = &["2".to_string(), "3".to_string()];
-    assert_eq!(db.track_count(None, custom("duration"), both, false).unwrap(), 3);
+    assert_eq!(db.track_count_exact(None, custom("duration"), both).unwrap(), 3);
     let rows = db
-        .tracks_range(None, custom("duration"), both, false, None, 0, 100)
+        .tracks_range_exact(None, custom("duration"), both, None, 0, 100)
         .unwrap();
     let titles: Vec<_> = rows.into_iter().map(|t| t.title.unwrap()).collect();
     assert_eq!(titles, ["TwoA", "TwoB", "Three"]);
 
     // Same for a plain text mode: two album artists at once.
     let artists = &["Artist A".to_string(), "Artist B".to_string()];
-    assert_eq!(db.track_count(None, BrowseMode::Albumartist, artists, false).unwrap(), 5);
+    assert_eq!(db.track_count_exact(None, BrowseMode::Albumartist, artists).unwrap(), 5);
     assert_eq!(
-        db.track_count(None, BrowseMode::Albumartist, &["Artist A".into()], false).unwrap(),
+        db.track_count_exact(None, BrowseMode::Albumartist, &["Artist A".into()]).unwrap(),
         2
     );
 
     // Empty selection = "All": no narrowing.
-    assert_eq!(db.track_count(None, BrowseMode::Albumartist, &[], false).unwrap(), 5);
+    assert_eq!(db.track_count_exact(None, BrowseMode::Albumartist, &[]).unwrap(), 5);
 }
 
 #[test]
@@ -111,13 +111,13 @@ fn multi_select_playback_context_resolves_union() {
         mode: custom("duration"),
         values: vec!["2".into(), "3".into()],
         query: None,
-        collapse: false,
+        projection_revision: 0,
         sort: None,
     };
-    let ids = db.resolve_context(&ctx).unwrap();
+    let ids = db.resolve_context_exact(&ctx).unwrap();
     assert_eq!(ids.len(), 3);
     let view = db
-        .tracks_range(None, custom("duration"), &["2".into(), "3".into()], false, None, 0, 100)
+        .tracks_range_exact(None, custom("duration"), &["2".into(), "3".into()], None, 0, 100)
         .unwrap();
     assert_eq!(ids, view.iter().map(|t| t.id).collect::<Vec<_>>());
 }
@@ -127,8 +127,8 @@ fn multi_select_albums_union() {
     let (_d, db) = test_db();
     // browse_albums honors multiple values too (all tracks share one album here,
     // so any matching bucket lists it once).
-    let albums = db.browse_albums(custom("duration"), &["0".into(), "10".into()], None, false);
+    let albums = db.browse_albums_exact(custom("duration"), &["0".into(), "10".into()], None);
     assert_eq!(albums.unwrap().len(), 1);
-    let none = db.browse_albums(custom("duration"), &["7".into()], None, false);
+    let none = db.browse_albums_exact(custom("duration"), &["7".into()], None);
     assert_eq!(none.unwrap().len(), 0);
 }

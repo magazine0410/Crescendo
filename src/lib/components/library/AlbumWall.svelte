@@ -14,10 +14,12 @@
   const CELL_H = 196; // 150 art + text
 
   async function playAlbum(a: Album) {
+    if (library.projectionChanging) return;
     await player.playContext({ type: "album", id: a.id }, 0);
   }
 
   function showAlbum(a: Album) {
+    if (library.projectionChanging) return;
     // A direct Library drill-in starts a fresh navigation path; do not retain
     // an origin tab from an earlier cross-tab album visit.
     ui.albumReturnTab = null;
@@ -25,6 +27,7 @@
   }
 
   async function albumMenu(e: MouseEvent, a: Album) {
+    if (library.projectionChanging) return;
     const items: MenuItem[] = [
       { label: "Play", action: () => playAlbum(a) },
       { label: "Show tracks", action: () => showAlbum(a) },
@@ -73,6 +76,7 @@
   {@const a = library.albums[i]}
   <button
     class="cell"
+    disabled={library.projectionChanging}
     onclick={() => showAlbum(a)}
     ondblclick={() => playAlbum(a)}
     oncontextmenu={(e) => albumMenu(e, a)}

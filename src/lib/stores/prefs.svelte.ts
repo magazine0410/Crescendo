@@ -1,4 +1,4 @@
-import { isTauri, call } from "../api";
+import { isTauri, call, type PreferenceMutationResult } from "../api";
 
 /** Sidebar order of the playlist list. "manual" = the stored order. */
 export type PlaylistSort = "manual" | "name" | "count";
@@ -35,9 +35,6 @@ export interface Prefs {
   /** Which tab opens on launch. */
   default_tab: "library" | "playlists";
   track_separators: boolean;
-  /** Custom GROUPING filter: show each full (semicolon-joined) tag as its own row
-      instead of collapsing multi-theme tags under their primary theme. */
-  grouping_split_multi: boolean;
   /** Raw text of the user-defined "custom" left-panel filter, e.g. `%year%`.
       Parsed to a single tag in LibraryStore; blank = unset (tab reads "CUSTOM"). */
   custom_browse_tag: string;
@@ -77,7 +74,6 @@ const DEFAULTS: Prefs = {
   library_view: "album_wall",
   default_tab: "playlists",
   track_separators: false,
-  grouping_split_multi: false,
   custom_browse_tag: "",
   visualizer_color: "#ffaf32", // == --accent (theme orange)
   visualizer_mode: "bars",
@@ -129,8 +125,6 @@ class PrefsStore {
     if (raw.default_tab === "library" || raw.default_tab === "playlists")
       v.default_tab = raw.default_tab;
     if (raw.track_separators) v.track_separators = raw.track_separators === "true";
-    if (raw.grouping_split_multi)
-      v.grouping_split_multi = raw.grouping_split_multi === "true";
     if (raw.custom_browse_tag) {
       // ALBUM ARTIST became a fixed tab; migrate that former custom choice to
       // GROUPING so existing five-tab layouts become the intended direct swap.
@@ -167,11 +161,11 @@ class PrefsStore {
     this.loaded = true;
   }
 
-  async set<K extends keyof Prefs>(key: K, value: Prefs[K]) {
+  async set<K extends keyof Prefs>(key: K, value: Prefs[K]): Promise<PreferenceMutationResult> {
     this.values[key] = value;
     // Also in the browser: mock.ts mirrors the prefs the dev backend needs
     // (prefer_romanized decides its ordering), and ignores the rest.
-    await call("prefs_set", { key, value: String(value) });
+    return call<PreferenceMutationResult>("prefs_set", { key, value: String(value) });
   }
 
   /** UI layout numbers, persisted with a shared prefix. */

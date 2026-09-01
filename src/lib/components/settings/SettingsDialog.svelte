@@ -40,8 +40,10 @@
       effect on prefs.values, which would fire while the old value is still
       stored. */
   async function setPreferRomanized(on: boolean) {
-    await prefs.set("prefer_romanized", on);
-    await library.reloadRomanizedView();
+    await library.changeProjection(async () => {
+      const result = await prefs.set("prefer_romanized", on);
+      return result.projection_revision;
+    });
   }
 
   /** Same shape as setPreferRomanized: lyrics_for_track reads the pref from

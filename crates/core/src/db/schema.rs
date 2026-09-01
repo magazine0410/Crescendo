@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -256,6 +256,37 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
              ) WITHOUT ROWID;",
         )?;
     }
+    if version < 9 && version >= 1 {
+        // v9: the former built-in grouping projection moves to the optional
+        // official plugin. Existing databases that used exact values need no
+        // notice; every other existing install gets the one-time offer. Fresh
+        // databases skip migration blocks and therefore get no marker.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS prefs (
+               key TEXT PRIMARY KEY,
+               value TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS meta (
+               key TEXT PRIMARY KEY,
+               value TEXT
+             );
+             INSERT INTO meta(key, value)
+             SELECT 'grouping_plugin_migration',
+                    CASE WHEN EXISTS(
+                      SELECT 1 FROM prefs
+                      WHERE key = 'grouping_split_multi' AND value = 'true'
+                    ) THEN 'completed' ELSE 'pending' END
+             WHERE NOT EXISTS(
+               SELECT 1 FROM meta WHERE key = 'grouping_plugin_migration'
+             );
+             DELETE FROM prefs
+             WHERE key = 'grouping_split_multi'
+               AND EXISTS(
+                 SELECT 1 FROM meta
+                 WHERE key = 'grouping_plugin_migration' AND value = 'completed'
+               );",
+        )?;
+    }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;
     Ok(())
@@ -269,7 +300,12 @@ mod tests {
     #[test]
     fn version_seven_database_gains_plugin_tables() {
         let mut conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE prefs(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+             PRAGMA user_version = 7;",
+        )
+        .unwrap();
 
         migrate(&mut conn).unwrap();
 
@@ -287,6 +323,40 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn existing_collapse_users_get_one_time_grouping_migration_but_fresh_databases_do_not() {
+        let mut old = Connection::open_in_memory().unwrap();
+        old.execute_batch(
+            "CREATE TABLE prefs(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE plugin_state(plugin_id TEXT PRIMARY KEY, desired_enabled INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0, last_error TEXT);
+             CREATE TABLE plugin_pending(plugin_id TEXT PRIMARY KEY, operation TEXT NOT NULL, staged_path TEXT NOT NULL, target_version TEXT, package_hash TEXT, remove_data INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE plugin_settings(plugin_id TEXT NOT NULL, setting_key TEXT NOT NULL, value_json TEXT NOT NULL, PRIMARY KEY(plugin_id, setting_key)) WITHOUT ROWID;
+             PRAGMA user_version = 8;",
+        )
+        .unwrap();
+        migrate(&mut old).unwrap();
+        let state: String = old
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'grouping_plugin_migration'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "pending");
+
+        let mut fresh = Connection::open_in_memory().unwrap();
+        migrate(&mut fresh).unwrap();
+        let count: i64 = fresh
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE key = 'grouping_plugin_migration'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

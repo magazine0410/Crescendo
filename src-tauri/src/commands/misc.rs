@@ -18,6 +18,12 @@ pub struct AboutInfo {
     dependencies: Vec<AboutDependency>,
 }
 
+#[derive(serde::Serialize)]
+pub struct PreferenceMutationResult {
+    projection_revision: u64,
+    projection_changed: bool,
+}
+
 /// Bound concurrent waveform decodes (each fully decodes a track). Skipping
 /// tracks quickly could otherwise stack several CPU-heavy decodes at once.
 static WAVEFORM_PERMITS: Semaphore = Semaphore::const_new(2);
@@ -41,11 +47,35 @@ pub async fn prefs_set(
     state: State<'_, AppState>,
     key: String,
     value: String,
-) -> Result<(), String> {
+) -> Result<PreferenceMutationResult, String> {
     if key == "visualizer_import_path" {
         return Err("that preference is managed by the projectM folder chooser".into());
     }
-    state.db.prefs_set(&key, &value).map_err(|e| e.to_string())
+    if key == "prefer_romanized" {
+        let before = state
+            .plugins
+            .projection(None)
+            .map_err(|error| error.to_string())?
+            .revision();
+        let revision = state
+            .plugins
+            .set_prefer_romanized(value != "false")
+            .map_err(|error| error.to_string())?;
+        return Ok(PreferenceMutationResult {
+            projection_revision: revision,
+            projection_changed: revision != before,
+        });
+    }
+    state.db.prefs_set(&key, &value).map_err(|e| e.to_string())?;
+    let revision = state
+        .plugins
+        .projection(None)
+        .map_err(|error| error.to_string())?
+        .revision();
+    Ok(PreferenceMutationResult {
+        projection_revision: revision,
+        projection_changed: false,
+    })
 }
 
 #[tauri::command]

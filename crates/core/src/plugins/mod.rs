@@ -2,10 +2,14 @@ mod manager;
 mod manifest;
 mod package;
 
-pub use manager::{PluginManager, PluginMutationResult, PluginSnapshot};
+pub use manager::{
+    PluginManager, PluginMenuControlInfo, PluginMutationResult, PluginSnapshot, StaleProjection,
+    GROUPING_PLUGIN_ID, GROUPING_PLUGIN_SETTING,
+};
 pub use manifest::{
-    PluginContributions, PluginKind, PluginManifest, PluginSelectOption, PluginSettingDeclaration,
-    PluginSettingValue,
+    PluginContributions, PluginFacetTransform, PluginKind, PluginManifest, PluginMenuAction,
+    PluginMenuControl, PluginMenuSlot, PluginMenuVisibility, PluginSelectOption,
+    PluginSettingDeclaration, PluginSettingValue,
 };
 
 /// Declarative plugin API understood by this build. A manifest may target an

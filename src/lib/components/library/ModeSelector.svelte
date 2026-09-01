@@ -1,6 +1,6 @@
 <script lang="ts">
   import { customTagLabel, library } from "$lib/stores/library.svelte";
-  import { prefs } from "$lib/stores/prefs.svelte";
+  import { plugins } from "$lib/stores/plugins.svelte";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { openSetFilter } from "./SetFilterDialog.svelte";
   import type { BrowseMode } from "$lib/api";
@@ -69,24 +69,32 @@
   const hiddenModes = $derived(modes.slice(visibleCount));
   const hiddenActive = $derived(hiddenModes.some((m) => m.id === library.mode));
 
-  /** Right-click menus: a CUSTOM tab set to GROUPING keeps its multi-theme
-      collapse toggle alongside the normal custom-filter actions. */
+  /** Right-click menus include only host-rendered controls contributed for the
+      active tag by the immutable loaded registry. */
   function tabMenu(e: MouseEvent, id: BrowseMode) {
+    if (library.projectionChanging) return;
     if (id === "custom") {
-      const items: MenuItem[] = [];
-      if (library.isGroupingMode) {
-        items.push({
-          label: "Show multi-tagged titles separately",
-          checked: prefs.values.grouping_split_multi,
-          action: async () => {
-            await prefs.set("grouping_split_multi", !prefs.values.grouping_split_multi);
-            // Umbrella values change meaning between modes; drop any selection
-            // (this re-runs the track view) and rebuild the value list.
-            library.selectValue(null);
-            await library.loadValues();
-          },
-        });
-      }
+      const controls =
+        plugins.snapshot?.menu_controls.filter(
+          (control) =>
+            control.slot === "library.filter" && control.target_tag === library.customTagName,
+        ) ?? [];
+      const items: MenuItem[] = controls.map((control) => ({
+        label: control.label,
+        checked: control.checked,
+        disabled: library.projectionChanging,
+        action: async () => {
+          await library.changeProjection(async () => {
+            const result = await plugins.setSetting(
+              control.plugin_id,
+              control.setting_key,
+              !control.checked,
+            );
+            return result.snapshot.projection_revision;
+          });
+        },
+      }));
+      if (controls.length > 0) items.push({ separator: true, label: "" });
       items.push(
         { label: "Set filter…", action: () => openSetFilter() },
         {
@@ -102,6 +110,7 @@
   /** The chevron's menu: the overflowed tabs, so a hidden one (e.g. CUSTOM)
       stays reachable. The active tab is check-marked. */
   function moreMenu(e: MouseEvent) {
+    if (library.projectionChanging) return;
     const items: MenuItem[] = hiddenModes.map((m) => ({
       label: labelFor(m),
       checked: library.mode === m.id,
@@ -123,6 +132,7 @@
     <button
       class="mode"
       class:active={library.mode === m.id}
+      disabled={library.projectionChanging}
       onclick={() => library.setMode(m.id)}
       oncontextmenu={(e) => tabMenu(e, m.id)}
     >
@@ -133,6 +143,7 @@
   {#if hiddenModes.length}
     <button
       class="more"
+      disabled={library.projectionChanging}
       class:active={hiddenActive}
       title="More filters"
       aria-label="More filters"

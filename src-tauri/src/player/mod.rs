@@ -4,7 +4,7 @@
 //! next uri inside `about-to-finish`.
 
 use crescendo_core::db::Db;
-use crescendo_core::model::{PlayContext, Track};
+use crescendo_core::model::Track;
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
@@ -40,7 +40,9 @@ fn enqueue_projectm_pcm(chunks: &mut VecDeque<Vec<u8>>, bytes: &[u8]) {
 
 #[derive(Debug)]
 pub enum Cmd {
-    PlayContext { ctx: PlayContext, start_index: usize },
+    /// Context descriptors are resolved at the command boundary while its
+    /// projection guard is held. The player thread receives stable IDs only.
+    PlayResolvedContext { ids: Vec<i64>, start_index: usize },
     JumpTo(usize),
     TogglePause,
     Stop,
@@ -643,21 +645,19 @@ impl Engine {
 
     fn handle_cmd(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::PlayContext { ctx, start_index } => {
-                match self.db.resolve_context(&ctx) {
-                    Ok(ids) if !ids.is_empty() => {
-                        let id = self.begin_manual_transition(|q, _| {
-                            q.set_context(ids, start_index);
-                            q.current()
-                        });
-                        if let Some(id) = id {
-                            self.start_track(id);
-                        } else {
-                            self.finish_manual_transition();
-                        }
-                    }
-                    Ok(_) => log::warn!("play_context resolved to an empty track list"),
-                    Err(e) => log::error!("resolve_context failed: {e}"),
+            Cmd::PlayResolvedContext { ids, start_index } => {
+                if ids.is_empty() {
+                    log::warn!("play_context resolved to an empty track list");
+                    return;
+                }
+                let id = self.begin_manual_transition(|q, _| {
+                    q.set_context(ids, start_index);
+                    q.current()
+                });
+                if let Some(id) = id {
+                    self.start_track(id);
+                } else {
+                    self.finish_manual_transition();
                 }
             }
             Cmd::JumpTo(display_index) => {

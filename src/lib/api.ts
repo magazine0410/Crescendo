@@ -127,6 +127,7 @@ interface PluginSettingBase {
   key: string;
   label: string;
   description: string;
+  affects_projection: boolean;
 }
 
 export type PluginSetting =
@@ -186,12 +187,54 @@ export interface PluginSnapshot {
   safe_mode_reason: string | null;
   errors: string[];
   restart_required: boolean;
+  projection_revision: number;
+  menu_controls: PluginMenuControl[];
+  grouping_migration_pending: boolean;
+}
+
+export interface PluginMenuControl {
+  plugin_id: string;
+  id: string;
+  slot: "library.filter";
+  label: string;
+  target_tag: string;
+  setting_key: string;
+  checked: boolean;
 }
 
 export interface PluginMutationResult {
   changed: boolean;
   message: string | null;
   snapshot: PluginSnapshot;
+}
+
+export interface PreferenceMutationResult {
+  projection_revision: number;
+  projection_changed: boolean;
+}
+
+export interface BrowseValuesResult {
+  projection_revision: number;
+  values: BrowseValue[];
+}
+
+export interface StaleProjectionError {
+  kind: "stale_projection";
+  current_revision: number;
+}
+
+/** Tauri rejects serializable command errors as objects. Browser mocks throw
+    the same shape so race recovery follows one path in both environments. */
+export function staleProjectionRevision(reason: unknown): number | null {
+  if (
+    typeof reason === "object" &&
+    reason !== null &&
+    (reason as { kind?: unknown }).kind === "stale_projection" &&
+    typeof (reason as { current_revision?: unknown }).current_revision === "number"
+  ) {
+    return (reason as StaleProjectionError).current_revision;
+  }
+  return null;
 }
 
 export type RepeatMode = "off" | "all" | "one";
@@ -356,15 +399,19 @@ export type PlayContext =
   /** Several playlists shown as one list; they play back to back in order. */
   | { type: "playlists"; ids: number[] }
   | { type: "filtered_playlists"; ids: number[]; query: string }
-  | { type: "library_view"; query: string | null; sort: TrackSort | null }
+  | {
+      type: "library_view";
+      query: string | null;
+      projection_revision: number;
+      sort: TrackSort | null;
+    }
   | {
       type: "value_tracks";
       mode: WireBrowseMode;
       /** The left-panel selection (one or more Ctrl-multi-selected values). */
       values: string[];
       query: string | null;
-      /** Collapse multi-theme grouping tags under their primary theme. */
-      collapse: boolean;
+      projection_revision: number;
       sort: TrackSort | null;
     };
 

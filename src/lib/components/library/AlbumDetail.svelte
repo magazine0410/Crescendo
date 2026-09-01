@@ -27,6 +27,7 @@
   }
 
   function trackMenu(e: MouseEvent, track: Track) {
+    if (library.projectionChanging) return;
     openContextMenu(e, [
       { label: "Add to queue", action: () => queue.add([track.id]) },
       openTrackInFileManagerItem(track),
@@ -53,10 +54,12 @@
         <div class="actions">
           <button
             class="play"
+            disabled={library.projectionChanging}
             onclick={() => player.playContext({ type: "album", id: album.id }, 0)}
           >Play</button>
           <button
             class="queue-btn"
+            disabled={library.projectionChanging}
             onclick={() => queue.add(library.albumTracks.map((t) => t.id))}
           >Add to queue</button>
         </div>
@@ -68,6 +71,7 @@
         {@const detail2 = formatTitle(prefs.values.track_detail_format_2, t)}
         <button
           class="trow"
+          disabled={library.projectionChanging}
           class:playing={player.track?.id === t.id}
           ondblclick={() => player.playContext({ type: "album", id: album.id }, i)}
           oncontextmenu={(e) => trackMenu(e, t)}

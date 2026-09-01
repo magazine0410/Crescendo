@@ -73,6 +73,7 @@ const COMMANDS: &[&str] = &[
     "plugin_set_enabled",
     "plugin_set_setting",
     "plugin_uninstall",
+    "plugin_grouping_migration",
     "plugin_restart_app",
     "prefs_get_all",
     "prefs_set",

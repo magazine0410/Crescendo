@@ -2,8 +2,10 @@ use crate::state::AppState;
 use crescendo_core::model::{
     Album, BrowseMode, BrowseValue, LibraryStats, Track, TrackGroup, TrackSort,
 };
+use crescendo_core::plugins::StaleProjection;
 use crescendo_core::scanner::{scan, ScanOptions};
 use crescendo_core::search::SearchFilter;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -19,11 +21,42 @@ impl Drop for ScanningGuard {
     }
 }
 
-fn filter_for(query: Option<&str>) -> Result<Option<SearchFilter>, String> {
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProjectionCommandError {
+    StaleProjection { current_revision: u64 },
+    Operation { message: String },
+}
+
+#[derive(Debug, Serialize)]
+pub struct BrowseValuesResult {
+    pub projection_revision: u64,
+    pub values: Vec<BrowseValue>,
+}
+
+pub(crate) fn projection_error(error: anyhow::Error) -> ProjectionCommandError {
+    if let Some(stale) = error.downcast_ref::<StaleProjection>() {
+        ProjectionCommandError::StaleProjection {
+            current_revision: stale.current_revision,
+        }
+    } else {
+        ProjectionCommandError::Operation {
+            message: format!("{error:#}"),
+        }
+    }
+}
+
+fn operation_error(error: impl std::fmt::Display) -> ProjectionCommandError {
+    ProjectionCommandError::Operation {
+        message: error.to_string(),
+    }
+}
+
+fn filter_for(query: Option<&str>) -> Result<Option<SearchFilter>, ProjectionCommandError> {
     match query {
         Some(q) if !q.trim().is_empty() => crescendo_core::search::compile(q)
             .map(Some)
-            .map_err(|e| e.to_string()),
+            .map_err(operation_error),
         _ => Ok(None),
     }
 }
@@ -105,7 +138,7 @@ pub async fn scan_cancel(state: State<'_, AppState>) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ScanningGuard;
+    use super::{ProjectionCommandError, ScanningGuard};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -116,6 +149,20 @@ mod tests {
             let _guard = ScanningGuard(scanning.clone());
         }
         assert!(!scanning.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stale_projection_errors_are_typed_for_frontend_retry() {
+        assert_eq!(
+            serde_json::to_value(ProjectionCommandError::StaleProjection {
+                current_revision: 42,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "stale_projection",
+                "current_revision": 42
+            })
+        );
     }
 }
 
@@ -131,13 +178,18 @@ pub async fn browse_values(
     state: State<'_, AppState>,
     mode: BrowseMode,
     query: Option<String>,
-    collapse: bool,
-) -> Result<Vec<BrowseValue>, String> {
+) -> Result<BrowseValuesResult, ProjectionCommandError> {
     let filter = filter_for(query.as_deref())?;
-    state
+    let projection = state.plugins.projection(None).map_err(projection_error)?;
+    let plan = projection.facet_plan(&mode);
+    let values = state
         .db
-        .browse_values(mode, filter.as_ref(), collapse)
-        .map_err(|e| e.to_string())
+        .browse_values_with_plan(plan.as_ref(), filter.as_ref())
+        .map_err(operation_error)?;
+    Ok(BrowseValuesResult {
+        projection_revision: projection.revision(),
+        values,
+    })
 }
 
 #[tauri::command]
@@ -146,13 +198,23 @@ pub async fn browse_albums(
     mode: BrowseMode,
     values: Option<Vec<String>>,
     query: Option<String>,
-    collapse: bool,
-) -> Result<Vec<Album>, String> {
+    projection_revision: u64,
+) -> Result<Vec<Album>, ProjectionCommandError> {
     let filter = filter_for(query.as_deref())?;
+    let projection = state
+        .plugins
+        .projection(Some(projection_revision))
+        .map_err(projection_error)?;
+    let plan = projection.facet_plan(&mode);
     state
         .db
-        .browse_albums(mode, &values.unwrap_or_default(), filter.as_ref(), collapse)
-        .map_err(|e| e.to_string())
+        .browse_albums_with_plan(
+            plan.as_ref(),
+            &values.unwrap_or_default(),
+            filter.as_ref(),
+            projection.prefer_romanized(),
+        )
+        .map_err(operation_error)
 }
 
 #[tauri::command]
@@ -166,13 +228,18 @@ pub async fn track_count(
     query: Option<String>,
     mode: BrowseMode,
     values: Option<Vec<String>>,
-    collapse: bool,
-) -> Result<i64, String> {
+    projection_revision: u64,
+) -> Result<i64, ProjectionCommandError> {
     let filter = filter_for(query.as_deref())?;
+    let projection = state
+        .plugins
+        .projection(Some(projection_revision))
+        .map_err(projection_error)?;
+    let plan = projection.facet_plan(&mode);
     state
         .db
-        .track_count(filter.as_ref(), mode, &values.unwrap_or_default(), collapse)
-        .map_err(|e| e.to_string())
+        .track_count_with_plan(filter.as_ref(), plan.as_ref(), &values.unwrap_or_default())
+        .map_err(operation_error)
 }
 
 #[tauri::command]
@@ -181,24 +248,29 @@ pub async fn tracks_range(
     query: Option<String>,
     mode: BrowseMode,
     values: Option<Vec<String>>,
-    collapse: bool,
+    projection_revision: u64,
     sort: Option<TrackSort>,
     offset: i64,
     limit: i64,
-) -> Result<Vec<Track>, String> {
+) -> Result<Vec<Track>, ProjectionCommandError> {
     let filter = filter_for(query.as_deref())?;
+    let projection = state
+        .plugins
+        .projection(Some(projection_revision))
+        .map_err(projection_error)?;
+    let plan = projection.facet_plan(&mode);
     state
         .db
-        .tracks_range(
+        .tracks_range_with_plan(
             filter.as_ref(),
-            mode,
+            plan.as_ref(),
             &values.unwrap_or_default(),
-            collapse,
+            projection.prefer_romanized(),
             sort,
             offset,
             limit.clamp(1, 2000),
         )
-        .map_err(|e| e.to_string())
+        .map_err(operation_error)
 }
 
 #[tauri::command]
@@ -207,22 +279,27 @@ pub async fn track_index(
     query: Option<String>,
     mode: BrowseMode,
     values: Option<Vec<String>>,
-    collapse: bool,
+    projection_revision: u64,
     sort: Option<TrackSort>,
     track_id: i64,
-) -> Result<Option<i64>, String> {
+) -> Result<Option<i64>, ProjectionCommandError> {
     let filter = filter_for(query.as_deref())?;
+    let projection = state
+        .plugins
+        .projection(Some(projection_revision))
+        .map_err(projection_error)?;
+    let plan = projection.facet_plan(&mode);
     state
         .db
-        .track_index(
+        .track_index_with_plan(
             filter.as_ref(),
-            mode,
+            plan.as_ref(),
             &values.unwrap_or_default(),
-            collapse,
+            projection.prefer_romanized(),
             sort,
             track_id,
         )
-        .map_err(|e| e.to_string())
+        .map_err(operation_error)
 }
 
 #[tauri::command]
@@ -231,20 +308,25 @@ pub async fn track_groups(
     query: Option<String>,
     mode: BrowseMode,
     values: Option<Vec<String>>,
-    collapse: bool,
+    projection_revision: u64,
     sort: Option<TrackSort>,
-) -> Result<Vec<TrackGroup>, String> {
+) -> Result<Vec<TrackGroup>, ProjectionCommandError> {
     let filter = filter_for(query.as_deref())?;
+    let projection = state
+        .plugins
+        .projection(Some(projection_revision))
+        .map_err(projection_error)?;
+    let plan = projection.facet_plan(&mode);
     state
         .db
-        .track_groups(
+        .track_groups_with_plan(
             filter.as_ref(),
-            mode,
+            plan.as_ref(),
             &values.unwrap_or_default(),
-            collapse,
+            projection.prefer_romanized(),
             sort,
         )
-        .map_err(|e| e.to_string())
+        .map_err(operation_error)
 }
 
 #[tauri::command]

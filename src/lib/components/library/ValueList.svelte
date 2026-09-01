@@ -30,20 +30,30 @@
   }
 
   async function playValue(value: string) {
-    await player.playContext(
-      {
-        type: "value_tracks",
-        mode: library.wireMode,
-        values: [value],
-        query: library.query,
-        collapse: library.groupingCollapse,
-        sort: library.sort,
-      },
-      0,
-    );
+    if (library.projectionChanging) return;
+    try {
+      await player.playContext(
+        {
+          type: "value_tracks",
+          mode: library.wireMode,
+          values: [value],
+          query: library.query,
+          projection_revision: library.projectionRevision,
+          sort: library.sort,
+        },
+        0,
+      );
+    } catch (reason) {
+      if (await library.recoverStaleProjection(reason)) {
+        library.projectionNotice = "Library view changed; try again";
+        return;
+      }
+      throw reason;
+    }
   }
 
   async function queueValue(value: string) {
+    if (library.projectionChanging) return;
     const ids = await valueTrackIds(value);
     await queue.add(ids);
   }
@@ -65,7 +75,7 @@
       mode: library.wireMode,
       values: [value],
       query: library.query,
-      collapse: library.groupingCollapse,
+      projectionRevision: library.projectionRevision,
     });
     const lists = await Promise.all(
       albums.map((a) => call<Track[]>("album_tracks", { albumId: a.id })),
@@ -74,6 +84,7 @@
   }
 
   function onRowContext(e: MouseEvent, value: string) {
+    if (library.projectionChanging) return;
     openContextMenu(e, [
       { label: "Play", action: () => playValue(value) },
       { label: "Add to queue", action: () => queueValue(value) },
@@ -90,6 +101,7 @@
     <button
       class="row all"
       class:selected={library.selectedValues.length === 0}
+      disabled={library.projectionChanging}
       onclick={() => library.selectValue(null)}
     >
       <span class="name">All ({library.values.length}
@@ -107,6 +119,7 @@
     <button
       class="row"
       class:selected={library.selectedValues.includes(item.value)}
+      disabled={library.projectionChanging}
       ondblclick={() => playValue(item.value)}
       oncontextmenu={(e) => onRowContext(e, item.value)}
       onclick={(e) => onRowClick(e, item.value)}

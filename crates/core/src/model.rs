@@ -205,6 +205,8 @@ pub enum PlayContext {
     FilteredPlaylists { ids: Vec<i64>, query: String },
     LibraryView {
         query: Option<String>,
+        /// Revision of the projection used to render the clicked row.
+        projection_revision: u64,
         #[serde(default)]
         sort: Option<TrackSort>,
     },
@@ -214,10 +216,8 @@ pub enum PlayContext {
         /// tracks matching any of them play.
         values: Vec<String>,
         query: Option<String>,
-        /// Collapse multi-theme grouping tags under their primary theme (only
-        /// meaningful when `mode == Grouping`).
-        #[serde(default)]
-        collapse: bool,
+        /// Revision of the projection used to render the clicked row.
+        projection_revision: u64,
         #[serde(default)]
         sort: Option<TrackSort>,
     },

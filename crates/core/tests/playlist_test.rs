@@ -92,7 +92,7 @@ fn multi_selection_view_and_playback_agree_on_order() {
         .collect();
     assert_eq!(view, vec![5, 2, 4, 3, 1], "playlist order, then position inside each");
 
-    let played = db.resolve_context(&PlayContext::Playlists { ids: vec![b, a] }).unwrap();
+    let played = db.resolve_context_exact(&PlayContext::Playlists { ids: vec![b, a] }).unwrap();
     assert_eq!(played, view, "playback order must match the view row for row");
 }
 
@@ -113,7 +113,7 @@ fn filtered_playlist_playback_matches_visible_rows() {
     db.playlist_add_tracks(b, &[4, 2, 5]).unwrap();
 
     let single = db
-        .resolve_context(&PlayContext::FilteredPlaylist {
+        .resolve_context_exact(&PlayContext::FilteredPlaylist {
             id: a,
             query: "éCH".into(),
         })
@@ -121,7 +121,7 @@ fn filtered_playlist_playback_matches_visible_rows() {
     assert_eq!(single, vec![2], "Unicode matching keeps a visible missing track");
 
     let multi = db
-        .resolve_context(&PlayContext::FilteredPlaylists {
+        .resolve_context_exact(&PlayContext::FilteredPlaylists {
             ids: vec![b, a],
             query: "ÉCHO".into(),
         })
@@ -129,7 +129,7 @@ fn filtered_playlist_playback_matches_visible_rows() {
     assert_eq!(multi, vec![2, 2], "playlist order is preserved across matches");
 
     let genre = db
-        .resolve_context(&PlayContext::FilteredPlaylist {
+        .resolve_context_exact(&PlayContext::FilteredPlaylist {
             id: b,
             query: "rock".into(),
         })
@@ -137,7 +137,7 @@ fn filtered_playlist_playback_matches_visible_rows() {
     assert_eq!(genre, vec![4]);
 
     let blank = db
-        .resolve_context(&PlayContext::FilteredPlaylist {
+        .resolve_context_exact(&PlayContext::FilteredPlaylist {
             id: a,
             query: "  ".into(),
         })
@@ -166,13 +166,13 @@ fn missing_tracks_keep_the_rows_and_playback_lined_up() {
         "and flags them, so the UI can mark them"
     );
 
-    let played = db.resolve_context(&PlayContext::Playlist { id: pid }).unwrap();
+    let played = db.resolve_context_exact(&PlayContext::Playlist { id: pid }).unwrap();
     assert_eq!(played, vec![1, 2, 3, 4], "row index N must resolve to row N");
     // The last row is what breaks first when missing tracks are dropped: it
     // sat at index 3 in the view but would have been index 1 in playback.
     assert_eq!(played[3], view[3].id);
 
-    let multi = db.resolve_context(&PlayContext::Playlists { ids: vec![pid] }).unwrap();
+    let multi = db.resolve_context_exact(&PlayContext::Playlists { ids: vec![pid] }).unwrap();
     assert_eq!(multi, played, "multi-selection resolves the same way");
 }
 

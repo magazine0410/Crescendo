@@ -3,6 +3,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { player } from "$lib/stores/player.svelte";
+  import { plugins } from "$lib/stores/plugins.svelte";
   import TopBar from "$lib/components/TopBar.svelte";
   import BottomBar from "$lib/components/transport/BottomBar.svelte";
   import LibraryTab from "$lib/components/library/LibraryTab.svelte";
@@ -14,6 +15,7 @@
   import SetFilterDialog from "$lib/components/library/SetFilterDialog.svelte";
   import SetCollectionDialog from "$lib/components/playlists/SetCollectionDialog.svelte";
   import SearchHelp from "$lib/components/SearchHelp.svelte";
+  import GroupingPluginMigration from "$lib/components/settings/GroupingPluginMigration.svelte";
 
   let settingsOpen = $state(false);
   let visualizerMounted = $state(false);
@@ -24,6 +26,7 @@
 
   onMount(async () => {
     await prefs.load();
+    await plugins.refresh();
     ui.activeTab = prefs.values.default_tab;
     const layout = await prefs.getLayout();
     if (layout.bottombarH) ui.bottombarH = layout.bottombarH;
@@ -132,6 +135,7 @@
   <SetFilterDialog />
   <SetCollectionDialog />
   <SearchHelp open={ui.searchHelpOpen} onclose={() => (ui.searchHelpOpen = false)} />
+  <GroupingPluginMigration />
 </div>
 
 <style>
