@@ -65,6 +65,17 @@ cargo test -p crescendo-core
 cargo run --release -p crescendo-core --example smoke -- <music-dir> <db-path>
 ```
 
+## Plugins
+
+Crescendo supports optional local declarative plugins: validated data packages
+that contribute host-rendered settings, filter-menu controls, and trusted
+library facet transforms without executing plugin code. Plugins start disabled,
+loaded-set changes apply after restart, and setting values apply live.
+
+The [plugin SDK](plugin-sdk/README.md) contains manifest schema version 1, the
+supported deterministic validator/packer, the canonical Primary Grouping
+example, compatibility rules, and installation/safe-mode documentation.
+
 ## Keyboard shortcuts
 
 Space play/pause · ←/→ seek ±5s · `/` focus search · scroll wheel over the

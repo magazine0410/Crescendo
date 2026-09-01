@@ -155,6 +155,30 @@ fn verify_command_parity(source: &str) {
     }
 }
 
+fn verify_plugin_capability_scope(root: &Path) {
+    let main = fs::read_to_string(root.join("src-tauri/capabilities/main.json"))
+        .expect("read main capability");
+    let about = fs::read_to_string(root.join("src-tauri/capabilities/about.json"))
+        .expect("read about capability");
+    let default = fs::read_to_string(root.join("src-tauri/capabilities/default.json"))
+        .expect("read default capability");
+    assert!(
+        !about.contains("\"allow-plugin-") && !default.contains("\"allow-plugin-"),
+        "plugin permissions must not be granted to the about or shared cover-window capability"
+    );
+    for command in COMMANDS
+        .iter()
+        .copied()
+        .filter(|command| command.starts_with("plugin_"))
+    {
+        let permission = format!("\"allow-{}\"", command.replace('_', "-"));
+        assert!(
+            main.contains(&permission),
+            "main capability is missing {permission}"
+        );
+    }
+}
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set");
     let root = Path::new(&manifest_dir)
@@ -165,6 +189,7 @@ fn main() {
         fs::read_to_string(root.join("package-lock.json")).expect("read package-lock.json");
     let lib_rs = fs::read_to_string(root.join("src-tauri/src/lib.rs")).expect("read src/lib.rs");
     verify_command_parity(&lib_rs);
+    verify_plugin_capability_scope(root);
 
     println!(
         "cargo:rerun-if-changed={}",
@@ -178,6 +203,14 @@ fn main() {
         "cargo:rerun-if-changed={}",
         root.join("src-tauri/src/lib.rs").display()
     );
+    for capability in ["main.json", "about.json", "default.json"] {
+        println!(
+            "cargo:rerun-if-changed={}",
+            root.join("src-tauri/capabilities")
+                .join(capability)
+                .display()
+        );
+    }
 
     for (env_name, package) in [
         ("CRESCENDO_DEP_TAURI", "tauri"),

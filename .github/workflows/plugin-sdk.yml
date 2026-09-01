@@ -1,0 +1,57 @@
+name: Plugin SDK
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-sdk.yml"
+      - "crates/core/**"
+      - "plugin-sdk/**"
+      - "plugins/**"
+  push:
+    paths:
+      - ".github/workflows/plugin-sdk.yml"
+      - "crates/core/**"
+      - "plugin-sdk/**"
+      - "plugins/**"
+  release:
+    types: [published]
+
+jobs:
+  validate-and-pack:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test package tooling
+        run: cargo test -p crescendo-core plugins::tooling
+      - name: Validate and pack the official plugin
+        run: |
+          mkdir -p plugin-artifacts
+          cargo run -p crescendo-core --bin crescendo-plugin -- validate plugins/dev.crescendo.primary-grouping
+          cargo run -p crescendo-core --bin crescendo-plugin -- pack plugins/dev.crescendo.primary-grouping plugin-artifacts/dev.crescendo.primary-grouping-1.0.0.crescendo-plugin
+          cargo run -p crescendo-core --bin crescendo-plugin -- validate plugin-artifacts/dev.crescendo.primary-grouping-1.0.0.crescendo-plugin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: official-crescendo-plugins
+          path: plugin-artifacts/*.crescendo-plugin
+          if-no-files-found: error
+
+  publish-release-asset:
+    if: github.event_name == 'release'
+    needs: validate-and-pack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: official-crescendo-plugins
+          path: plugin-artifacts
+      - name: Attach the official plugin to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" plugin-artifacts/*.crescendo-plugin --clobber
+

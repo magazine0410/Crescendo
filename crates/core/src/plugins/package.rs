@@ -82,6 +82,7 @@ pub(crate) fn stage_archive(archive_path: &Path, staging_root: &Path) -> Result<
         let manifest = read_manifest(&manifest_path)?;
         let has_module = content_dir.join("module.wasm").is_file();
         manifest.validate(has_module)?;
+        validate_declarative_assets(&content_dir, &manifest)?;
 
         let metadata = InstallMetadata {
             package_hash: package_hash.clone(),
@@ -150,6 +151,7 @@ pub(crate) fn load_installed(path: &Path, expected_id: &str) -> Result<Installed
 
     let manifest = read_manifest(&path.join("manifest.json"))?;
     manifest.validate(has_module)?;
+    validate_declarative_assets(path, &manifest)?;
     if manifest.id != expected_id {
         bail!("manifest id does not match its installed directory");
     }
@@ -288,7 +290,7 @@ fn extract_entries(
     Ok(())
 }
 
-fn normalize_archive_path(name: &str) -> Result<(PathBuf, bool)> {
+pub(super) fn normalize_archive_path(name: &str) -> Result<(PathBuf, bool)> {
     if name.is_empty()
         || name.starts_with('/')
         || name.starts_with('\\')
@@ -322,7 +324,7 @@ fn normalize_archive_path(name: &str) -> Result<(PathBuf, bool)> {
     Ok((normalized, trailing_slash))
 }
 
-fn validate_package_layout(path: &Path, is_dir: bool) -> Result<()> {
+pub(super) fn validate_package_layout(path: &Path, is_dir: bool) -> Result<()> {
     let first = path
         .components()
         .next()
@@ -347,9 +349,51 @@ fn validate_installed_path(path: &Path, is_dir: bool) -> Result<()> {
     validate_package_layout(path, is_dir)
 }
 
-fn read_manifest(path: &Path) -> Result<PluginManifest> {
+pub(super) fn read_manifest(path: &Path) -> Result<PluginManifest> {
     let bytes = read_bounded(path, MAX_MANIFEST_BYTES, "manifest.json")?;
     serde_json::from_slice(&bytes).context("manifest.json is not valid schema-version-1 JSON")
+}
+
+/// Declarative packages may carry only passive assets. The v1 host never
+/// serves these files to the webview; future host contributions must resolve
+/// them by plugin/asset id and receive bounded bytes. Keeping the package
+/// allow-list here prevents an apparently declarative package from smuggling
+/// executable or remotely-loading content into a later consumer.
+pub(super) fn validate_declarative_assets(
+    package_root: &Path,
+    manifest: &PluginManifest,
+) -> Result<()> {
+    use super::manifest::PluginKind;
+
+    if manifest.kind != PluginKind::Declarative {
+        return Ok(());
+    }
+    let assets = package_root.join("assets");
+    if !assets.try_exists()? {
+        return Ok(());
+    }
+    for entry in WalkDir::new(&assets).follow_links(false) {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let extension = entry
+            .path()
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .ok_or_else(|| anyhow!("declarative plugin assets must have a supported extension"))?;
+        if !matches!(
+            extension.as_str(),
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "txt" | "md" | "json"
+        ) {
+            bail!(
+                "declarative plugin asset {} has an unsupported or active-content extension",
+                entry.path().strip_prefix(package_root)?.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn read_bounded(path: &Path, limit: u64, label: &str) -> Result<Vec<u8>> {

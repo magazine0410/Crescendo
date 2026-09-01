@@ -1,10 +1,11 @@
 mod manager;
 mod manifest;
 mod package;
+pub mod tooling;
 
 pub use manager::{
-    PluginManager, PluginMenuControlInfo, PluginMutationResult, PluginSnapshot, StaleProjection,
-    GROUPING_PLUGIN_ID, GROUPING_PLUGIN_SETTING,
+    PluginAsset, PluginManager, PluginMenuControlInfo, PluginMutationResult, PluginSnapshot,
+    StaleProjection, GROUPING_PLUGIN_ID, GROUPING_PLUGIN_SETTING,
 };
 pub use manifest::{
     PluginContributions, PluginFacetTransform, PluginKind, PluginManifest, PluginMenuAction,

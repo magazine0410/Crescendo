@@ -15,8 +15,8 @@ use semver::Version;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
@@ -82,6 +82,15 @@ pub struct PluginMenuControlInfo {
     pub target_tag: String,
     pub setting_key: String,
     pub checked: bool,
+}
+
+/// A bounded, host-resolved passive asset. Package paths never cross the
+/// plugin boundary and this type is intentionally not serializable for IPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginAsset {
+    pub id: String,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -422,6 +431,47 @@ impl PluginManager {
         Ok(ProjectionReadGuard {
             snapshot,
             registry: &self.registry,
+        })
+    }
+
+    /// Resolve a passive asset belonging to a plugin in the immutable loaded
+    /// set. Callers name an asset id relative to `assets/`; they never receive
+    /// or supply an installed-package path.
+    pub fn load_asset(&self, plugin_id: &str, asset_id: &str) -> Result<PluginAsset> {
+        self.ensure_available()?;
+        if !self.loaded.contains_key(plugin_id) || !is_safe_plugin_component(plugin_id) {
+            bail!("plugin {plugin_id} is not loaded");
+        }
+        let relative = normalize_asset_id(asset_id)?;
+        let package_root = self.installed_root.join(plugin_id);
+        // Revalidate the installed package before opening an asset so an
+        // external mutation cannot turn a passive loaded package into code.
+        load_installed(&package_root, plugin_id)?;
+        let assets_root = fs::canonicalize(package_root.join("assets"))
+            .context("plugin has no readable assets directory")?;
+        let candidate = package_root.join("assets").join(&relative);
+        let candidate_meta = fs::symlink_metadata(&candidate)
+            .with_context(|| format!("plugin asset {asset_id:?} does not exist"))?;
+        if !candidate_meta.file_type().is_file() || candidate_meta.file_type().is_symlink() {
+            bail!("plugin asset is not a regular file");
+        }
+        let resolved = fs::canonicalize(&candidate)?;
+        if !resolved.starts_with(&assets_root) {
+            bail!("plugin asset escapes its package");
+        }
+        if candidate_meta.len() > super::package::MAX_EXTRACTED_BYTES {
+            bail!("plugin asset exceeds the 64 MiB read limit");
+        }
+        let mut reader = File::open(&resolved)?.take(super::package::MAX_EXTRACTED_BYTES + 1);
+        let mut bytes = Vec::with_capacity(candidate_meta.len() as usize);
+        reader.read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > super::package::MAX_EXTRACTED_BYTES {
+            bail!("plugin asset exceeds the 64 MiB read limit");
+        }
+        Ok(PluginAsset {
+            id: asset_id.to_string(),
+            media_type: asset_media_type(&relative)?.to_string(),
+            bytes,
         })
     }
 
@@ -1242,6 +1292,51 @@ fn is_safe_plugin_component(value: &str) -> bool {
         && value.is_ascii()
 }
 
+fn normalize_asset_id(value: &str) -> Result<PathBuf> {
+    if value.is_empty()
+        || value.len() > 1024
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.contains('\\')
+        || value.contains('\0')
+    {
+        bail!("invalid plugin asset id");
+    }
+    let mut path = PathBuf::new();
+    for segment in value.split('/') {
+        if segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.contains(':')
+            || segment.chars().any(char::is_control)
+        {
+            bail!("invalid plugin asset id");
+        }
+        path.push(segment);
+    }
+    asset_media_type(&path)?;
+    Ok(path)
+}
+
+fn asset_media_type(path: &Path) -> Result<&'static str> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| anyhow!("plugin asset has no supported extension"))?;
+    match extension.as_str() {
+        "png" => Ok("image/png"),
+        "jpg" | "jpeg" => Ok("image/jpeg"),
+        "webp" => Ok("image/webp"),
+        "gif" => Ok("image/gif"),
+        "bmp" => Ok("image/bmp"),
+        "txt" => Ok("text/plain; charset=utf-8"),
+        "md" => Ok("text/markdown; charset=utf-8"),
+        "json" => Ok("application/json"),
+        _ => bail!("plugin asset has an unsupported or active-content extension"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1916,6 +2011,38 @@ mod tests {
         assert!(snapshot.loaded_plugin_ids.is_empty());
         assert!(snapshot.plugins[0].error.is_some());
         assert!(!snapshot.plugins[0].desired_enabled);
+    }
+
+    #[test]
+    fn loaded_assets_are_resolved_by_id_and_never_by_package_path() {
+        let (dir, db, manager) = setup();
+        let package = dir.path().join("plugin.crescendo-plugin");
+        write_test_package(
+            &package,
+            &manifest("1.0.0"),
+            &[("assets/help/readme.txt", b"host-only", None)],
+        );
+        manager.install(&package).unwrap();
+        assert!(manager
+            .load_asset("dev.crescendo.manager-test", "help/readme.txt")
+            .is_err());
+        manager
+            .set_enabled("dev.crescendo.manager-test", true)
+            .unwrap();
+        drop(manager);
+
+        let restarted =
+            PluginManager::start(dir.path().join("plugins"), db, "0.8.0").unwrap();
+        let asset = restarted
+            .load_asset("dev.crescendo.manager-test", "help/readme.txt")
+            .unwrap();
+        assert_eq!(asset.bytes, b"host-only");
+        assert_eq!(asset.media_type, "text/plain; charset=utf-8");
+        for id in ["../manifest.json", "/etc/passwd", "help/panel.html"] {
+            assert!(restarted
+                .load_asset("dev.crescendo.manager-test", id)
+                .is_err());
+        }
     }
 
     #[test]
