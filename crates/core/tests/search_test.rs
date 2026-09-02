@@ -11,14 +11,63 @@ fn test_db() -> (tempfile::TempDir, Db) {
                                 genre, track_no, year, search_blob)
              VALUES (?1, ?2, ?3, 0, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )?;
-        type RowT<'a> =
-            (&'a str, &'a str, &'a str, Option<&'a str>, Option<&'a str>, i64, i64, i64, &'a str);
+        type RowT<'a> = (
+            &'a str,
+            &'a str,
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            i64,
+            i64,
+            i64,
+            &'a str,
+        );
         let rows: Vec<RowT> = vec![
             // title, artist, album, titlesort, artistsort, duration_ms, track, year, genre
-            ("Now's The Time", "Charlie Parker", "The Essential", None, None, 184_000, 1, 1950, "Jazz"),
-            ("Misery", "Maroon 5", "Hands All Over", None, None, 216_000, 1, 2010, "Pop Rock"),
-            ("Bird Man", "Joe Hisaishi", "Nausicaä OST", None, None, 226_000, 5, 1984, "Soundtrack"),
-            ("ネイティブフェイス", "ZUN", "東方風神録", Some("Native Face"), Some("ZUN"), 300_000, 8, 2007, "Doujin"),
+            (
+                "Now's The Time",
+                "Charlie Parker",
+                "The Essential",
+                None,
+                None,
+                184_000,
+                1,
+                1950,
+                "Jazz",
+            ),
+            (
+                "Misery",
+                "Maroon 5",
+                "Hands All Over",
+                None,
+                None,
+                216_000,
+                1,
+                2010,
+                "Pop Rock",
+            ),
+            (
+                "Bird Man",
+                "Joe Hisaishi",
+                "Nausicaä OST",
+                None,
+                None,
+                226_000,
+                5,
+                1984,
+                "Soundtrack",
+            ),
+            (
+                "ネイティブフェイス",
+                "ZUN",
+                "東方風神録",
+                Some("Native Face"),
+                Some("ZUN"),
+                300_000,
+                8,
+                2007,
+                "Doujin",
+            ),
         ];
         for (i, (title, artist, album, tsort, asort, dur, tn, year, genre)) in
             rows.iter().enumerate()
@@ -54,7 +103,12 @@ fn test_db() -> (tempfile::TempDir, Db) {
 
 fn count(db: &Db, q: &str) -> i64 {
     let filter = search::compile(q).unwrap();
-    db.track_count_exact(Some(&filter), crescendo_core::model::BrowseMode::Artist, &[]).unwrap()
+    db.track_count_exact(
+        Some(&filter),
+        crescendo_core::model::BrowseMode::Artist,
+        &[],
+    )
+    .unwrap()
 }
 
 #[test]
@@ -128,8 +182,14 @@ fn bare_comparison_without_the_hash_wrapper() {
 fn play_counts() {
     let (_d, db) = test_db();
     let id_of = |title: &str| -> i64 {
-        db.with(|c| Ok(c.query_row("SELECT id FROM tracks WHERE title = ?1", [title], |r| r.get(0))?))
-            .unwrap()
+        db.with(|c| {
+            Ok(
+                c.query_row("SELECT id FROM tracks WHERE title = ?1", [title], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap()
     };
     // 3 plays, 2 plays, 1 play, and one track that was never played.
     for _ in 0..3 {
@@ -191,11 +251,18 @@ fn track_index_locates_row_in_view() {
     use crescendo_core::model::BrowseMode;
     let (_d, db) = test_db();
     let id_of = |title: &str| -> i64 {
-        db.with(|c| Ok(c.query_row("SELECT id FROM tracks WHERE title = ?1", [title], |r| r.get(0))?))
-            .unwrap()
+        db.with(|c| {
+            Ok(
+                c.query_row("SELECT id FROM tracks WHERE title = ?1", [title], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .unwrap()
     };
     let index_of = |title: &str| {
-        db.track_index_exact(None, BrowseMode::Artist, &[], None, id_of(title)).unwrap()
+        db.track_index_exact(None, BrowseMode::Artist, &[], None, id_of(title))
+            .unwrap()
     };
     // Full library, LIBRARY_SORT by albumartist: Charlie Parker, Joe Hisaishi,
     // Maroon 5, ZUN.
@@ -208,8 +275,16 @@ fn track_index_locates_row_in_view() {
     let filter = search::compile("artist=zun").unwrap();
     let charlie = id_of("Now's The Time");
     let zun = id_of("ネイティブフェイス");
-    assert_eq!(db.track_index_exact(Some(&filter), BrowseMode::Artist, &[], None, charlie).unwrap(), None);
-    assert_eq!(db.track_index_exact(Some(&filter), BrowseMode::Artist, &[], None, zun).unwrap(), Some(0));
+    assert_eq!(
+        db.track_index_exact(Some(&filter), BrowseMode::Artist, &[], None, charlie)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        db.track_index_exact(Some(&filter), BrowseMode::Artist, &[], None, zun)
+            .unwrap(),
+        Some(0)
+    );
 }
 
 #[test]

@@ -6,9 +6,9 @@ use super::package::{
     create_operation_dir, load_installed, stage_archive, sync_directory, InstalledPackage,
 };
 use super::permissions::PluginGrant;
+use super::wasm::{WasmHandle, WasmPluginSpec};
 use super::PLUGIN_API_VERSION;
 use super::WASM_API_VERSION;
-use super::wasm::{WasmHandle, WasmPluginSpec};
 use crate::db::plugins::PluginPendingRow;
 use crate::db::queries::{FacetPlan, FacetTransform};
 use crate::model::BrowseMode;
@@ -273,9 +273,7 @@ impl PluginManager {
                     .into(),
             )
         } else if requested {
-            Some(
-                "A plugin failed to start repeatedly; plugins are disabled for this run.".into(),
-            )
+            Some("A plugin failed to start repeatedly; plugins are disabled for this run.".into())
         } else {
             None
         };
@@ -400,9 +398,7 @@ impl PluginManager {
                 // desired state is preserved so the restart banner and the
                 // approve action in Settings can resolve it, and the plugin
                 // reserves no facet target while it waits.
-                if package.manifest.kind == PluginKind::Wasm
-                    && !grants_satisfied(&db, package)?
-                {
+                if package.manifest.kind == PluginKind::Wasm && !grants_satisfied(&db, package)? {
                     continue;
                 }
                 let conflict = package
@@ -426,8 +422,7 @@ impl PluginManager {
                     continue;
                 }
                 for transform in &package.manifest.contributes.facet_transforms {
-                    reserved_targets
-                        .insert(transform.target_tag().to_string(), record.id.clone());
+                    reserved_targets.insert(transform.target_tag().to_string(), record.id.clone());
                 }
                 loaded.insert(record.id.clone(), package.manifest.clone());
             }
@@ -1181,10 +1176,7 @@ impl PluginManager {
                 .map_err(|_| anyhow!("plugin projection lock poisoned"))?
                 .revision,
             menu_controls: self.menu_controls()?,
-            grouping_migration_pending: self
-                .db
-                .meta_get(GROUPING_MIGRATION_KEY)?
-                .as_deref()
+            grouping_migration_pending: self.db.meta_get(GROUPING_MIGRATION_KEY)?.as_deref()
                 == Some("pending"),
         })
     }
@@ -1391,9 +1383,11 @@ fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Opti
             if let Err(error) = super::permissions::parse_permissions(&manifest.permissions) {
                 return Some(error.to_string());
             }
-            for permission in manifest.permissions.iter().filter_map(|name| {
-                super::permissions::PluginPermission::parse(name)
-            }) {
+            for permission in manifest
+                .permissions
+                .iter()
+                .filter_map(|name| super::permissions::PluginPermission::parse(name))
+            {
                 if !permission.runtime_supported() {
                     return Some(format!(
                         "Requests the \"{}\" capability, which this build does not yet provide.",
@@ -1434,17 +1428,15 @@ fn grants_satisfied(db: &Db, package: &InstalledPackage) -> Result<bool> {
     if permissions.is_empty() {
         return Ok(true);
     }
-    Ok(db
-        .plugin_grant_get(&manifest.id)?
-        .is_some_and(|grant| {
-            grant.approves(
-                &manifest.id,
-                &permissions,
-                &manifest.network_domains,
-                &manifest.version,
-                &package.package_hash,
-            )
-        }))
+    Ok(db.plugin_grant_get(&manifest.id)?.is_some_and(|grant| {
+        grant.approves(
+            &manifest.id,
+            &permissions,
+            &manifest.network_domains,
+            &manifest.version,
+            &package.package_hash,
+        )
+    }))
 }
 
 fn scan_installed(installed_root: &Path) -> Result<Vec<InstalledRecord>> {
@@ -1750,12 +1742,15 @@ mod tests {
         let mut value = manifest("1.0.0");
         value.id = id.into();
         value.name = id.into();
-        value.contributes.settings.push(PluginSettingDeclaration::Boolean {
-            key: "collapse_titles".into(),
-            label: "Collapse titles".into(),
-            description: String::new(),
-            default: true,
-        });
+        value
+            .contributes
+            .settings
+            .push(PluginSettingDeclaration::Boolean {
+                key: "collapse_titles".into(),
+                label: "Collapse titles".into(),
+                description: String::new(),
+                default: true,
+            });
         value
             .contributes
             .facet_transforms
@@ -1765,25 +1760,27 @@ mod tests {
                 trim_whitespace: true,
                 enabled_setting: "collapse_titles".into(),
             });
-        value.contributes.menu_controls.push(super::super::manifest::PluginMenuControl {
-            id: "collapse_titles".into(),
-            slot: PluginMenuSlot::LibraryFilter,
-            label: "Collapse titles".into(),
-            visible_when: super::super::manifest::PluginMenuVisibility {
-                active_tag: "grouping".into(),
-            },
-            checked_setting: Some("collapse_titles".into()),
-            action: PluginMenuAction::ToggleSetting {
-                setting: "collapse_titles".into(),
-            },
-        });
+        value
+            .contributes
+            .menu_controls
+            .push(super::super::manifest::PluginMenuControl {
+                id: "collapse_titles".into(),
+                slot: PluginMenuSlot::LibraryFilter,
+                label: "Collapse titles".into(),
+                visible_when: super::super::manifest::PluginMenuVisibility {
+                    active_tag: "grouping".into(),
+                },
+                checked_setting: Some("collapse_titles".into()),
+                action: PluginMenuAction::ToggleSetting {
+                    setting: "collapse_titles".into(),
+                },
+            });
         value
     }
 
     fn official_grouping_manifest() -> PluginManifest {
         let mut value = transform_manifest(GROUPING_PLUGIN_ID);
-        if let PluginSettingDeclaration::Boolean { key, .. } = &mut value.contributes.settings[1]
-        {
+        if let PluginSettingDeclaration::Boolean { key, .. } = &mut value.contributes.settings[1] {
             *key = GROUPING_PLUGIN_SETTING.into();
         }
         let PluginFacetTransform::TextFirstSegment {
@@ -2122,7 +2119,11 @@ mod tests {
         // So enabling B for the same target must be refused now, rather than
         // succeeding and leaving the next startup to drop one of them.
         let package = dir.path().join("b.crescendo-plugin");
-        write_test_package(&package, &transform_manifest("dev.crescendo.transform-b"), &[]);
+        write_test_package(
+            &package,
+            &transform_manifest("dev.crescendo.transform-b"),
+            &[],
+        );
         manager.install(&package).unwrap();
         let refusal = manager
             .set_enabled("dev.crescendo.transform-b", true)
@@ -2184,9 +2185,7 @@ mod tests {
         let package = dir.path().join("grouping.crescendo-plugin");
         write_test_package(&package, &official_grouping_manifest(), &[]);
 
-        let installed = manager
-            .complete_grouping_migration(Some(&package))
-            .unwrap();
+        let installed = manager.complete_grouping_migration(Some(&package)).unwrap();
         assert!(!installed.snapshot.grouping_migration_pending);
         let plugin = installed
             .snapshot
@@ -2199,18 +2198,13 @@ mod tests {
         assert_eq!(plugin.settings[1].value, Value::Bool(true));
         assert!(installed.snapshot.restart_required);
         assert!(db.prefs_get("grouping_split_multi").unwrap().is_none());
-        assert!(!manager
-            .complete_grouping_migration(None)
-            .unwrap()
-            .changed);
+        assert!(!manager.complete_grouping_migration(None).unwrap().changed);
 
         let (dismiss_dir, dismiss_db, dismiss_manager) = setup();
         dismiss_db
             .meta_set(GROUPING_MIGRATION_KEY, "pending")
             .unwrap();
-        let dismissed = dismiss_manager
-            .complete_grouping_migration(None)
-            .unwrap();
+        let dismissed = dismiss_manager.complete_grouping_migration(None).unwrap();
         assert!(!dismissed.snapshot.grouping_migration_pending);
         assert!(dismissed.snapshot.plugins.is_empty());
         drop(dismiss_manager);
@@ -2483,8 +2477,7 @@ mod tests {
             .unwrap();
         drop(manager);
 
-        let restarted =
-            PluginManager::start(dir.path().join("plugins"), db, "0.8.0").unwrap();
+        let restarted = PluginManager::start(dir.path().join("plugins"), db, "0.8.0").unwrap();
         let asset = restarted
             .load_asset("dev.crescendo.manager-test", "help/readme.txt")
             .unwrap();

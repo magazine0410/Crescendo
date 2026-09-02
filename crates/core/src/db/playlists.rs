@@ -79,8 +79,10 @@ impl Db {
 
     pub fn playlist_rename(&self, id: i64, name: &str) -> Result<()> {
         self.with(|conn| {
-            conn.execute("UPDATE playlists SET name = ?2 WHERE id = ?1",
-                         rusqlite::params![id, name])?;
+            conn.execute(
+                "UPDATE playlists SET name = ?2 WHERE id = ?1",
+                rusqlite::params![id, name],
+            )?;
             Ok(())
         })
     }
@@ -122,7 +124,10 @@ impl Db {
                 let tracks = stmt
                     .query_map([id], track_from_row)?
                     .collect::<rusqlite::Result<Vec<Track>>>()?;
-                out.push(PlaylistTracks { playlist_id: *id, tracks });
+                out.push(PlaylistTracks {
+                    playlist_id: *id,
+                    tracks,
+                });
             }
             Ok(out)
         })
@@ -174,8 +179,7 @@ impl Db {
                 anyhow::bail!("playlist {id} does not exist");
             }
             {
-                let mut check =
-                    tx.prepare("SELECT EXISTS(SELECT 1 FROM tracks WHERE id = ?1)")?;
+                let mut check = tx.prepare("SELECT EXISTS(SELECT 1 FROM tracks WHERE id = ?1)")?;
                 for track_id in track_ids {
                     let exists: bool = check.query_row([track_id], |row| row.get(0))?;
                     if !exists {
@@ -286,9 +290,8 @@ impl Db {
                     "SELECT position, track_id FROM playlist_tracks \
                      WHERE playlist_id = ?1 ORDER BY position",
                 )?;
-                let rows = stmt.query_map([id], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-                })?;
+                let rows =
+                    stmt.query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
                 rows.collect::<rusqlite::Result<_>>()?
             };
 
@@ -325,11 +328,11 @@ impl Db {
 
 fn renumber(conn: &rusqlite::Connection, id: i64) -> Result<()> {
     // Compact positions to 0..n keeping order.
-    let mut stmt = conn.prepare(
-        "SELECT position FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position",
-    )?;
-    let positions: Vec<i64> =
-        stmt.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn
+        .prepare("SELECT position FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position")?;
+    let positions: Vec<i64> = stmt
+        .query_map([id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
     let mut update = conn.prepare(
         "UPDATE playlist_tracks SET position = ?3 \
          WHERE playlist_id = ?1 AND position = ?2",
@@ -347,14 +350,9 @@ fn renumber(conn: &rusqlite::Connection, id: i64) -> Result<()> {
 /// the playlist's current members; repeats within `track_ids` itself are
 /// preserved). Split out of [`Db::playlist_add_tracks`] so the checked variant
 /// can validate and insert without ever committing in between.
-fn append_tracks(
-    tx: &rusqlite::Transaction<'_>,
-    id: i64,
-    track_ids: &[i64],
-) -> Result<()> {
+fn append_tracks(tx: &rusqlite::Transaction<'_>, id: i64, track_ids: &[i64]) -> Result<()> {
     let existing: std::collections::HashSet<i64> = {
-        let mut stmt =
-            tx.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1")?;
+        let mut stmt = tx.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1")?;
         let set = stmt
             .query_map([id], |r| r.get::<_, i64>(0))?
             .collect::<rusqlite::Result<_>>()?;

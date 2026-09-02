@@ -2,7 +2,10 @@ use super::sql::is_numeric_tag;
 use super::{CmpOp, Matcher, Node, NumOperand, ParseError};
 
 pub fn parse(input: &str) -> Result<Node, ParseError> {
-    let mut p = Parser { chars: input.char_indices().collect(), pos: 0 };
+    let mut p = Parser {
+        chars: input.char_indices().collect(),
+        pos: 0,
+    };
     let mut terms = Vec::new();
     loop {
         p.skip_ws();
@@ -41,9 +44,15 @@ impl Parser {
         c
     }
     fn offset(&self) -> usize {
-        self.chars.get(self.pos).map(|&(i, _)| i).unwrap_or_else(|| {
-            self.chars.last().map(|&(i, c)| i + c.len_utf8()).unwrap_or(0)
-        })
+        self.chars
+            .get(self.pos)
+            .map(|&(i, _)| i)
+            .unwrap_or_else(|| {
+                self.chars
+                    .last()
+                    .map(|&(i, c)| i + c.len_utf8())
+                    .unwrap_or(0)
+            })
     }
     fn skip_ws(&mut self) {
         while matches!(self.peek(), Some(c) if c.is_whitespace()) {
@@ -51,7 +60,10 @@ impl Parser {
         }
     }
     fn err<T>(&self, message: impl Into<String>) -> Result<T, ParseError> {
-        Err(ParseError { message: message.into(), offset: self.offset() })
+        Err(ParseError {
+            message: message.into(),
+            offset: self.offset(),
+        })
     }
     fn expect(&mut self, c: char) -> Result<(), ParseError> {
         if self.peek() == Some(c) {
@@ -140,9 +152,7 @@ impl Parser {
         let is_num_tag = matches!(operand, Some(NumOperand::Tag(_)));
         match self.peek() {
             // `plays<3`, and a literal leading a range (`1980<=year<2000`).
-            Some('<' | '>') if operand.is_some() => {
-                self.numeric_chain_from(operand.unwrap())
-            }
+            Some('<' | '>') if operand.is_some() => self.numeric_chain_from(operand.unwrap()),
             // `plays=3` / `plays!=3`: a numeric tag compares as a number,
             // never as a substring.
             Some('=') if is_num_tag => self.numeric_chain_from(operand.unwrap()),
@@ -152,12 +162,20 @@ impl Parser {
             Some('=') => {
                 self.bump();
                 let matcher = self.value()?;
-                Ok(Node::Tag { tag: normalize_tag(&word), matcher, negated: false })
+                Ok(Node::Tag {
+                    tag: normalize_tag(&word),
+                    matcher,
+                    negated: false,
+                })
             }
             Some('!') if self.peek_at(1) == Some('=') => {
                 self.pos += 2;
                 let matcher = self.value()?;
-                Ok(Node::Tag { tag: normalize_tag(&word), matcher, negated: true })
+                Ok(Node::Tag {
+                    tag: normalize_tag(&word),
+                    matcher,
+                    negated: true,
+                })
             }
             _ => {
                 if word.is_empty() {
@@ -175,11 +193,17 @@ impl Parser {
         match self.peek() {
             Some('"') => {
                 let (value, flags) = self.quoted()?;
-                Ok(Matcher::Phrase { value, case_sensitive: flags.contains('c') })
+                Ok(Matcher::Phrase {
+                    value,
+                    case_sensitive: flags.contains('c'),
+                })
             }
             Some('/') => {
                 let (pattern, flags) = self.regex()?;
-                Ok(Matcher::Regex { pattern, case_sensitive: flags.contains('c') })
+                Ok(Matcher::Regex {
+                    pattern,
+                    case_sensitive: flags.contains('c'),
+                })
             }
             Some('|') if self.peek_at(1) == Some('(') => {
                 self.pos += 2;

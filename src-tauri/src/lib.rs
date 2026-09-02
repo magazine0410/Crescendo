@@ -1,8 +1,8 @@
 mod art_protocol;
 mod commands;
 mod player;
-mod state;
 pub mod plugin_bridge;
+mod state;
 pub mod waveform;
 
 use crescendo_core::art::ArtStore;
@@ -10,17 +10,15 @@ use crescendo_core::db::Db;
 use crescendo_core::plugins::wasm::HostEvent;
 use crescendo_core::plugins::PluginManager;
 use state::AppState;
-use tauri::Listener;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use tauri::Listener;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,lofty=error"),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,lofty=error"))
+        .init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -29,7 +27,11 @@ pub fn run() {
         .setup(|app| {
             let db = Arc::new(Db::open(&state::db_path())?);
             if let Ok(stats) = db.library_stats() {
-                log::info!("library opened: {} tracks, {} albums", stats.tracks, stats.albums);
+                log::info!(
+                    "library opened: {} tracks, {} albums",
+                    stats.tracks,
+                    stats.albums
+                );
             }
             let art = Arc::new(ArtStore::new(&state::cache_dir())?);
             let waveform = Arc::new(waveform::WaveformStore::new(&state::cache_dir())?);
@@ -54,9 +56,10 @@ pub fn run() {
                 app.handle().clone(),
             )));
             let position_mirror = Arc::new(plugin_bridge::PositionMirror::default());
-            plugins.install_player_bridge(Arc::new(
-                plugin_bridge::ShellPlayerBridge::new(player.clone(), position_mirror.clone()),
-            ));
+            plugins.install_player_bridge(Arc::new(plugin_bridge::ShellPlayerBridge::new(
+                player.clone(),
+                position_mirror.clone(),
+            )));
             // The track currently being reported, shared by the two listeners
             // below: `player:position` carries no track id, so the mirror has
             // to be told which song the tick belongs to.
@@ -65,13 +68,14 @@ pub fn run() {
                 let mirror = position_mirror.clone();
                 let current = last_track.clone();
                 app.listen("player:position", move |event| {
-                    if let Ok(value) =
-                        serde_json::from_str::<serde_json::Value>(event.payload())
-                    {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload()) {
                         let track_id = current.lock().ok().and_then(|slot| *slot);
                         mirror.record(
                             track_id,
-                            value.get("ms").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                            value
+                                .get("ms")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0),
                             value
                                 .get("duration_ms")
                                 .and_then(serde_json::Value::as_u64)
@@ -93,9 +97,7 @@ pub fn run() {
                     event_plugins.notify_event(HostEvent::PlayerStateChanged);
                     let track_id = serde_json::from_str::<serde_json::Value>(event.payload())
                         .ok()
-                        .and_then(|state| {
-                            state.get("track")?.get("id")?.as_i64()
-                        });
+                        .and_then(|state| state.get("track")?.get("id")?.as_i64());
                     if let Ok(mut previous) = last_track.lock() {
                         if *previous != track_id {
                             *previous = track_id;

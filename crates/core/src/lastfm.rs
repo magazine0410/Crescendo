@@ -39,7 +39,12 @@ pub fn artist_info(db: &Db, api_key: &str, artist: &str) -> Result<Option<Artist
         return Ok(None);
     }
     let cache_key = format!("artist\u{1f}{}", artist.to_lowercase());
-    let json = match cached_or_fetch(db, &cache_key, api_key, &[("method", "artist.getinfo"), ("artist", artist)])? {
+    let json = match cached_or_fetch(
+        db,
+        &cache_key,
+        api_key,
+        &[("method", "artist.getinfo"), ("artist", artist)],
+    )? {
         Some(j) => j,
         None => return Ok(None),
     };
@@ -63,12 +68,20 @@ pub fn album_info(db: &Db, api_key: &str, artist: &str, album: &str) -> Result<O
     if api_key.is_empty() || artist.is_empty() || album.is_empty() {
         return Ok(None);
     }
-    let cache_key = format!("album\u{1f}{}\u{1f}{}", artist.to_lowercase(), album.to_lowercase());
+    let cache_key = format!(
+        "album\u{1f}{}\u{1f}{}",
+        artist.to_lowercase(),
+        album.to_lowercase()
+    );
     let json = match cached_or_fetch(
         db,
         &cache_key,
         api_key,
-        &[("method", "album.getinfo"), ("artist", artist), ("album", album)],
+        &[
+            ("method", "album.getinfo"),
+            ("artist", artist),
+            ("album", album),
+        ],
     )? {
         Some(j) => j,
         None => return Ok(None),
@@ -150,11 +163,14 @@ fn cached_or_fetch(
 }
 
 fn str_of(v: &Value) -> Option<String> {
-    v.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    v.as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn int_of(v: &Value) -> Option<i64> {
-    v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    v.as_i64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }
 
 fn names_of(v: &Value) -> Vec<String> {

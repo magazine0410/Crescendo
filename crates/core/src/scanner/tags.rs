@@ -69,8 +69,15 @@ struct RawExtras {
 fn vorbis_extras(vc: &VorbisComments) -> RawExtras {
     // VorbisComments::get matches the field name case-insensitively, as the
     // spec requires — taggers write both `VOCALIST` and `vocalist`.
-    let get = |key: &str| vc.get(key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    RawExtras { vocalist: get("VOCALIST"), event: get("EVENT") }
+    let get = |key: &str| {
+        vc.get(key)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    RawExtras {
+        vocalist: get("VOCALIST"),
+        event: get("EVENT"),
+    }
 }
 
 /// Read the file, keeping the format-specific tag long enough to pull the
@@ -106,8 +113,14 @@ fn read_tagged<R: Read + Seek>(
             let extras = vorbis_extras(f.vorbis_comments());
             (f.into(), extras)
         }
-        Some(ft) => (Probe::with_file_type(reader, ft).options(opts).read()?, RawExtras::default()),
-        None => (Probe::new(reader).options(opts).read()?, RawExtras::default()),
+        Some(ft) => (
+            Probe::with_file_type(reader, ft).options(opts).read()?,
+            RawExtras::default(),
+        ),
+        None => (
+            Probe::new(reader).options(opts).read()?,
+            RawExtras::default(),
+        ),
     })
 }
 
@@ -130,10 +143,22 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
 
     let tag = file.primary_tag().or_else(|| file.first_tag());
     if let Some(tag) = tag {
-        meta.title = tag.title().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        meta.artist = tag.artist().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        meta.album = tag.album().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        meta.genre = tag.genre().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        meta.title = tag
+            .title()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        meta.artist = tag
+            .artist()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        meta.album = tag
+            .album()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        meta.genre = tag
+            .genre()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         meta.albumartist = get_str(tag, ItemKey::AlbumArtist);
         meta.titlesort = get_str(tag, ItemKey::TrackTitleSortOrder);
         meta.artistsort = get_str(tag, ItemKey::TrackArtistSortOrder);
@@ -148,12 +173,14 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
             .or_else(|| get_str(tag, ItemKey::IntegerBpm))
             .and_then(|s| leading_int(&s))
             .filter(|n| *n > 0);
-        meta.track_no = tag.track().map(|n| n as i64).or_else(|| {
-            get_str(tag, ItemKey::TrackNumber).and_then(|s| leading_int(&s))
-        });
-        meta.disc_no = tag.disk().map(|n| n as i64).or_else(|| {
-            get_str(tag, ItemKey::DiscNumber).and_then(|s| leading_int(&s))
-        });
+        meta.track_no = tag
+            .track()
+            .map(|n| n as i64)
+            .or_else(|| get_str(tag, ItemKey::TrackNumber).and_then(|s| leading_int(&s)));
+        meta.disc_no = tag
+            .disk()
+            .map(|n| n as i64)
+            .or_else(|| get_str(tag, ItemKey::DiscNumber).and_then(|s| leading_int(&s)));
         meta.date = get_str(tag, ItemKey::RecordingDate)
             .or_else(|| get_str(tag, ItemKey::Year))
             .or_else(|| get_str(tag, ItemKey::OriginalReleaseDate));
@@ -182,7 +209,9 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
 }
 
 fn get_str(tag: &lofty::tag::Tag, key: ItemKey) -> Option<String> {
-    tag.get_string(key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    tag.get_string(key)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// "5/12" -> 5, "05" -> 5

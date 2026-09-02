@@ -109,8 +109,7 @@ fn main() -> anyhow::Result<()> {
         // Seek to 80% and confirm the position lands there.
         if let Some(dur) = playbin.query_duration::<gstreamer::ClockTime>() {
             let target = dur.mseconds() * 8 / 10;
-            let flush_stops_before =
-                flush_stops.load(std::sync::atomic::Ordering::Relaxed);
+            let flush_stops_before = flush_stops.load(std::sync::atomic::Ordering::Relaxed);
             playbin.seek_simple(
                 gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
                 gstreamer::ClockTime::from_mseconds(target),

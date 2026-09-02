@@ -8,10 +8,16 @@ use lofty::file::AudioFile;
 use lofty::probe::Probe;
 
 fn main() -> anyhow::Result<()> {
-    let path = std::env::args().nth(1).expect("usage: waveform_test <audio-file>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: waveform_test <audio-file>");
 
     // Duration is what production passes in (it comes from the DB there).
-    let duration_ms = Probe::open(&path)?.read()?.properties().duration().as_millis() as i64;
+    let duration_ms = Probe::open(&path)?
+        .read()?
+        .properties()
+        .duration()
+        .as_millis() as i64;
 
     let peaks = crescendo_lib::waveform::decode_peaks(&path, duration_ms)?;
 
@@ -26,6 +32,10 @@ fn main() -> anyhow::Result<()> {
 
     println!("duration_ms={duration_ms} buckets={}", peaks.len());
     println!("{sparkline}");
-    println!("nonzero={nonzero}/{} max={}", peaks.len(), peaks.iter().max().unwrap_or(&0));
+    println!(
+        "nonzero={nonzero}/{} max={}",
+        peaks.len(),
+        peaks.iter().max().unwrap_or(&0)
+    );
     Ok(())
 }

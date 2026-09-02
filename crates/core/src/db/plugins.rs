@@ -193,12 +193,18 @@ impl Db {
                     "DELETE FROM plugin_storage WHERE plugin_id = ?1",
                     [plugin_id],
                 )?;
-                tx.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1", [plugin_id])?;
+                tx.execute(
+                    "DELETE FROM plugin_grants WHERE plugin_id = ?1",
+                    [plugin_id],
+                )?;
                 tx.execute("DELETE FROM plugin_state WHERE plugin_id = ?1", [plugin_id])?;
             } else {
                 // Even when data is kept, the grant does not outlive the
                 // installed package it was pinned to.
-                tx.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1", [plugin_id])?;
+                tx.execute(
+                    "DELETE FROM plugin_grants WHERE plugin_id = ?1",
+                    [plugin_id],
+                )?;
             }
             tx.commit()?;
             Ok(())
@@ -269,20 +275,21 @@ impl Db {
                 )
                 .optional()?)
         })?;
-        let Some((permissions_json, domains_json, version, package_hash, granted_at)) = row
-        else {
+        let Some((permissions_json, domains_json, version, package_hash, granted_at)) = row else {
             return Ok(None);
         };
         // A grant whose stored values no longer parse is treated as absent:
         // the plugin simply requires a fresh, explicit approval.
-        let (permission_strings, domain_strings): (Vec<String>, Vec<String>) =
-            match (serde_json::from_str(&permissions_json), serde_json::from_str(&domains_json)) {
-                (Ok(permissions), Ok(domains)) => (permissions, domains),
-                _ => {
-                    log::warn!("ignoring invalid stored grant for {plugin_id}");
-                    return Ok(None);
-                }
-            };
+        let (permission_strings, domain_strings): (Vec<String>, Vec<String>) = match (
+            serde_json::from_str(&permissions_json),
+            serde_json::from_str(&domains_json),
+        ) {
+            (Ok(permissions), Ok(domains)) => (permissions, domains),
+            _ => {
+                log::warn!("ignoring invalid stored grant for {plugin_id}");
+                return Ok(None);
+            }
+        };
         let (Ok(permissions), Ok(network_domains)) = (
             parse_permissions(&permission_strings),
             crate::plugins::parse_stored_network_domains(&domain_strings),
@@ -373,7 +380,8 @@ impl Db {
                  ORDER BY storage_key",
             )?;
             let rows = stmt.query_map([plugin_id], |row| row.get(0))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(Into::into)
         })
     }
 
@@ -396,7 +404,10 @@ impl Db {
 
     pub fn plugin_storage_clear(&self, plugin_id: &str) -> Result<()> {
         self.with(|conn| {
-            conn.execute("DELETE FROM plugin_storage WHERE plugin_id = ?1", [plugin_id])?;
+            conn.execute(
+                "DELETE FROM plugin_storage WHERE plugin_id = ?1",
+                [plugin_id],
+            )?;
             Ok(())
         })
     }

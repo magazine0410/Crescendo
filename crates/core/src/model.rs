@@ -190,19 +190,31 @@ pub struct TrackSort {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PlayContext {
-    Album { id: i64 },
-    Playlist { id: i64 },
+    Album {
+        id: i64,
+    },
+    Playlist {
+        id: i64,
+    },
     /// A playlist narrowed by the simple text filter used by PlaylistView.
     /// Playback resolves the matches again in Rust so track-id lists never
     /// cross IPC.
-    FilteredPlaylist { id: i64, query: String },
+    FilteredPlaylist {
+        id: i64,
+        query: String,
+    },
     /// Several playlists shown as one list (Ctrl/Shift-multi-select in the
     /// sidebar). Their tracks play back to back, in the order given — the
     /// same order the view draws them in.
-    Playlists { ids: Vec<i64> },
+    Playlists {
+        ids: Vec<i64>,
+    },
     /// The filtered form of `Playlists`, preserving playlist order first and
     /// position within each playlist second.
-    FilteredPlaylists { ids: Vec<i64>, query: String },
+    FilteredPlaylists {
+        ids: Vec<i64>,
+        query: String,
+    },
     LibraryView {
         query: Option<String>,
         /// Revision of the projection used to render the clicked row.

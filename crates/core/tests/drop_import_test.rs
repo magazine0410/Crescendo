@@ -29,7 +29,11 @@ fn fixture() -> (tempfile::TempDir, Db, PathBuf, PathBuf) {
 }
 
 fn track_paths(db: &Db, playlist: i64) -> Vec<String> {
-    db.playlist_tracks(playlist).unwrap().into_iter().map(|t| t.path).collect()
+    db.playlist_tracks(playlist)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.path)
+        .collect()
 }
 
 #[test]
@@ -45,7 +49,10 @@ fn folder_drop_adds_every_audio_file() {
 
     let paths = track_paths(&db, pl);
     assert_eq!(paths.len(), 3);
-    assert!(paths.iter().all(|p| !p.ends_with("cover.jpg")), "non-audio must be ignored");
+    assert!(
+        paths.iter().all(|p| !p.ends_with("cover.jpg")),
+        "non-audio must be ignored"
+    );
 }
 
 #[test]
@@ -83,7 +90,10 @@ fn a_file_listed_twice_in_one_drop_is_added_once() {
     // The folder and one of its own files dropped together.
     let r = add_paths_to_playlist(&db, pl, &[album, file]).unwrap();
     assert_eq!(r.added, 3);
-    assert_eq!(r.duplicates, 0, "the repeat is dropped during expansion, not counted");
+    assert_eq!(
+        r.duplicates, 0,
+        "the repeat is dropped during expansion, not counted"
+    );
     assert_eq!(track_paths(&db, pl).len(), 3);
 }
 
@@ -96,9 +106,14 @@ fn known_tracks_are_reused_instead_of_reimported() {
 
     let r = add_paths_to_playlist(&db, second, &[album]).unwrap();
     assert_eq!(r.added, 3);
-    assert_eq!(r.imported, 0, "the files entered the library on the first drop");
+    assert_eq!(
+        r.imported, 0,
+        "the files entered the library on the first drop"
+    );
 
-    let total: i64 = db.with(|c| Ok(c.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?)).unwrap();
+    let total: i64 = db
+        .with(|c| Ok(c.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?))
+        .unwrap();
     assert_eq!(total, 3, "no duplicate track rows");
 }
 
@@ -110,9 +125,18 @@ fn folder_drop_follows_album_order_not_filename_order() {
 
     // Tag the imported rows so disc/track numbers disagree with the names.
     db.with(|conn| {
-        conn.execute("UPDATE tracks SET disc_no = 1, track_no = 3 WHERE filename = '01 - a.flac'", [])?;
-        conn.execute("UPDATE tracks SET disc_no = 1, track_no = 1 WHERE filename = '02 - b.flac'", [])?;
-        conn.execute("UPDATE tracks SET disc_no = 2, track_no = 1 WHERE filename = '03 - c.mp3'", [])?;
+        conn.execute(
+            "UPDATE tracks SET disc_no = 1, track_no = 3 WHERE filename = '01 - a.flac'",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE tracks SET disc_no = 1, track_no = 1 WHERE filename = '02 - b.flac'",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE tracks SET disc_no = 2, track_no = 1 WHERE filename = '03 - c.mp3'",
+            [],
+        )?;
         Ok(())
     })
     .unwrap();
@@ -121,7 +145,13 @@ fn folder_drop_follows_album_order_not_filename_order() {
     add_paths_to_playlist(&db, fresh, &[album]).unwrap();
     let names: Vec<String> = track_paths(&db, fresh)
         .iter()
-        .map(|p| Path::new(p).file_name().unwrap().to_string_lossy().to_string())
+        .map(|p| {
+            Path::new(p)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        })
         .collect();
     assert_eq!(names, vec!["02 - b.flac", "01 - a.flac", "03 - c.mp3"]);
 }
@@ -203,7 +233,10 @@ fn dropping_only_non_audio_changes_nothing() {
     let r = add_paths_to_playlist(&db, pl, &[album.join("cover.jpg")]).unwrap();
     assert_eq!(r.added, 0);
     assert_eq!(r.imported, 0);
-    assert!(r.failed.is_empty(), "a file that is not audio is ignored, not a failure");
+    assert!(
+        r.failed.is_empty(),
+        "a file that is not audio is ignored, not a failure"
+    );
     assert!(track_paths(&db, pl).is_empty());
 }
 

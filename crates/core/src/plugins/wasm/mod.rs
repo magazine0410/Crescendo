@@ -164,7 +164,11 @@ struct RuntimeStates {
 }
 
 impl RuntimeStates {
-    fn with_plugin<T>(&self, plugin_id: &str, body: impl FnOnce(&mut PluginRuntimeState) -> T) -> T {
+    fn with_plugin<T>(
+        &self,
+        plugin_id: &str,
+        body: impl FnOnce(&mut PluginRuntimeState) -> T,
+    ) -> T {
         let mut plugins = self
             .plugins
             .lock()
@@ -260,7 +264,18 @@ impl WasmHandle {
         let invoke_timeout = limits.invoke_timeout;
         let thread = thread::Builder::new()
             .name("crescendo-plugin-wasm".into())
-            .spawn(move || run(specs, db, limits, rx, worker_states, player, notifier, paths))
+            .spawn(move || {
+                run(
+                    specs,
+                    db,
+                    limits,
+                    rx,
+                    worker_states,
+                    player,
+                    notifier,
+                    paths,
+                )
+            })
             .context("could not spawn the Wasm plugin runtime thread")?;
         Ok(Self {
             tx,
@@ -467,7 +482,10 @@ fn setting_json_to_string(value: &Value) -> String {
 /// `crescendo:host/host` — live settings read and the bounded diagnostic log.
 impl crescendo::host::host::Host for StoreData {
     fn settings(&mut self) -> Vec<crescendo::host::host::Setting> {
-        let stored = self.db.plugin_settings_get(&self.plugin_id).unwrap_or_default();
+        let stored = self
+            .db
+            .plugin_settings_get(&self.plugin_id)
+            .unwrap_or_default();
         self.manifest
             .contributes
             .settings
@@ -502,9 +520,9 @@ impl crescendo::host::host::Host for StoreData {
 fn valid_storage_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= MAX_STORAGE_KEY_BYTES
-        && key
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.'))
+        && key.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        })
 }
 
 /// `crescendo:host/storage` — namespaced key/value storage, gated by the
@@ -569,9 +587,7 @@ impl crescendo::host::storage::Host for StoreData {
             .map_err(|_| crescendo::host::storage::StorageError::Denied)
     }
 
-    fn keys(
-        &mut self,
-    ) -> std::result::Result<Vec<String>, crescendo::host::storage::StorageError> {
+    fn keys(&mut self) -> std::result::Result<Vec<String>, crescendo::host::storage::StorageError> {
         if self.require(PluginPermission::Storage).is_err() {
             return Err(crescendo::host::storage::StorageError::Denied);
         }
@@ -597,7 +613,8 @@ impl crescendo::host::library::Host for StoreData {
         &mut self,
         offset: u64,
         limit: u32,
-    ) -> std::result::Result<crescendo::host::library::Page, crescendo::host::library::LibraryError> {
+    ) -> std::result::Result<crescendo::host::library::Page, crescendo::host::library::LibraryError>
+    {
         if self.require(PluginPermission::LibraryRead).is_err() {
             return Err(crescendo::host::library::LibraryError::Denied);
         }
@@ -764,11 +781,7 @@ impl crescendo::host::playlists::Host for StoreData {
         if limit == 0 || limit > MAX_LIBRARY_PAGE as usize {
             return Err(crescendo::host::playlists::PlaylistError::InvalidRequest);
         }
-        if !self
-            .db
-            .playlist_exists(playlist_id as i64)
-            .unwrap_or(false)
-        {
+        if !self.db.playlist_exists(playlist_id as i64).unwrap_or(false) {
             return Err(crescendo::host::playlists::PlaylistError::NotFound);
         }
         // Same wrap as the library page: a u64 offset past i64::MAX would go
@@ -897,9 +910,7 @@ impl crescendo::host::net::Host for StoreData {
                     || message.contains("plain http")
                 {
                     Err(crescendo::host::net::NetError::BlockedHost)
-                } else if message.contains("support GET and POST")
-                    || message.contains("256 KiB")
-                {
+                } else if message.contains("support GET and POST") || message.contains("256 KiB") {
                     Err(crescendo::host::net::NetError::InvalidRequest)
                 } else {
                     Err(crescendo::host::net::NetError::Transport(message))
@@ -941,7 +952,10 @@ fn run(
         Ok(engine) => engine,
         Err(error) => {
             for spec in &specs {
-                states.record_failure(&spec.id, &format!("could not start the Wasm engine: {error}"));
+                states.record_failure(
+                    &spec.id,
+                    &format!("could not start the Wasm engine: {error}"),
+                );
             }
             return;
         }
@@ -1000,8 +1014,8 @@ pub fn preflight_component(module_path: &Path) -> Result<(), String> {
     let mut config = Config::new();
     config.consume_fuel(true);
     config.epoch_interruption(true);
-    let engine =
-        Engine::new(&config).map_err(|error| format!("could not start the Wasm engine: {error}"))?;
+    let engine = Engine::new(&config)
+        .map_err(|error| format!("could not start the Wasm engine: {error}"))?;
     let component = Component::new(&engine, bytes)
         .map_err(|error| format!("module.wasm is not a valid component: {error}"))?;
     let linker = build_linker(&engine);
@@ -1040,10 +1054,10 @@ fn build_linker(engine: &Engine) -> Linker<StoreData> {
         &mut linker,
         |data| data,
     );
-    let _ = crescendo::host::net::add_to_linker::<StoreData, HasSelf<StoreData>>(
-        &mut linker,
-        |data| data,
-    );
+    let _ =
+        crescendo::host::net::add_to_linker::<StoreData, HasSelf<StoreData>>(&mut linker, |data| {
+            data
+        });
     linker
 }
 
@@ -1135,13 +1149,12 @@ impl RuntimeThread<'_> {
                 HostEvent::PlayerStateChanged => {
                     commands.call_on_player_state_changed(&mut plugin.store)
                 }
-                HostEvent::TrackChanged(track_id) => commands
-                    .call_on_track_changed(&mut plugin.store, track_id.map(|id| id as u64)),
+                HostEvent::TrackChanged(track_id) => {
+                    commands.call_on_track_changed(&mut plugin.store, track_id.map(|id| id as u64))
+                }
                 HostEvent::LibraryChanged => commands.call_on_library_changed(&mut plugin.store),
-                HostEvent::PlaylistChanged(playlist_id) => commands.call_on_playlist_changed(
-                    &mut plugin.store,
-                    playlist_id.map(|id| id as u64),
-                ),
+                HostEvent::PlaylistChanged(playlist_id) => commands
+                    .call_on_playlist_changed(&mut plugin.store, playlist_id.map(|id| id as u64)),
             };
             if let Err(error) = outcome {
                 self.states
@@ -1170,7 +1183,7 @@ impl RuntimeThread<'_> {
                 self.player.clone(),
                 self.notifier.clone(),
             )
-                .map_err(|error| format!("{error:#}"))?,
+            .map_err(|error| format!("{error:#}"))?,
         );
         store.limiter(|data| &mut data.limiter);
         store
@@ -1185,7 +1198,8 @@ impl RuntimeThread<'_> {
             .map_err(|error| format!("init trapped: {error}"))
             .and_then(|result| result.map_err(|()| "init returned an error".to_string()))?;
 
-        self.plugins.insert(spec.id.clone(), PluginInstance { instance, store });
+        self.plugins
+            .insert(spec.id.clone(), PluginInstance { instance, store });
         self.states.mark_ready(&spec.id);
         // `mark_ready` clears only this session's view. The persisted count is
         // what decides auto-disable, and it must mean *consecutive* failures:
@@ -1236,14 +1250,14 @@ impl RuntimeThread<'_> {
                 })
                 .is_ok();
             if disabled {
-                format!(
-                    "Disabled after repeated startup failures; the last failure was: {message}"
-                )
+                format!("Disabled after repeated startup failures; the last failure was: {message}")
             } else {
                 message
             }
         } else {
-            let _ = self.db.plugin_record_error_preserving_state(&spec.id, &message);
+            let _ = self
+                .db
+                .plugin_record_error_preserving_state(&spec.id, &message);
             message
         };
         self.states.record_failure(&spec.id, &message);
@@ -1310,14 +1324,17 @@ impl RuntimeThread<'_> {
             return;
         }
         if let Err(error) = plugin.store.set_fuel(self.limits.fuel) {
-            self.states.record_failure(plugin_id, &format!("could not arm fuel: {error:#}"));
+            self.states
+                .record_failure(plugin_id, &format!("could not arm fuel: {error:#}"));
             return;
         }
         plugin.store.set_epoch_deadline(self.limits.epoch_ticks);
         let commands = plugin.instance.crescendo_plugin_commands();
         if let Err(error) = commands.call_on_settings_changed(&mut plugin.store) {
-            self.states
-                .record_failure(plugin_id, &format!("on-settings-changed trapped: {error:#}"));
+            self.states.record_failure(
+                plugin_id,
+                &format!("on-settings-changed trapped: {error:#}"),
+            );
         }
     }
 }
@@ -1407,7 +1424,10 @@ mod tests {
         let states = RuntimeStates::default();
         for index in 0..UNHEALTHY_FAILURE_LIMIT {
             states.record_failure("p", &format!("failure {index}"));
-            assert_eq!(states.info("p").unhealthy, index == UNHEALTHY_FAILURE_LIMIT - 1);
+            assert_eq!(
+                states.info("p").unhealthy,
+                index == UNHEALTHY_FAILURE_LIMIT - 1
+            );
         }
         let info = states.info("p");
         assert!(info.unhealthy);

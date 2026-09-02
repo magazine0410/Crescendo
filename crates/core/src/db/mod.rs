@@ -1,9 +1,9 @@
-mod schema;
 pub mod collections;
 pub mod playlists;
 pub mod plugins;
 pub mod prefs;
 pub mod queries;
+mod schema;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -24,7 +24,10 @@ impl Db {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Self::open_conn(path)?;
-        let db = Self { conn: Mutex::new(conn), path: path.to_path_buf() };
+        let db = Self {
+            conn: Mutex::new(conn),
+            path: path.to_path_buf(),
+        };
         // Once per process, not in `open_conn` — the scanner's side connection
         // must not repeat it.
         db.lastfm_cache_prune(crate::lastfm::CACHE_TTL_SECS)?;
@@ -70,9 +73,10 @@ fn register_udfs(conn: &Connection) -> Result<()> {
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |ctx| {
-            let value = ctx.get_raw(0).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
+            let value = ctx
+                .get_raw(0)
+                .as_str_or_null()
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
             Ok(value.map(str::to_lowercase))
         },
     )?;
@@ -82,12 +86,14 @@ fn register_udfs(conn: &Connection) -> Result<()> {
         2,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |ctx| {
-            let hay = ctx.get_raw(0).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
-            let needle = ctx.get_raw(1).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
+            let hay = ctx
+                .get_raw(0)
+                .as_str_or_null()
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
+            let needle = ctx
+                .get_raw(1)
+                .as_str_or_null()
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
             Ok(match (hay, needle) {
                 (Some(h), Some(n)) => {
                     let h = h.to_lowercase();
@@ -104,9 +110,10 @@ fn register_udfs(conn: &Connection) -> Result<()> {
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |ctx| {
-            let value = ctx.get_raw(0).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
+            let value = ctx
+                .get_raw(0)
+                .as_str_or_null()
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
             Ok(value.is_some_and(|s| {
                 s.chars().any(|c| {
                     matches!(
@@ -132,12 +139,14 @@ fn register_udfs(conn: &Connection) -> Result<()> {
         2,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         move |ctx| {
-            let pattern = ctx.get_raw(0).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
-            let text = ctx.get_raw(1).as_str_or_null().map_err(|e| {
-                rusqlite::Error::UserFunctionError(Box::new(e))
-            })?;
+            let pattern = ctx
+                .get_raw(0)
+                .as_str_or_null()
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
+            let text = ctx
+                .get_raw(1)
+                .as_str_or_null()
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
             let (Some(pattern), Some(text)) = (pattern, text) else {
                 return Ok(false);
             };

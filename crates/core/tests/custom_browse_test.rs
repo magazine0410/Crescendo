@@ -8,8 +8,18 @@ use std::collections::HashMap;
 fn make_db() -> (tempfile::TempDir, Db) {
     // (year, genre, albumartist, albumartistsort)
     let rows: [(Option<i64>, Option<&str>, Option<&str>, Option<&str>); 4] = [
-        (Some(1999), Some("ジャズ"), Some("上海アリス幻樂団"), Some("Shanghai Alice")),
-        (Some(1999), Some("ジャズ"), Some("上海アリス幻樂団"), Some("Shanghai Alice")),
+        (
+            Some(1999),
+            Some("ジャズ"),
+            Some("上海アリス幻樂団"),
+            Some("Shanghai Alice"),
+        ),
+        (
+            Some(1999),
+            Some("ジャズ"),
+            Some("上海アリス幻樂団"),
+            Some("Shanghai Alice"),
+        ),
         (Some(2000), Some("Rock"), Some("Zulu"), None),
         (None, None, None, None),
     ];
@@ -43,7 +53,11 @@ fn counts(vals: &[BrowseValue]) -> HashMap<String, i64> {
 }
 
 fn browse_value(value: &str, count: i64) -> BrowseValue {
-    BrowseValue { value: value.into(), count, sort_value: None }
+    BrowseValue {
+        value: value.into(),
+        count,
+        sort_value: None,
+    }
 }
 
 fn custom(tag: &str) -> BrowseMode {
@@ -54,7 +68,9 @@ fn custom(tag: &str) -> BrowseMode {
 fn fixed_albumartist_uses_romanized_sort_values() {
     let (_d, db) = make_db();
 
-    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
+    let vals = db
+        .browse_values_exact(BrowseMode::Albumartist, None)
+        .unwrap();
     assert_eq!(
         vals,
         vec![
@@ -87,7 +103,9 @@ fn fixed_albumartist_merges_raw_names_that_render_as_the_same_name() {
     })
     .unwrap();
 
-    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
+    let vals = db
+        .browse_values_exact(BrowseMode::Albumartist, None)
+        .unwrap();
     assert_eq!(
         vals.iter().find(|v| v.value == "Shanghai Alice"),
         Some(&browse_value("Shanghai Alice", 4)),
@@ -115,7 +133,9 @@ fn prefer_romanized_off_orders_album_artists_by_the_shown_name() {
     db.prefs_set("prefer_romanized", "false").unwrap();
 
     // Rows use and order by the untouched name: 上海… falls after the Latin ones.
-    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
+    let vals = db
+        .browse_values_exact(BrowseMode::Albumartist, None)
+        .unwrap();
     assert_eq!(
         vals,
         vec![
@@ -141,10 +161,18 @@ fn latin_albumartist_is_ordered_by_its_visible_name_not_its_sort_tag() {
     })
     .unwrap();
 
-    let vals = db.browse_values_exact(BrowseMode::Albumartist, None).unwrap();
+    let vals = db
+        .browse_values_exact(BrowseMode::Albumartist, None)
+        .unwrap();
     let ara = vals.iter().position(|v| v.value == "ARA").unwrap();
-    let shanghai = vals.iter().position(|v| v.value == "Shanghai Alice").unwrap();
-    assert!(ara < shanghai, "ARA is displayed and therefore sorted under A, not C");
+    let shanghai = vals
+        .iter()
+        .position(|v| v.value == "Shanghai Alice")
+        .unwrap();
+    assert!(
+        ara < shanghai,
+        "ARA is displayed and therefore sorted under A, not C"
+    );
 }
 
 #[test]
@@ -177,9 +205,21 @@ fn selecting_custom_integer_value_matches_via_text_compare() {
 
     // The selected value is a string ("1999") compared against an INTEGER column
     // — the CAST-to-TEXT is what makes this equal.
-    assert_eq!(db.track_count_exact(None, custom("year"), &["1999".into()]).unwrap(), 2);
-    assert_eq!(db.track_count_exact(None, custom("year"), &["2000".into()]).unwrap(), 1);
-    assert_eq!(db.track_count_exact(None, custom("year"), &["".into()]).unwrap(), 1);
+    assert_eq!(
+        db.track_count_exact(None, custom("year"), &["1999".into()])
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.track_count_exact(None, custom("year"), &["2000".into()])
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.track_count_exact(None, custom("year"), &["".into()])
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -191,7 +231,11 @@ fn custom_genre_handles_non_ascii_values() {
     assert_eq!(c.get("ジャズ"), Some(&2));
     assert_eq!(c.get("Rock"), Some(&1));
     // Selecting a CJK value round-trips.
-    assert_eq!(db.track_count_exact(None, custom("genre"), &["ジャズ".into()]).unwrap(), 2);
+    assert_eq!(
+        db.track_count_exact(None, custom("genre"), &["ジャズ".into()])
+            .unwrap(),
+        2
+    );
 }
 
 #[test]
@@ -199,9 +243,16 @@ fn unresolvable_custom_tag_yields_nothing() {
     let (_d, db) = make_db();
 
     // Unknown tag → empty value list …
-    assert!(db.browse_values_exact(custom("mood"), None).unwrap().is_empty());
+    assert!(db
+        .browse_values_exact(custom("mood"), None)
+        .unwrap()
+        .is_empty());
     // … and selecting against it matches no tracks (the `AND 0` guard).
-    assert_eq!(db.track_count_exact(None, custom("nope"), &["x".into()]).unwrap(), 0);
+    assert_eq!(
+        db.track_count_exact(None, custom("nope"), &["x".into()])
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

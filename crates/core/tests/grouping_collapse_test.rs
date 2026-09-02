@@ -100,25 +100,19 @@ fn selecting_umbrella_matches_every_variant() {
     // Collapsed selection matches all three variants; uncollapsed matches only
     // the byte-exact tag.
     assert_eq!(
-        db.track_count_with_plan(None, Some(&plan), &[umbrella.into()]).unwrap(),
+        db.track_count_with_plan(None, Some(&plan), &[umbrella.into()])
+            .unwrap(),
         3
     );
     assert_eq!(
-        db.track_count_exact(None, grouping(), &[umbrella.into()]).unwrap(),
+        db.track_count_exact(None, grouping(), &[umbrella.into()])
+            .unwrap(),
         1
     );
 
     // tracks_range (the windowed list + play-queue order) agrees with the count.
     let rows = db
-        .tracks_range_with_plan(
-            None,
-            Some(&plan),
-            &[umbrella.into()],
-            true,
-            None,
-            0,
-            100,
-        )
+        .tracks_range_with_plan(None, Some(&plan), &[umbrella.into()], true, None, 0, 100)
         .unwrap();
     assert_eq!(rows.len(), 3);
     assert_eq!(
@@ -133,15 +127,8 @@ fn selecting_umbrella_matches_every_variant() {
     let ids: Vec<_> = rows.iter().map(|track| track.id).collect();
     for (expected, id) in ids.iter().enumerate() {
         assert_eq!(
-            db.track_index_with_plan(
-                None,
-                Some(&plan),
-                &[umbrella.into()],
-                true,
-                None,
-                *id,
-            )
-            .unwrap(),
+            db.track_index_with_plan(None, Some(&plan), &[umbrella.into()], true, None, *id,)
+                .unwrap(),
             Some(expected as i64)
         );
     }

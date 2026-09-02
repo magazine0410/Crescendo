@@ -66,7 +66,10 @@ pub async fn prefs_set(
             projection_changed: revision != before,
         });
     }
-    state.db.prefs_set(&key, &value).map_err(|e| e.to_string())?;
+    state
+        .db
+        .prefs_set(&key, &value)
+        .map_err(|e| e.to_string())?;
     let revision = state
         .plugins
         .projection(None)
@@ -176,7 +179,10 @@ pub async fn about_info() -> AboutInfo {
 /// request, then served from disk. Runs off-thread so the UI never blocks.
 #[tauri::command]
 pub async fn waveform_get(state: State<'_, AppState>, track_id: i64) -> Result<Vec<u8>, String> {
-    let _permit = WAVEFORM_PERMITS.acquire().await.map_err(|e| e.to_string())?;
+    let _permit = WAVEFORM_PERMITS
+        .acquire()
+        .await
+        .map_err(|e| e.to_string())?;
     let db = state.db.clone();
     let wf = state.waveform.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -187,7 +193,12 @@ pub async fn waveform_get(state: State<'_, AppState>, track_id: i64) -> Result<V
 }
 
 fn api_key(state: &State<'_, AppState>) -> String {
-    state.db.prefs_get("lastfm_api_key").ok().flatten().unwrap_or_default()
+    state
+        .db
+        .prefs_get("lastfm_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -279,7 +290,9 @@ pub async fn autostart_get() -> Result<bool, String> {
 #[cfg(target_os = "linux")]
 fn find_on_path(cmd: &str) -> Option<std::path::PathBuf> {
     let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths).map(|d| d.join(cmd)).find(|p| p.is_file())
+    std::env::split_paths(&paths)
+        .map(|d| d.join(cmd))
+        .find(|p| p.is_file())
 }
 
 /// The command the autostart entry should launch (already shell-quoted).
@@ -296,10 +309,12 @@ fn autostart_exec() -> Result<String, String> {
         if let Some(installed) = find_on_path("crescendo") {
             return Ok(format!("\"{}\"", installed.display()));
         }
-        return Err("Autostart needs the installed Crescendo app, but no `crescendo` \
+        return Err(
+            "Autostart needs the installed Crescendo app, but no `crescendo` \
                     was found on PATH. Install the .deb/.rpm and enable this from the \
                     installed app rather than from `tauri dev`."
-            .into());
+                .into(),
+        );
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     Ok(format!("\"{}\"", exe.display()))
@@ -353,7 +368,8 @@ pub async fn open_cover_window(
     let url = format!("/cover?{query}");
     if let Some(win) = app.get_webview_window("cover") {
         // Reuse the window, navigate it to the new art.
-        win.eval(&format!("window.location.href = '{url}'")).map_err(|e| e.to_string())?;
+        win.eval(&format!("window.location.href = '{url}'"))
+            .map_err(|e| e.to_string())?;
         win.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
     }

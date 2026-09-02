@@ -42,13 +42,19 @@ fn sort_key_sql(key: SortKey, romanized: bool) -> &'static str {
 /// and to `resolve_context_with_projection` or a row's index stops matching
 /// its queue position.
 pub fn order_sql(sort: Option<TrackSort>, romanized: bool) -> String {
-    let Some(s) = sort else { return LIBRARY_SORT.into() };
+    let Some(s) = sort else {
+        return LIBRARY_SORT.into();
+    };
     let dir = if s.descending { " DESC" } else { "" };
     let mut used = vec![s.key];
     let mut out = format!("{}{dir}", sort_key_sql(s.key, romanized));
     if let Some(sec) = s.secondary.filter(|k| *k != s.key) {
         used.push(sec);
-        let sec_dir = if s.secondary_descending.unwrap_or(s.descending) { " DESC" } else { "" };
+        let sec_dir = if s.secondary_descending.unwrap_or(s.descending) {
+            " DESC"
+        } else {
+            ""
+        };
         out = format!("{out}, {}{sec_dir}", sort_key_sql(sec, romanized));
     }
     const CHAIN: [(Option<SortKey>, &str); 6] = [
@@ -150,7 +156,10 @@ fn album_from_row(r: &Row) -> rusqlite::Result<Album> {
 /// WHERE fragment for live (non-missing) tracks plus an optional search filter.
 fn track_where(filter: Option<&SearchFilter>) -> (String, Vec<Value>) {
     match filter {
-        Some(f) => (format!("missing = 0 AND ({})", f.where_sql), f.params.clone()),
+        Some(f) => (
+            format!("missing = 0 AND ({})", f.where_sql),
+            f.params.clone(),
+        ),
         None => ("missing = 0".into(), vec![]),
     }
 }
@@ -164,8 +173,7 @@ const DURATION_BUCKET: &str = "CAST(duration_ms / 60000 AS TEXT)";
 /// local calendar days: `0` = today, `1` = yesterday. Collapsing each side to
 /// its own midnight keeps the time of day (and any DST jump between them) from
 /// moving a play across a bucket edge. NULL for a track that was never played.
-const DAYS_SINCE_LAST_PLAY: &str =
-    "CAST(ROUND(julianday('now', 'localtime', 'start of day') \
+const DAYS_SINCE_LAST_PLAY: &str = "CAST(ROUND(julianday('now', 'localtime', 'start of day') \
                 - julianday(last_played, 'unixepoch', 'localtime', 'start of day')) AS INTEGER)";
 
 /// How long ago a track was last played, as a TEXT bucket number — the value
@@ -377,18 +385,21 @@ impl Db {
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
-            let albums =
-                conn.query_row("SELECT COUNT(*) FROM albums", [], |r| r.get(0))?;
+            let albums = conn.query_row("SELECT COUNT(*) FROM albums", [], |r| r.get(0))?;
             let mut formats = std::collections::HashMap::new();
-            let mut stmt = conn.prepare(
-                "SELECT format, COUNT(*) FROM tracks WHERE missing = 0 GROUP BY format",
-            )?;
+            let mut stmt = conn
+                .prepare("SELECT format, COUNT(*) FROM tracks WHERE missing = 0 GROUP BY format")?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
             for row in rows {
                 let (k, v) = row?;
                 formats.insert(k, v);
             }
-            Ok(LibraryStats { tracks, albums, total_duration_ms, formats })
+            Ok(LibraryStats {
+                tracks,
+                albums,
+                total_duration_ms,
+                formats,
+            })
         })
     }
 
@@ -567,11 +578,10 @@ impl Db {
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!("SELECT COUNT(*) FROM tracks WHERE id IN ({placeholders})");
-            let found: i64 = conn.query_row(
-                &sql,
-                rusqlite::params_from_iter(unique.iter()),
-                |row| row.get(0),
-            )?;
+            let found: i64 =
+                conn.query_row(&sql, rusqlite::params_from_iter(unique.iter()), |row| {
+                    row.get(0)
+                })?;
             Ok(found == unique.len() as i64)
         })
     }
@@ -675,11 +685,11 @@ impl Db {
     /// through bounded pages only.
     pub fn plugin_library_count(&self) -> Result<i64> {
         self.with(|conn| {
-            Ok(conn.query_row(
-                "SELECT COUNT(*) FROM tracks WHERE missing = 0",
-                [],
-                |row| row.get(0),
-            )?)
+            Ok(
+                conn.query_row("SELECT COUNT(*) FROM tracks WHERE missing = 0", [], |row| {
+                    row.get(0)
+                })?,
+            )
         })
     }
 
@@ -694,11 +704,10 @@ impl Db {
         include_paths: bool,
     ) -> Result<PluginLibraryPage> {
         self.with(|conn| {
-            let total: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM tracks WHERE missing = 0",
-                [],
-                |row| row.get(0),
-            )?;
+            let total: i64 =
+                conn.query_row("SELECT COUNT(*) FROM tracks WHERE missing = 0", [], |row| {
+                    row.get(0)
+                })?;
             let path_column = if include_paths { "path" } else { "NULL" };
             let mut stmt = conn.prepare(&format!(
                 "SELECT id, title, artist, album, albumartist, genre, grouping, \
@@ -896,9 +905,9 @@ impl Db {
             PlayContext::Playlist { id } => {
                 self.with(|conn| collect_playlist_ids(conn, std::slice::from_ref(id), None))
             }
-            PlayContext::FilteredPlaylist { id, query } => self.with(|conn| {
-                collect_playlist_ids(conn, std::slice::from_ref(id), Some(query))
-            }),
+            PlayContext::FilteredPlaylist { id, query } => {
+                self.with(|conn| collect_playlist_ids(conn, std::slice::from_ref(id), Some(query)))
+            }
             // Playlist by playlist, so the ids line up with the combined view
             // the user double-clicked in.
             PlayContext::Playlists { ids } => {
@@ -920,7 +929,10 @@ impl Db {
                 })
             }
             PlayContext::ValueTracks {
-                values, query, sort, ..
+                values,
+                query,
+                sort,
+                ..
             } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
@@ -1044,12 +1056,10 @@ fn collect_playlist_ids(
     playlist_ids: &[i64],
     query: Option<&str>,
 ) -> Result<Vec<i64>> {
-    const UNFILTERED: &str =
-        "SELECT pt.track_id FROM playlist_tracks pt \
+    const UNFILTERED: &str = "SELECT pt.track_id FROM playlist_tracks pt \
          JOIN tracks t ON t.id = pt.track_id \
          WHERE pt.playlist_id = ?1 ORDER BY pt.position";
-    const FILTERED: &str =
-        "SELECT pt.track_id FROM playlist_tracks pt \
+    const FILTERED: &str = "SELECT pt.track_id FROM playlist_tracks pt \
          JOIN tracks t ON t.id = pt.track_id \
          WHERE pt.playlist_id = ?1 AND (\
            ucontains(t.title, ?2) OR ucontains(t.artist, ?2) OR \

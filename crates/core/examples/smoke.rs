@@ -24,7 +24,11 @@ fn main() -> anyhow::Result<()> {
     let t0 = Instant::now();
     let result = scan(
         &db,
-        &ScanOptions { root, threads: 4, full },
+        &ScanOptions {
+            root,
+            threads: 4,
+            full,
+        },
         &|p| {
             if p.scanned % 5000 == 0 && !p.done {
                 eprintln!(
@@ -57,9 +61,13 @@ fn main() -> anyhow::Result<()> {
     for mode in [BrowseMode::Genre, BrowseMode::Artist] {
         let t = Instant::now();
         let values = db.browse_values_exact(mode.clone(), None)?;
-        eprintln!("browse {:?}: {} values in {:.1?} (first 5: {:?})",
-            mode, values.len(), t.elapsed(),
-            values.iter().take(5).collect::<Vec<_>>());
+        eprintln!(
+            "browse {:?}: {} values in {:.1?} (first 5: {:?})",
+            mode,
+            values.len(),
+            t.elapsed(),
+            values.iter().take(5).collect::<Vec<_>>()
+        );
     }
 
     for q in [
@@ -93,7 +101,10 @@ fn main() -> anyhow::Result<()> {
             Err(_) => fail += 1,
         }
     }
-    eprintln!("art: {ok} thumbs generated, {fail} without art, in {:.1?}", t.elapsed());
+    eprintln!(
+        "art: {ok} thumbs generated, {fail} without art, in {:.1?}",
+        t.elapsed()
+    );
 
     Ok(())
 }

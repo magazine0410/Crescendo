@@ -179,7 +179,10 @@ pub fn scan(
     {
         let mut stmt = conn.prepare("SELECT path, mtime, size FROM tracks")?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
+            Ok((
+                r.get::<_, String>(0)?,
+                (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?),
+            ))
         })?;
         for row in rows {
             let (path, ms) = row?;
@@ -191,7 +194,12 @@ pub fn scan(
     let added = AtomicU64::new(0);
     let updated = AtomicU64::new(0);
     let errors = AtomicU64::new(0);
-    let counters = Counters { scanned: &scanned, added: &added, updated: &updated, errors: &errors };
+    let counters = Counters {
+        scanned: &scanned,
+        added: &added,
+        updated: &updated,
+        errors: &errors,
+    };
     let (job_tx, job_rx) = bounded::<FileJob>(1024);
     let (write_tx, write_rx) = bounded::<WriteJob>(1024);
 
@@ -268,7 +276,11 @@ fn walk(
     cancel: &AtomicBool,
 ) -> HashMap<String, (i64, i64)> {
     let mut last_emit = 0u64;
-    for entry in walkdir::WalkDir::new(&root).follow_links(false).into_iter().flatten() {
+    for entry in walkdir::WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+    {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
@@ -310,7 +322,10 @@ fn walk(
         }
         let job = FileJob {
             path: path_str.to_string(),
-            dir: path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+            dir: path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
             filename: path
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
@@ -346,7 +361,10 @@ fn write_loop(
         let meta = match job.meta {
             Ok(meta) => meta,
             Err(e) => {
-                log::warn!("tag read failed for {} ({e}); using filename only", file.path);
+                log::warn!(
+                    "tag read failed for {} ({e}); using filename only",
+                    file.path
+                );
                 counters.errors.fetch_add(1, Ordering::Relaxed);
                 tags::fallback_meta(Path::new(&file.path))
             }

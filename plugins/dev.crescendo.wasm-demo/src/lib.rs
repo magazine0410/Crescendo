@@ -89,23 +89,21 @@ impl Guest for Component {
                     Err(StorageError::InvalidKey) => Err("invalid storage key".into()),
                 }
             }
-            "library_summary" => {
-                match library::tracks(0, 50) {
-                    Ok(page) => {
-                        let first = page
-                            .tracks
-                            .first()
-                            .and_then(|track| track.title.clone())
-                            .unwrap_or_default();
-                        Ok(format!(
-                            "{{\"total\":{},\"first_title\":\"{}\"}}",
-                            page.total,
-                            json_escape(&first)
-                        ))
-                    }
-                    Err(_) => Ok("{\"denied\":true}".into()),
+            "library_summary" => match library::tracks(0, 50) {
+                Ok(page) => {
+                    let first = page
+                        .tracks
+                        .first()
+                        .and_then(|track| track.title.clone())
+                        .unwrap_or_default();
+                    Ok(format!(
+                        "{{\"total\":{},\"first_title\":\"{}\"}}",
+                        page.total,
+                        json_escape(&first)
+                    ))
                 }
-            }
+                Err(_) => Ok("{\"denied\":true}".into()),
+            },
             // Capability probes: each reports the outcome as text so a test
             // can tell "denied" from "worked" from "the host has no player".
             "player_state" => Ok(match player::get_state() {

@@ -660,10 +660,16 @@ mod projectm_import_tests {
     fn replacing_a_projectm_root_revokes_its_old_grant() {
         let grants = Mutex::new(ProjectMGrants::default());
         let first = grants.lock().unwrap().register("/first".into());
-        assert_eq!(resolve_projectm_grant(&grants, &first).unwrap(), Path::new("/first"));
+        assert_eq!(
+            resolve_projectm_grant(&grants, &first).unwrap(),
+            Path::new("/first")
+        );
         let second = grants.lock().unwrap().register("/second".into());
         assert!(resolve_projectm_grant(&grants, &first).is_err());
-        assert_eq!(resolve_projectm_grant(&grants, &second).unwrap(), Path::new("/second"));
+        assert_eq!(
+            resolve_projectm_grant(&grants, &second).unwrap(),
+            Path::new("/second")
+        );
     }
 }
 

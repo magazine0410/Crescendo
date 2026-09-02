@@ -18,7 +18,16 @@ fn test_db() -> (tempfile::TempDir, Db) {
         let rows: Vec<(&str, Option<&str>, &str, &str, i64, i64, i64, i64)> = vec![
             ("Aria", None, "Artist A", "Alpha", 1, 1, 2014, 300_000),
             ("Coda", None, "Artist A", "Alpha", 1, 2, 2014, 100_000),
-            ("ボーナス", Some("Bonus"), "Artist B", "Beta", 2, 1, 2010, 200_000),
+            (
+                "ボーナス",
+                Some("Bonus"),
+                "Artist B",
+                "Beta",
+                2,
+                1,
+                2010,
+                200_000,
+            ),
         ];
         for (i, (title, tsort, aa, album, aid, tn, year, dur)) in rows.iter().enumerate() {
             ins.execute(rusqlite::params![
@@ -50,7 +59,12 @@ fn titles(db: &Db, sort: Option<TrackSort>) -> Vec<String> {
 }
 
 fn sort(key: SortKey, secondary: Option<SortKey>, descending: bool) -> Option<TrackSort> {
-    Some(TrackSort { key, secondary, descending, secondary_descending: None })
+    Some(TrackSort {
+        key,
+        secondary,
+        descending,
+        secondary_descending: None,
+    })
 }
 
 #[test]
@@ -97,11 +111,21 @@ fn prefer_romanized_off_sorts_titles_by_the_shown_tag() {
     assert_eq!(titles(&db, s), ["Aria", "Coda", "ボーナス"]);
 
     // The view and the play queue must still agree on that order.
-    let ids = db.resolve_context_exact(&PlayContext::LibraryView { query: None, projection_revision: 0, sort: s }).unwrap();
-    let view = db.tracks_range_exact(None, BrowseMode::Artist, &[], s, 0, 100).unwrap();
+    let ids = db
+        .resolve_context_exact(&PlayContext::LibraryView {
+            query: None,
+            projection_revision: 0,
+            sort: s,
+        })
+        .unwrap();
+    let view = db
+        .tracks_range_exact(None, BrowseMode::Artist, &[], s, 0, 100)
+        .unwrap();
     assert_eq!(ids, view.iter().map(|t| t.id).collect::<Vec<_>>());
     for (i, t) in view.iter().enumerate() {
-        let idx = db.track_index_exact(None, BrowseMode::Artist, &[], s, t.id).unwrap();
+        let idx = db
+            .track_index_exact(None, BrowseMode::Artist, &[], s, t.id)
+            .unwrap();
         assert_eq!(idx, Some(i as i64));
     }
 }
@@ -147,9 +171,15 @@ fn secondary_direction_can_differ_from_primary() {
 fn view_playback_and_index_agree_on_sorted_order() {
     let (_d, db) = test_db();
     let s = sort(SortKey::Duration, None, false);
-    let ctx = PlayContext::LibraryView { query: None, projection_revision: 0, sort: s };
+    let ctx = PlayContext::LibraryView {
+        query: None,
+        projection_revision: 0,
+        sort: s,
+    };
     let ids = db.resolve_context_exact(&ctx).unwrap();
-    let view = db.tracks_range_exact(None, BrowseMode::Artist, &[], s, 0, 100).unwrap();
+    let view = db
+        .tracks_range_exact(None, BrowseMode::Artist, &[], s, 0, 100)
+        .unwrap();
     assert_eq!(ids, view.iter().map(|t| t.id).collect::<Vec<_>>());
     for (i, t) in view.iter().enumerate() {
         let idx = db
@@ -165,7 +195,12 @@ fn track_groups_follow_sorted_order() {
     // Duration ascending interleaves the two albums: Coda (Alpha), ボーナス
     // (Beta), Aria (Alpha) -> three single-track runs, album 1 re-appearing.
     let groups = db
-        .track_groups_exact(None, BrowseMode::Artist, &[], sort(SortKey::Duration, None, false))
+        .track_groups_exact(
+            None,
+            BrowseMode::Artist,
+            &[],
+            sort(SortKey::Duration, None, false),
+        )
         .unwrap();
     let shape: Vec<(Option<i64>, i64)> = groups.iter().map(|g| (g.album_id, g.count)).collect();
     assert_eq!(shape, vec![(Some(1), 1), (Some(2), 1), (Some(1), 1)]);

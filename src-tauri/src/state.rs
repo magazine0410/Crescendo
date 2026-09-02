@@ -45,11 +45,15 @@ pub struct AppState {
 }
 
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("crescendo")
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("crescendo")
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("crescendo")
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("crescendo")
 }
 
 pub fn db_path() -> PathBuf {

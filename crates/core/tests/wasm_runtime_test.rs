@@ -45,7 +45,10 @@ fn wasm_manifest(version: &str, permissions: &[&str]) -> PluginManifest {
         // exports disagree with what it declares.
         api_version: WASM_API_VERSION.into(),
         min_crescendo_version: "0.8.0".into(),
-        permissions: permissions.iter().map(|value| (*value).to_string()).collect(),
+        permissions: permissions
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
         network_domains: vec![],
         contributes: PluginContributions {
             settings: vec![PluginSettingDeclaration::Boolean {
@@ -66,9 +69,9 @@ fn wasm_manifest(version: &str, permissions: &[&str]) -> PluginManifest {
                 "net_fetch",
                 "spin",
             ]
-                .iter()
-                .map(|id| PluginCommandDeclaration { id: (*id).into() })
-                .collect(),
+            .iter()
+            .map(|id| PluginCommandDeclaration { id: (*id).into() })
+            .collect(),
             ..PluginContributions::default()
         },
     }
@@ -101,8 +104,7 @@ fn setup() -> (TempDir, Arc<Db>, PluginManager) {
         Ok(())
     })
     .unwrap();
-    let manager =
-        PluginManager::start(dir.path().join("plugins"), db.clone(), "0.8.0").unwrap();
+    let manager = PluginManager::start(dir.path().join("plugins"), db.clone(), "0.8.0").unwrap();
     (dir, db, manager)
 }
 
@@ -173,9 +175,16 @@ fn a_component_built_against_an_older_compatible_api_still_loads() {
 
     let manager = restart(&dir, db);
     let info = plugin_info(&manager);
-    assert!(info.loaded, "expected the legacy component to load: {:?}", info.error);
+    assert!(
+        info.loaded,
+        "expected the legacy component to load: {:?}",
+        info.error
+    );
     let summary = invoke_once_ready(&manager, "library_summary", serde_json::json!({}));
-    assert_eq!(summary["total"], 2, "the legacy component still reaches the host");
+    assert_eq!(
+        summary["total"], 2,
+        "the legacy component still reaches the host"
+    );
     assert!(plugin_info(&manager).runtime_error.is_none());
 }
 
@@ -215,7 +224,11 @@ fn a_run_command_menu_control_reaches_the_snapshot_and_dispatches() {
 
     // The item dispatches through the one bounded path, exactly like
     // `plugin_invoke`.
-    let result = invoke_once_ready(&manager, control.command.as_deref().unwrap(), serde_json::json!({}));
+    let result = invoke_once_ready(
+        &manager,
+        control.command.as_deref().unwrap(),
+        serde_json::json!({}),
+    );
     assert_eq!(result["total"], 2);
 }
 
@@ -236,10 +249,17 @@ fn an_update_carrying_an_unloadable_component_is_rolled_back() {
 
     // A well-formed package whose module.wasm is not a component at all.
     let update = dir.path().join("broken-update.crescendo-plugin");
-    write_package(&update, &wasm_manifest("2.0.0", &[]), b"this is not a component");
+    write_package(
+        &update,
+        &wasm_manifest("2.0.0", &[]),
+        b"this is not a component",
+    );
     manager.install(&update).unwrap();
     assert_eq!(
-        plugin_info(&manager).pending.as_ref().map(|pending| pending.operation.as_str()),
+        plugin_info(&manager)
+            .pending
+            .as_ref()
+            .map(|pending| pending.operation.as_str()),
         Some("update"),
         "the update should be journalled for the next start"
     );
@@ -252,9 +272,15 @@ fn an_update_carrying_an_unloadable_component_is_rolled_back() {
         Some("1.0.0"),
         "the working version must survive an unloadable update"
     );
-    assert!(info.pending.is_none(), "the journal entry should be resolved");
     assert!(
-        info.error.as_deref().unwrap_or("").contains("could not be loaded"),
+        info.pending.is_none(),
+        "the journal entry should be resolved"
+    );
+    assert!(
+        info.error
+            .as_deref()
+            .unwrap_or("")
+            .contains("could not be loaded"),
         "the rollback should explain itself: {:?}",
         info.error
     );
@@ -290,7 +316,11 @@ fn a_component_built_against_a_breaking_api_is_refused_before_it_runs() {
 #[test]
 fn wasm_plugins_require_grant_approval_then_invoke_with_granted_capabilities() {
     let (dir, db, manager) = setup();
-    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &["library.read", "storage"]));
+    install_and_enable(
+        &manager,
+        &dir,
+        &wasm_manifest("1.0.0", &["library.read", "storage"]),
+    );
 
     // Install alone: disabled, capabilities pending approval, no restart yet.
     let info = plugin_info(&manager);
@@ -315,7 +345,10 @@ fn wasm_plugins_require_grant_approval_then_invoke_with_granted_capabilities() {
 
     // Host-visible identity round trip: input JSON comes back untouched.
     let input = serde_json::json!({"hello": "world", "n": 1});
-    assert_eq!(invoke_once_ready(&manager, "identity", input.clone()), input);
+    assert_eq!(
+        invoke_once_ready(&manager, "identity", input.clone()),
+        input
+    );
 
     // On-demand live settings read.
     let settings = invoke_once_ready(&manager, "settings", serde_json::json!({}));
@@ -341,7 +374,9 @@ fn wasm_plugins_require_grant_approval_then_invoke_with_granted_capabilities() {
     assert_eq!(summary["first_title"], "Title 1");
 
     // Only registered commands are dispatchable.
-    assert!(manager.invoke(PLUGIN_ID, "not-declared", &Value::Null).is_err());
+    assert!(manager
+        .invoke(PLUGIN_ID, "not-declared", &Value::Null)
+        .is_err());
     assert!(manager
         .invoke("dev.crescendo.unknown", "identity", &Value::Null)
         .is_err());
@@ -376,7 +411,10 @@ fn capability_calls_are_denied_without_the_matching_permission() {
     let summary = invoke_once_ready(&manager, "library_summary", serde_json::json!({}));
     assert_eq!(summary, serde_json::json!({"denied": true}));
     let input = serde_json::json!({"still": "works"});
-    assert_eq!(invoke_once_ready(&manager, "identity", input.clone()), input);
+    assert_eq!(
+        invoke_once_ready(&manager, "identity", input.clone()),
+        input
+    );
     assert_eq!(_db.plugin_storage_usage(PLUGIN_ID).unwrap(), 0);
 }
 
@@ -413,9 +451,16 @@ fn grants_are_pinned_to_the_exact_package_version_and_hash() {
 
     let manager = restart(&dir, db);
     let info = plugin_info(&manager);
-    assert!(info.loaded, "expected v2 to load after approval: {:?}", info.error);
+    assert!(
+        info.loaded,
+        "expected v2 to load after approval: {:?}",
+        info.error
+    );
     let input = serde_json::json!({"v": 2});
-    assert_eq!(invoke_once_ready(&manager, "identity", input.clone()), input);
+    assert_eq!(
+        invoke_once_ready(&manager, "identity", input.clone()),
+        input
+    );
 }
 
 #[test]
@@ -440,7 +485,9 @@ fn guest_work_is_bounded_by_the_epoch_deadline_and_failures_mark_it_unhealthy() 
         limits,
         Default::default(),
         Default::default(),
-        RuntimePaths { safe_mode_marker: dir.path().join("safe-mode-requested") },
+        RuntimePaths {
+            safe_mode_marker: dir.path().join("safe-mode-requested"),
+        },
     )
     .unwrap();
 
@@ -525,7 +572,9 @@ fn guest_work_is_bounded_by_fuel() {
         limits,
         Default::default(),
         Default::default(),
-        RuntimePaths { safe_mode_marker: dir.path().join("safe-mode-requested") },
+        RuntimePaths {
+            safe_mode_marker: dir.path().join("safe-mode-requested"),
+        },
     )
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -555,13 +604,16 @@ fn a_broken_module_fails_isolated_and_auto_disables_after_repeated_startups() {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let info = plugin_info(&manager);
-        assert!(info.loaded, "the registry entry loads; only the runtime fails");
+        assert!(
+            info.loaded,
+            "the registry entry loads; only the runtime fails"
+        );
         if info.runtime_error.is_some() {
             break;
         }
         assert!(Instant::now() < deadline, "the broken module never failed");
         std::thread::sleep(Duration::from_millis(25));
-    };
+    }
     assert!(manager.invoke(PLUGIN_ID, "identity", &Value::Null).is_err());
     drop(manager);
 
@@ -571,7 +623,12 @@ fn a_broken_module_fails_isolated_and_auto_disables_after_repeated_startups() {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let info = plugin_info(&manager);
-        if info.runtime_error.as_deref().unwrap_or("").contains("Disabled") {
+        if info
+            .runtime_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Disabled")
+        {
             break;
         }
         assert!(
@@ -580,7 +637,7 @@ fn a_broken_module_fails_isolated_and_auto_disables_after_repeated_startups() {
             info.runtime_error
         );
         std::thread::sleep(Duration::from_millis(25));
-    };
+    }
     drop(manager);
 
     // The auto-disable also asks for one cautious run: the next start reports
@@ -591,7 +648,10 @@ fn a_broken_module_fails_isolated_and_auto_disables_after_repeated_startups() {
         "the second startup failure should request safe mode for the next run"
     );
     let info = plugin_info(&manager);
-    assert!(!info.desired_enabled, "expected the plugin to stay disabled");
+    assert!(
+        !info.desired_enabled,
+        "expected the plugin to stay disabled"
+    );
     assert!(!info.loaded);
     drop(manager);
 
@@ -601,7 +661,10 @@ fn a_broken_module_fails_isolated_and_auto_disables_after_repeated_startups() {
         "safe mode should last exactly one run"
     );
     let info = plugin_info(&manager);
-    assert!(!info.desired_enabled, "expected the plugin to stay disabled");
+    assert!(
+        !info.desired_enabled,
+        "expected the plugin to stay disabled"
+    );
     assert!(!info.loaded);
 }
 
@@ -702,7 +765,9 @@ impl Harness {
             RuntimeLimits::default(),
             player.clone(),
             Default::default(),
-            RuntimePaths { safe_mode_marker: dir.path().join("safe-mode-requested") },
+            RuntimePaths {
+                safe_mode_marker: dir.path().join("safe-mode-requested"),
+            },
         )
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -712,7 +777,12 @@ impl Harness {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        Self { _dir: dir, db, handle, player }
+        Self {
+            _dir: dir,
+            db,
+            handle,
+            player,
+        }
     }
 
     fn install_player(&self) {
@@ -744,7 +814,8 @@ fn player_capabilities_are_separate_and_need_an_installed_player() {
     both.install_player();
     assert_eq!(both.invoke("player_stop", "{}"), "ok");
     assert!(
-        both.invoke("player_state", "{}").contains("\"playing\":true"),
+        both.invoke("player_state", "{}")
+            .contains("\"playing\":true"),
         "an installed player must report its real state"
     );
 
@@ -752,12 +823,18 @@ fn player_capabilities_are_separate_and_need_an_installed_player() {
     // the host checks it: a real id is queued, an id that names no track is
     // refused rather than left sitting in the user's queue.
     assert_eq!(both.invoke("player_enqueue", "{\"id\":\"1\"}"), "ok");
-    assert_eq!(both.invoke("player_enqueue", "{\"id\":\"4242\"}"), "invalid");
+    assert_eq!(
+        both.invoke("player_enqueue", "{\"id\":\"4242\"}"),
+        "invalid"
+    );
 
     // Denial comes before validation, so an ungranted plugin cannot use the
     // enqueue error to probe which track ids exist.
     assert_eq!(harness.invoke("player_enqueue", "{\"id\":\"1\"}"), "denied");
-    assert_eq!(harness.invoke("player_enqueue", "{\"id\":\"4242\"}"), "denied");
+    assert_eq!(
+        harness.invoke("player_enqueue", "{\"id\":\"4242\"}"),
+        "denied"
+    );
 }
 
 /// Namespaced storage is per plugin: identity comes from the store the call
@@ -789,7 +866,9 @@ fn storage_is_namespaced_per_plugin_and_bounded_by_the_quota() {
         RuntimeLimits::default(),
         Default::default(),
         Default::default(),
-        RuntimePaths { safe_mode_marker: dir.path().join("safe-mode-requested") },
+        RuntimePaths {
+            safe_mode_marker: dir.path().join("safe-mode-requested"),
+        },
     )
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -802,24 +881,34 @@ fn storage_is_namespaced_per_plugin_and_bounded_by_the_quota() {
 
     // Both write the same key. Each reads back its own value.
     assert_eq!(
-        handle.invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"first\"}").unwrap(),
+        handle
+            .invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"first\"}")
+            .unwrap(),
         "{\"stored\":\"first\"}"
     );
     assert_eq!(
-        handle.invoke(second_id, "storage_roundtrip", "{\"value\":\"second\"}").unwrap(),
+        handle
+            .invoke(second_id, "storage_roundtrip", "{\"value\":\"second\"}")
+            .unwrap(),
         "{\"stored\":\"second\"}"
     );
     assert_eq!(
-        handle.invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"first\"}").unwrap(),
+        handle
+            .invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"first\"}")
+            .unwrap(),
         "{\"stored\":\"first\"}",
         "the second plugin must not have overwritten the first"
     );
     assert_eq!(
-        db.plugin_storage_get(PLUGIN_ID, "demo-key").unwrap().as_deref(),
+        db.plugin_storage_get(PLUGIN_ID, "demo-key")
+            .unwrap()
+            .as_deref(),
         Some("first")
     );
     assert_eq!(
-        db.plugin_storage_get(second_id, "demo-key").unwrap().as_deref(),
+        db.plugin_storage_get(second_id, "demo-key")
+            .unwrap()
+            .as_deref(),
         Some("second")
     );
 
@@ -833,11 +922,15 @@ fn storage_is_namespaced_per_plugin_and_bounded_by_the_quota() {
     }
     assert!(db.plugin_storage_usage(PLUGIN_ID).unwrap() > 5 * 1024 * 1024 - 256 * 1024);
     assert_eq!(
-        handle.invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"overflow\"}").unwrap(),
+        handle
+            .invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"overflow\"}")
+            .unwrap(),
         "{\"quota\":true}"
     );
     assert_eq!(
-        handle.invoke(second_id, "storage_roundtrip", "{\"value\":\"still fine\"}").unwrap(),
+        handle
+            .invoke(second_id, "storage_roundtrip", "{\"value\":\"still fine\"}")
+            .unwrap(),
         "{\"stored\":\"still fine\"}"
     );
 }
@@ -904,15 +997,19 @@ fn playlist_writes_refuse_ids_that_do_not_exist() {
     assert!(created.starts_with("{\"id\":"), "unexpected: {created}");
 
     // A playlist that does not exist.
-    assert!(harness
-        .db
-        .playlist_add_tracks_checked(9_999, &[1])
-        .is_err());
+    assert!(harness.db.playlist_add_tracks_checked(9_999, &[1]).is_err());
     // A real playlist, but a track that does not exist.
     let id = harness.db.playlist_list().unwrap()[0].id;
-    assert!(harness.db.playlist_add_tracks_checked(id, &[4_242]).is_err());
+    assert!(harness
+        .db
+        .playlist_add_tracks_checked(id, &[4_242])
+        .is_err());
     assert!(
-        harness.db.playlist_track_ids_page(id, 0, 100).unwrap().is_empty(),
+        harness
+            .db
+            .playlist_track_ids_page(id, 0, 100)
+            .unwrap()
+            .is_empty(),
         "a refused insert must leave nothing behind"
     );
 }

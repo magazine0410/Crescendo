@@ -42,7 +42,10 @@ fn enqueue_projectm_pcm(chunks: &mut VecDeque<Vec<u8>>, bytes: &[u8]) {
 pub enum Cmd {
     /// Context descriptors are resolved at the command boundary while its
     /// projection guard is held. The player thread receives stable IDs only.
-    PlayResolvedContext { ids: Vec<i64>, start_index: usize },
+    PlayResolvedContext {
+        ids: Vec<i64>,
+        start_index: usize,
+    },
     JumpTo(usize),
     TogglePause,
     Stop,
@@ -217,7 +220,9 @@ fn report_player_failure(
     // stopped state. Playback/queue locks are deliberately not recovered: a
     // panic may have broken their invariants and the player thread is gone.
     let final_state = {
-        let mut state = shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.status = Status::Stopped;
         state.track = None;
         state.context_index = None;
@@ -283,12 +288,7 @@ pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
                 }
             };
             if let Some(message) = failure {
-                report_player_failure(
-                    &failure_app,
-                    &failure_shared,
-                    &failure_message,
-                    message,
-                );
+                report_player_failure(&failure_app, &failure_shared, &failure_message, message);
             }
         })?;
     Ok(handle)
@@ -556,10 +556,7 @@ mod tests {
         };
         assert!(handle.send(Cmd::Stop).is_err());
         *handle.failure.lock().unwrap() = Some("player initialization failed".into());
-        assert_eq!(
-            handle.state().unwrap_err(),
-            "player initialization failed"
-        );
+        assert_eq!(handle.state().unwrap_err(), "player initialization failed");
         assert_eq!(
             handle.send(Cmd::Stop).unwrap_err(),
             "player initialization failed"
@@ -614,10 +611,7 @@ mod tests {
 impl Engine {
     /// Bar gapless callbacks, then mutate the queue. The player thread is the
     /// only caller, so one manual transition cannot overlap another.
-    fn begin_manual_transition<T>(
-        &self,
-        mutate: impl FnOnce(&mut PlayQueue, bool) -> T,
-    ) -> T {
+    fn begin_manual_transition<T>(&self, mutate: impl FnOnce(&mut PlayQueue, bool) -> T) -> T {
         let mut handoff = self.handoff.lock().expect("handoff coordinator poisoned");
         handoff.begin_manual();
         let was_gapless = {
@@ -681,9 +675,8 @@ impl Engine {
                 }
                 Status::Stopped => {
                     // Play from the top of the context if there is one.
-                    let id = self.begin_manual_transition(|q, _| {
-                        q.current().or_else(|| q.advance())
-                    });
+                    let id =
+                        self.begin_manual_transition(|q, _| q.current().or_else(|| q.advance()));
                     if let Some(id) = id {
                         self.start_track(id);
                     } else {
@@ -830,7 +823,9 @@ impl Engine {
                                 })
                                 .unwrap_or(44_100)
                                 .max(1) as u32;
-                            let _ = self.app.emit("player:spectrum", SpectrumEvent { bands, rate });
+                            let _ = self
+                                .app
+                                .emit("player:spectrum", SpectrumEvent { bands, rate });
                         }
                     }
                 }
@@ -839,8 +834,7 @@ impl Engine {
                 // Fires on every new stream; after a gapless handoff this is
                 // the moment the queue's current track is actually audible.
                 let was_gapless = {
-                    let mut pending =
-                        self.gapless_pending.lock().expect("gapless flag poisoned");
+                    let mut pending = self.gapless_pending.lock().expect("gapless flag poisoned");
                     std::mem::take(&mut *pending)
                 };
                 if was_gapless {
@@ -906,14 +900,22 @@ impl Engine {
         self.status = Status::Stopped;
         self.current_duration_ms = 0;
         self.publish_state();
-        let _ = self.app.emit("player:position", PositionEvent { ms: 0, duration_ms: 0 });
+        let _ = self.app.emit(
+            "player:position",
+            PositionEvent {
+                ms: 0,
+                duration_ms: 0,
+            },
+        );
     }
 
     /// Count a play for the current track if more than half of it was heard,
     /// then clear the per-track progress. Idempotent: a second call before a new
     /// track starts is a no-op (the id has been taken).
     fn commit_play(&mut self) {
-        let Some(id) = self.current_track_id.take() else { return };
+        let Some(id) = self.current_track_id.take() else {
+            return;
+        };
         let pos = self.max_position_ms.max(self.position_ms());
         let dur = self.current_duration_ms;
         self.max_position_ms = 0;
@@ -951,12 +953,20 @@ impl Engine {
     fn emit_position(&self) {
         let _ = self.app.emit(
             "player:position",
-            PositionEvent { ms: self.position_ms(), duration_ms: self.current_duration_ms },
+            PositionEvent {
+                ms: self.position_ms(),
+                duration_ms: self.current_duration_ms,
+            },
         );
     }
 
     fn sync_queue_shared(&self) {
-        let ids = self.queue.lock().expect("queue poisoned").queue_ids().to_vec();
+        let ids = self
+            .queue
+            .lock()
+            .expect("queue poisoned")
+            .queue_ids()
+            .to_vec();
         *self.queue_shared.lock().expect("queue state poisoned") = ids;
         let _ = self.app.emit("queue:changed", ());
     }
@@ -967,7 +977,13 @@ impl Engine {
         // thread miss its gapless handoff deadline.
         let (track_id, context_index, context_len, shuffle, repeat) = {
             let q = self.queue.lock().expect("queue poisoned");
-            (q.current(), q.context_index(), q.context_len(), q.shuffle, q.repeat)
+            (
+                q.current(),
+                q.context_index(),
+                q.context_len(),
+                q.shuffle,
+                q.repeat,
+            )
         };
         let track = track_id.and_then(|id| self.db.track_by_id(id).ok().flatten());
         let state = PlayerState {

@@ -79,8 +79,7 @@ fn a_failed_play_leaves_no_half_written_history() {
     // so record_play reports the failure and its history row rolls back with it.
     assert!(db.record_play(id + 999).is_err());
     db.with(|conn| {
-        let rows: i64 =
-            conn.query_row("SELECT COUNT(*) FROM play_history", [], |r| r.get(0))?;
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM play_history", [], |r| r.get(0))?;
         assert_eq!(rows, 0);
         Ok(())
     })

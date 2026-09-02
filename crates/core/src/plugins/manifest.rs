@@ -683,12 +683,15 @@ mod tests {
     #[test]
     fn facet_and_menu_contributions_are_bounded_and_reference_boolean_settings() {
         let mut value = manifest();
-        value.contributes.settings.push(PluginSettingDeclaration::Boolean {
-            key: "collapse_titles".into(),
-            label: "Collapse titles".into(),
-            description: String::new(),
-            default: true,
-        });
+        value
+            .contributes
+            .settings
+            .push(PluginSettingDeclaration::Boolean {
+                key: "collapse_titles".into(),
+                label: "Collapse titles".into(),
+                description: String::new(),
+                default: true,
+            });
         value
             .contributes
             .facet_transforms
@@ -785,8 +788,12 @@ mod tests {
         let mut value = wasm_manifest();
         value.permissions = vec!["storage".into(), "library.read".into()];
         value.contributes.commands = vec![
-            PluginCommandDeclaration { id: "summarize".into() },
-            PluginCommandDeclaration { id: "refresh".into() },
+            PluginCommandDeclaration {
+                id: "summarize".into(),
+            },
+            PluginCommandDeclaration {
+                id: "refresh".into(),
+            },
         ];
         value.validate(true).unwrap();
 
@@ -828,7 +835,9 @@ mod tests {
 
         // Wasm command ids follow the same key rules as settings.
         let mut bad = wasm_manifest();
-        bad.contributes.commands = vec![PluginCommandDeclaration { id: "bad id".into() }];
+        bad.contributes.commands = vec![PluginCommandDeclaration {
+            id: "bad id".into(),
+        }];
         assert!(bad.validate(true).is_err());
     }
 }

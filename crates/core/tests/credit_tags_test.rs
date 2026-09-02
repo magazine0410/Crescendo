@@ -7,7 +7,17 @@ use crescendo_core::model::BrowseMode;
 use crescendo_core::scanner::tags::{search_blob, TrackMeta};
 use crescendo_core::search;
 
-type Row<'a> = (&'a str, &'a str, &'a str, &'a str, &'a str, &'a str, &'a str, &'a str, i64);
+type Row<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    i64,
+);
 
 fn test_db() -> (tempfile::TempDir, Db) {
     let dir = tempfile::tempdir().unwrap();
@@ -21,12 +31,39 @@ fn test_db() -> (tempfile::TempDir, Db) {
         )?;
         // title, artist, composer, arranger, lyricist, vocalist, catalog, event, bpm
         let rows: Vec<Row> = vec![
-            ("LAST DESTINY", "Stack", "暁Records", "暁Records", "暁Records", "Stack",
-             "DRCD-0002", "C83", 82),
-            ("月齢11.3のキャンドルマジック", "NJK Record", "NJK Record", "ShibayanRecords",
-             "やまざきさやか", "NJK Record", "NJK-007", "C91", 85),
-            ("Bad Apple!!", "nomico", "ZUN", "Masayoshi Minoshima", "Haruka",
-             "nomico", "ARCD0002", "C75", 138),
+            (
+                "LAST DESTINY",
+                "Stack",
+                "暁Records",
+                "暁Records",
+                "暁Records",
+                "Stack",
+                "DRCD-0002",
+                "C83",
+                82,
+            ),
+            (
+                "月齢11.3のキャンドルマジック",
+                "NJK Record",
+                "NJK Record",
+                "ShibayanRecords",
+                "やまざきさやか",
+                "NJK Record",
+                "NJK-007",
+                "C91",
+                85,
+            ),
+            (
+                "Bad Apple!!",
+                "nomico",
+                "ZUN",
+                "Masayoshi Minoshima",
+                "Haruka",
+                "nomico",
+                "ARCD0002",
+                "C75",
+                138,
+            ),
         ];
         for (i, r) in rows.iter().enumerate() {
             let (title, artist, composer, arranger, lyricist, vocalist, catalog, event, bpm) = *r;
@@ -65,7 +102,8 @@ fn test_db() -> (tempfile::TempDir, Db) {
 
 fn count(db: &Db, q: &str) -> i64 {
     let filter = search::compile(q).unwrap();
-    db.track_count_exact(Some(&filter), BrowseMode::Artist, &[]).unwrap()
+    db.track_count_exact(Some(&filter), BrowseMode::Artist, &[])
+        .unwrap()
 }
 
 #[test]
@@ -114,11 +152,22 @@ fn credits_reach_free_text_search() {
 fn credit_tags_are_browsable() {
     let (_d, db) = test_db();
     let mode = BrowseMode::Custom("arranger".into());
-    let values: Vec<String> =
-        db.browse_values_exact(mode.clone(), None).unwrap().into_iter().map(|v| v.value).collect();
-    assert_eq!(values, ["Masayoshi Minoshima", "ShibayanRecords", "暁Records"]);
+    let values: Vec<String> = db
+        .browse_values_exact(mode.clone(), None)
+        .unwrap()
+        .into_iter()
+        .map(|v| v.value)
+        .collect();
+    assert_eq!(
+        values,
+        ["Masayoshi Minoshima", "ShibayanRecords", "暁Records"]
+    );
     // …and selecting one plays back the right count.
-    assert_eq!(db.track_count_exact(None, mode, &["暁Records".into()]).unwrap(), 1);
+    assert_eq!(
+        db.track_count_exact(None, mode, &["暁Records".into()])
+            .unwrap(),
+        1
+    );
 }
 
 #[test]

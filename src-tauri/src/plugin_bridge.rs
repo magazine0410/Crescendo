@@ -10,11 +10,11 @@
 //! calling store. By the time a call arrives here it is already authorised.
 
 use crate::player::{Cmd, PlayerHandle, Status};
+use crescendo_core::playqueue::RepeatMode;
 use crescendo_core::plugins::{
     BridgePlayerCommand, BridgePlayerState, BridgeRepeat, HostNotification, HostNotifier,
     PlayerBridge,
 };
-use crescendo_core::playqueue::RepeatMode;
 use std::sync::{Arc, Mutex};
 
 /// Playback progress, mirrored from the `player:position` event.
@@ -44,7 +44,11 @@ struct PositionSample {
 impl PositionMirror {
     pub fn record(&self, track_id: Option<i64>, position_ms: u64, duration_ms: u64) {
         if let Ok(mut slot) = self.sample.lock() {
-            *slot = Some(PositionSample { track_id, position_ms, duration_ms });
+            *slot = Some(PositionSample {
+                track_id,
+                position_ms,
+                duration_ms,
+            });
         }
     }
 

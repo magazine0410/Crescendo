@@ -26,12 +26,16 @@ fn main() -> anyhow::Result<()> {
         println!("  missing: {m}");
     }
     let tracks = db.playlist_tracks(r.playlist_id)?;
-    println!("  playlist_tracks returns {} rows; first: {:?} - {:?}",
+    println!(
+        "  playlist_tracks returns {} rows; first: {:?} - {:?}",
         tracks.len(),
         tracks.first().and_then(|t| t.artist.clone()),
-        tracks.first().and_then(|t| t.title.clone()));
+        tracks.first().and_then(|t| t.title.clone())
+    );
     // context resolution for playback
-    let ids = db.resolve_context_exact(&crescendo_core::model::PlayContext::Playlist { id: r.playlist_id })?;
+    let ids = db.resolve_context_exact(&crescendo_core::model::PlayContext::Playlist {
+        id: r.playlist_id,
+    })?;
     println!("  resolve_context_exact: {} ids", ids.len());
     // clean up the test playlist
     db.playlist_delete(r.playlist_id)?;

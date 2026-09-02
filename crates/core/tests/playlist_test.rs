@@ -20,7 +20,11 @@ fn test_db() -> (tempfile::TempDir, Db) {
 }
 
 fn ids(db: &Db, pid: i64) -> Vec<i64> {
-    db.playlist_tracks(pid).unwrap().iter().map(|t| t.id).collect()
+    db.playlist_tracks(pid)
+        .unwrap()
+        .iter()
+        .map(|t| t.id)
+        .collect()
 }
 
 #[test]
@@ -46,7 +50,8 @@ fn set_order_rewrites_the_sidebar_order() {
     let a = db.playlist_create("A").unwrap();
     let b = db.playlist_create("B").unwrap();
     let c = db.playlist_create("C").unwrap();
-    let listed = |db: &Db| -> Vec<i64> { db.playlist_list().unwrap().iter().map(|p| p.id).collect() };
+    let listed =
+        |db: &Db| -> Vec<i64> { db.playlist_list().unwrap().iter().map(|p| p.id).collect() };
     assert_eq!(listed(&db), vec![a, b, c], "created order to begin with");
 
     db.playlists_set_order(&[c, a, b]).unwrap();
@@ -90,10 +95,19 @@ fn multi_selection_view_and_playback_agree_on_order() {
         .iter()
         .flat_map(|g| g.tracks.iter().map(|t| t.id))
         .collect();
-    assert_eq!(view, vec![5, 2, 4, 3, 1], "playlist order, then position inside each");
+    assert_eq!(
+        view,
+        vec![5, 2, 4, 3, 1],
+        "playlist order, then position inside each"
+    );
 
-    let played = db.resolve_context_exact(&PlayContext::Playlists { ids: vec![b, a] }).unwrap();
-    assert_eq!(played, view, "playback order must match the view row for row");
+    let played = db
+        .resolve_context_exact(&PlayContext::Playlists { ids: vec![b, a] })
+        .unwrap();
+    assert_eq!(
+        played, view,
+        "playback order must match the view row for row"
+    );
 }
 
 #[test]
@@ -101,9 +115,15 @@ fn filtered_playlist_playback_matches_visible_rows() {
     let (_d, db) = test_db();
     db.with(|conn| {
         conn.execute("UPDATE tracks SET title = 'Alpha' WHERE id = 1", [])?;
-        conn.execute("UPDATE tracks SET title = 'Écho', missing = 1 WHERE id = 2", [])?;
+        conn.execute(
+            "UPDATE tracks SET title = 'Écho', missing = 1 WHERE id = 2",
+            [],
+        )?;
         conn.execute("UPDATE tracks SET title = 'Other' WHERE id IN (3, 5)", [])?;
-        conn.execute("UPDATE tracks SET title = 'Fourth', genre = 'Rock' WHERE id = 4", [])?;
+        conn.execute(
+            "UPDATE tracks SET title = 'Fourth', genre = 'Rock' WHERE id = 4",
+            [],
+        )?;
         Ok(())
     })
     .unwrap();
@@ -118,7 +138,11 @@ fn filtered_playlist_playback_matches_visible_rows() {
             query: "éCH".into(),
         })
         .unwrap();
-    assert_eq!(single, vec![2], "Unicode matching keeps a visible missing track");
+    assert_eq!(
+        single,
+        vec![2],
+        "Unicode matching keeps a visible missing track"
+    );
 
     let multi = db
         .resolve_context_exact(&PlayContext::FilteredPlaylists {
@@ -126,7 +150,11 @@ fn filtered_playlist_playback_matches_visible_rows() {
             query: "ÉCHO".into(),
         })
         .unwrap();
-    assert_eq!(multi, vec![2, 2], "playlist order is preserved across matches");
+    assert_eq!(
+        multi,
+        vec![2, 2],
+        "playlist order is preserved across matches"
+    );
 
     let genre = db
         .resolve_context_exact(&PlayContext::FilteredPlaylist {
@@ -142,7 +170,11 @@ fn filtered_playlist_playback_matches_visible_rows() {
             query: "  ".into(),
         })
         .unwrap();
-    assert_eq!(blank, vec![1, 2, 3], "a blank filter falls back to the full playlist");
+    assert_eq!(
+        blank,
+        vec![1, 2, 3],
+        "a blank filter falls back to the full playlist"
+    );
 }
 
 /// A playlist keeps tracks whose file has gone missing, and shows them. If
@@ -159,20 +191,32 @@ fn missing_tracks_keep_the_rows_and_playback_lined_up() {
     .unwrap();
 
     let view = db.playlist_tracks(pid).unwrap();
-    assert_eq!(ids(&db, pid), vec![1, 2, 3, 4], "the view keeps missing tracks");
+    assert_eq!(
+        ids(&db, pid),
+        vec![1, 2, 3, 4],
+        "the view keeps missing tracks"
+    );
     assert_eq!(
         view.iter().map(|t| t.missing).collect::<Vec<_>>(),
         vec![false, true, true, false],
         "and flags them, so the UI can mark them"
     );
 
-    let played = db.resolve_context_exact(&PlayContext::Playlist { id: pid }).unwrap();
-    assert_eq!(played, vec![1, 2, 3, 4], "row index N must resolve to row N");
+    let played = db
+        .resolve_context_exact(&PlayContext::Playlist { id: pid })
+        .unwrap();
+    assert_eq!(
+        played,
+        vec![1, 2, 3, 4],
+        "row index N must resolve to row N"
+    );
     // The last row is what breaks first when missing tracks are dropped: it
     // sat at index 3 in the view but would have been index 1 in playback.
     assert_eq!(played[3], view[3].id);
 
-    let multi = db.resolve_context_exact(&PlayContext::Playlists { ids: vec![pid] }).unwrap();
+    let multi = db
+        .resolve_context_exact(&PlayContext::Playlists { ids: vec![pid] })
+        .unwrap();
     assert_eq!(multi, played, "multi-selection resolves the same way");
 }
 
@@ -190,7 +234,10 @@ fn multi_selection_keeps_a_group_per_id() {
     assert_eq!(groups[0].playlist_id, a);
     assert_eq!(groups[0].tracks.len(), 2);
     assert!(groups[1].tracks.is_empty());
-    assert!(groups[2].tracks.is_empty(), "an unknown id is empty, not an error");
+    assert!(
+        groups[2].tracks.is_empty(),
+        "an unknown id is empty, not an error"
+    );
 }
 
 #[test]

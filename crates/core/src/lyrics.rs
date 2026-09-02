@@ -63,8 +63,9 @@ const USER_AGENT: &str = concat!("Crescendo/", env!("CARGO_PKG_VERSION"), " (lyr
 
 /// A leading `[mm:ss.xx]` line tag. Minutes are not capped at two digits:
 /// long tracks do run past `[99:59]`.
-static LINE_TAG: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"^\[([0-9]{1,3}):([0-9]{1,2})(?:[.:]([0-9]{1,3}))?\]").unwrap());
+static LINE_TAG: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^\[([0-9]{1,3}):([0-9]{1,2})(?:[.:]([0-9]{1,3}))?\]").unwrap()
+});
 /// A leading `[ar:…]`-style ID tag. The letters are what separates it from a
 /// timestamp, and the colon from a lyric line that opens with "[Chorus]".
 static ID_TAG: LazyLock<regex::Regex> =
@@ -130,7 +131,11 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
     let mut any_failed = false;
     let mut found = None;
     for (root, name) in VOCADB_SITES {
-        if take(vocadb_lyrics(track, root, name), &mut found, &mut any_failed) {
+        if take(
+            vocadb_lyrics(track, root, name),
+            &mut found,
+            &mut any_failed,
+        ) {
             break;
         }
     }
@@ -248,7 +253,9 @@ fn read_lyrics_file(path: &Path) -> Option<String> {
 fn embedded_lyrics(audio_path: &str) -> Option<String> {
     let file = lofty::probe::Probe::open(audio_path)
         .ok()?
-        .options(lofty::config::ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed))
+        .options(
+            lofty::config::ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed),
+        )
         .read()
         .ok()?;
     let tag = file.primary_tag().or_else(|| file.first_tag())?;
@@ -287,7 +294,11 @@ fn vocadb_lyrics(track: &Track, root: &str, name: &str) -> OnlineResult {
     // Prefer romanized, then the original, then a translation (usually English).
     let best = ["Romanized", "Original", "Translation"]
         .iter()
-        .find_map(|ty| candidates.iter().find(|l| l["translationType"].as_str() == Some(ty)));
+        .find_map(|ty| {
+            candidates
+                .iter()
+                .find(|l| l["translationType"].as_str() == Some(ty))
+        });
     let Some(best) = best else {
         return OnlineResult::NotFound;
     };
@@ -308,7 +319,10 @@ fn vocadb_lyrics(track: &Track, root: &str, name: &str) -> OnlineResult {
     }
     OnlineResult::Found {
         raw: text.to_string(),
-        source: format!("{name} · {}", best["translationType"].as_str().unwrap_or("lyrics")),
+        source: format!(
+            "{name} · {}",
+            best["translationType"].as_str().unwrap_or("lyrics")
+        ),
     }
 }
 
@@ -352,7 +366,11 @@ fn find_vocadb_song(track: &Track, root: &str) -> Result<Option<i64>, ()> {
             }
             let len = item["lengthSeconds"].as_i64().unwrap_or(0);
             let has_len = len > 0;
-            let delta = if has_len { (len - duration).abs() } else { i64::MAX };
+            let delta = if has_len {
+                (len - duration).abs()
+            } else {
+                i64::MAX
+            };
             // A title this common is shared by hundreds of arrangements, so a
             // length that far off is a different recording, not a near miss.
             // Only applies when both lengths are known — an entry with no
@@ -428,7 +446,10 @@ fn thwiki_lyrics(track: &Track) -> OnlineResult {
         if raw.trim().is_empty() {
             continue;
         }
-        return OnlineResult::Found { raw, source: "LyricsTouHou".into() };
+        return OnlineResult::Found {
+            raw,
+            source: "LyricsTouHou".into(),
+        };
     }
     if any_failed {
         OnlineResult::Failed
@@ -646,7 +667,10 @@ fn tokens(s: &str) -> Vec<&str> {
 }
 
 fn norm(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Parse lyrics into a plain-text rendering plus, when the text carries
@@ -654,7 +678,11 @@ fn norm(s: &str) -> String {
 /// itself and no lines, so plain lyrics need no separate path.
 fn parse_lyrics(raw: &str, source: &str) -> Option<LyricsResult> {
     let (text, lines) = parse_lrc(raw);
-    (!text.is_empty()).then(|| LyricsResult { text, lines, source: source.to_string() })
+    (!text.is_empty()).then(|| LyricsResult {
+        text,
+        lines,
+        source: source.to_string(),
+    })
 }
 
 /// The LRC format: `[mm:ss.xx]` line tags, `[ar:…]`-style ID tags, enhanced
@@ -706,7 +734,10 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
         let text = WORD_TAG.replace_all(rest, "");
         let text = text.trim();
         for ms in stamps {
-            lines.push(LyricLine { ms, text: text.to_string() });
+            lines.push(LyricLine {
+                ms,
+                text: text.to_string(),
+            });
         }
         if !text.is_empty() {
             plain.push_str(text);
@@ -782,7 +813,10 @@ mod tests {
         let lrc = "[00:12.34] first line\n[01:02.03]second line";
         assert_eq!(
             timed(lrc),
-            [(12_340, "first line".into()), (62_030, "second line".into())]
+            [
+                (12_340, "first line".into()),
+                (62_030, "second line".into())
+            ]
         );
         assert_eq!(plain(lrc), "first line\nsecond line");
     }
@@ -881,19 +915,37 @@ mod tests {
     #[test]
     fn artist_match_whole_string_or_token() {
         // "黒うさP" appears as a token inside the VocaDB artist string.
-        assert!(artist_string_matches(&track_with_artist("黒うさP"), "黒うさP feat. 初音ミク"));
+        assert!(artist_string_matches(
+            &track_with_artist("黒うさP"),
+            "黒うさP feat. 初音ミク"
+        ));
         // ...and the other way around.
-        assert!(artist_string_matches(&track_with_artist("黒うさP feat. 初音ミク"), "黒うさP"));
-        assert!(artist_string_matches(&track_with_artist("nao"), "nao feat. 初音ミク"));
+        assert!(artist_string_matches(
+            &track_with_artist("黒うさP feat. 初音ミク"),
+            "黒うさP"
+        ));
+        assert!(artist_string_matches(
+            &track_with_artist("nao"),
+            "nao feat. 初音ミク"
+        ));
     }
 
     #[test]
     fn artist_match_short_names_do_not_match_substrings() {
         // "IA" must not match "asialand"; "nao" must not match "asialand" either.
-        assert!(!artist_string_matches(&track_with_artist("IA"), "asialand feat. 初音ミク"));
-        assert!(!artist_string_matches(&track_with_artist("nao"), "asialand feat. 初音ミク"));
+        assert!(!artist_string_matches(
+            &track_with_artist("IA"),
+            "asialand feat. 初音ミク"
+        ));
+        assert!(!artist_string_matches(
+            &track_with_artist("nao"),
+            "asialand feat. 初音ミク"
+        ));
         // A real token still matches a short name.
-        assert!(artist_string_matches(&track_with_artist("IA"), "IA feat. 初音ミク"));
+        assert!(artist_string_matches(
+            &track_with_artist("IA"),
+            "IA feat. 初音ミク"
+        ));
     }
 
     #[test]
@@ -969,8 +1021,14 @@ mod tests {
     #[test]
     fn thwiki_id_tags_are_readable() {
         let raw = thwiki_file();
-        assert_eq!(lrc_id_tag(&raw, "ti").as_deref(), Some("Bad Apple!! feat. nomico"));
-        assert_eq!(lrc_id_tag(&raw, "ar").as_deref(), Some("Alstroemeria Records"));
+        assert_eq!(
+            lrc_id_tag(&raw, "ti").as_deref(),
+            Some("Bad Apple!! feat. nomico")
+        );
+        assert_eq!(
+            lrc_id_tag(&raw, "ar").as_deref(),
+            Some("Alstroemeria Records")
+        );
         assert_eq!(lrc_id_tag(&raw, "zz"), None);
     }
 

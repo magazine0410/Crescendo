@@ -25,7 +25,11 @@ fn db_with_one_track(dir: &Path, path: &str) -> (Db, i64) {
 }
 
 fn run(db: &Db, root: &Path) -> anyhow::Result<()> {
-    let opts = ScanOptions { root: root.to_path_buf(), threads: 1, full: false };
+    let opts = ScanOptions {
+        root: root.to_path_buf(),
+        threads: 1,
+        full: false,
+    };
     scan(db, &opts, &|_| {}, &AtomicBool::new(false))?;
     Ok(())
 }
@@ -35,8 +39,13 @@ fn a_root_that_does_not_exist_fails_the_scan_and_keeps_the_library() {
     let home = tempfile::tempdir().unwrap();
     let (db, id) = db_with_one_track(home.path(), "/m/a.flac");
 
-    let error = run(&db, &home.path().join("not-mounted")).unwrap_err().to_string();
-    assert!(error.contains("music folder not found"), "unexpected error: {error}");
+    let error = run(&db, &home.path().join("not-mounted"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("music folder not found"),
+        "unexpected error: {error}"
+    );
 
     assert!(!db.track_by_id(id).unwrap().unwrap().missing);
 }
@@ -49,7 +58,10 @@ fn an_empty_root_fails_the_scan_and_keeps_the_library() {
     std::fs::create_dir(&music).unwrap();
 
     let error = run(&db, &music).unwrap_err().to_string();
-    assert!(error.contains("holds no audio files"), "unexpected error: {error}");
+    assert!(
+        error.contains("holds no audio files"),
+        "unexpected error: {error}"
+    );
 
     assert!(!db.track_by_id(id).unwrap().unwrap().missing);
 }

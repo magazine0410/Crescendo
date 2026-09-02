@@ -89,7 +89,11 @@ fn a_blank_name_takes_playlists_out_and_drops_the_empty_group() {
     db.collection_set(&[a, b], "Group").unwrap();
 
     assert!(db.collection_set(&[a], "").unwrap().is_none());
-    assert_eq!(db.collection_list().unwrap()[0].playlist_count, 1, "b is still in");
+    assert_eq!(
+        db.collection_list().unwrap()[0].playlist_count,
+        1,
+        "b is still in"
+    );
 
     // Taking the last member out leaves nothing to group, so the row goes.
     db.collection_set(&[b], "").unwrap();
@@ -151,8 +155,14 @@ fn rename_rejects_a_unicode_case_insensitive_duplicate() {
     assert!(error.to_string().contains("already exists"));
     let collections = db.collection_list().unwrap();
     assert_eq!(collections.len(), 2);
-    assert_eq!(collections.iter().find(|c| c.id == first).unwrap().name, "Écho");
-    assert_eq!(collections.iter().find(|c| c.id == second).unwrap().name, "Other");
+    assert_eq!(
+        collections.iter().find(|c| c.id == first).unwrap().name,
+        "Écho"
+    );
+    assert_eq!(
+        collections.iter().find(|c| c.id == second).unwrap().name,
+        "Other"
+    );
 }
 
 /// A database written before collections existed must gain the table and the

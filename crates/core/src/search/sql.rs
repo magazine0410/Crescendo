@@ -122,8 +122,8 @@ fn chain_holds(operands: &[NumOperand], ops: &[CmpOp], tag: &str, x: f64) -> boo
         NumOperand::Number(n) => Some(*n),
         NumOperand::Tag(t) => (t == tag).then_some(x),
     };
-    ops.iter().enumerate().all(|(i, op)| {
-        match (value(&operands[i]), value(&operands[i + 1])) {
+    ops.iter().enumerate().all(
+        |(i, op)| match (value(&operands[i]), value(&operands[i + 1])) {
             (Some(a), Some(b)) => match op {
                 CmpOp::Lt => a < b,
                 CmpOp::Le => a <= b,
@@ -133,14 +133,20 @@ fn chain_holds(operands: &[NumOperand], ops: &[CmpOp], tag: &str, x: f64) -> boo
                 CmpOp::Gt => a > b,
             },
             _ => true,
-        }
-    })
+        },
+    )
 }
 
 pub fn compile(node: &Node) -> SearchFilter {
-    let mut c = Compiler { sql: String::new(), params: Vec::new() };
+    let mut c = Compiler {
+        sql: String::new(),
+        params: Vec::new(),
+    };
     c.node(node);
-    SearchFilter { where_sql: c.sql, params: c.params }
+    SearchFilter {
+        where_sql: c.sql,
+        params: c.params,
+    }
 }
 
 struct Compiler {
@@ -164,7 +170,11 @@ impl Compiler {
                 self.sql.push_str("instr(search_blob, ?) > 0");
                 self.params.push(Value::from(text.to_lowercase()));
             }
-            Node::Tag { tag, matcher, negated } => {
+            Node::Tag {
+                tag,
+                matcher,
+                negated,
+            } => {
                 if *negated {
                     self.sql.push_str("NOT (");
                 }
@@ -226,7 +236,10 @@ impl Compiler {
                 self.sql.push_str(&format!("ucontains({col}, ?)"));
                 self.params.push(Value::from(value.clone()));
             }
-            Matcher::Phrase { value, case_sensitive } => {
+            Matcher::Phrase {
+                value,
+                case_sensitive,
+            } => {
                 if *case_sensitive {
                     // instr() is a binary (case-sensitive) substring search.
                     self.sql.push_str(&format!("instr({col}, ?) > 0"));
@@ -235,7 +248,10 @@ impl Compiler {
                 }
                 self.params.push(Value::from(value.clone()));
             }
-            Matcher::Regex { pattern, case_sensitive } => {
+            Matcher::Regex {
+                pattern,
+                case_sensitive,
+            } => {
                 let pattern = if *case_sensitive {
                     pattern.clone()
                 } else {

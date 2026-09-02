@@ -44,9 +44,7 @@ pub enum NetRejection {
 impl std::fmt::Display for NetRejection {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidRequest(reason) | Self::BlockedHost(reason) => {
-                formatter.write_str(reason)
-            }
+            Self::InvalidRequest(reason) | Self::BlockedHost(reason) => formatter.write_str(reason),
         }
     }
 }
@@ -64,10 +62,7 @@ fn https_host(url: &str) -> std::result::Result<(String, u16), NetRejection> {
             "plugin request URLs must be ASCII".into(),
         ));
     }
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     if authority.is_empty() {
         return Err(NetRejection::InvalidRequest("the URL has no host".into()));
     }
@@ -155,8 +150,7 @@ pub fn check_url(url: &str, approved: &[String]) -> std::result::Result<(), NetR
 /// up on its own. That is fine for one stalled lookup and not fine without a
 /// ceiling, so refuse to start a new one while this many are still hanging.
 const MAX_OUTSTANDING_LOOKUPS: usize = 4;
-static OUTSTANDING_LOOKUPS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+static OUTSTANDING_LOOKUPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Decrements the outstanding-lookup count however the resolver thread ends.
 struct LookupSlot;
@@ -233,8 +227,7 @@ impl Resolver for GuardedResolver {
             .not_zero()
             .map(|value| (*value).into())
             .unwrap_or(REQUEST_TIMEOUT);
-        let resolved =
-            resolve_within(host, port, budget).map_err(|_| ureq::Error::HostNotFound)?;
+        let resolved = resolve_within(host, port, budget).map_err(|_| ureq::Error::HostNotFound)?;
         // ArrayVec has no `new`; seed it the way ureq's own resolver does.
         let mut addresses =
             ResolvedSocketAddrs::from_fn(|_| "0.0.0.0:1".parse().expect("valid placeholder"));
@@ -303,7 +296,9 @@ pub fn fetch(
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     let mut target = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())
+        let Some(remaining) = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
         else {
             bail!("the request exceeded its {REQUEST_TIMEOUT:?} budget");
         };
@@ -329,8 +324,12 @@ pub fn fetch(
             // trouble, and they are deliberately not told apart: "this name
             // does not resolve publicly" is all a plugin needs to know.
             if matches!(error, ureq::Error::HostNotFound) {
-                anyhow!("{} did not resolve to a public address (non-public or unknown host)",
-                    https_host(&target).map(|(host, _)| host).unwrap_or_default())
+                anyhow!(
+                    "{} did not resolve to a public address (non-public or unknown host)",
+                    https_host(&target)
+                        .map(|(host, _)| host)
+                        .unwrap_or_default()
+                )
             } else {
                 anyhow!("request failed: {error}")
             }
@@ -434,7 +433,9 @@ mod tests {
                 "{blocked} must be refused"
             );
         }
-        assert!(is_public_address(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))));
+        assert!(is_public_address(IpAddr::V4(Ipv4Addr::new(
+            93, 184, 216, 34
+        ))));
 
         for blocked in ["::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"] {
             let address: Ipv6Addr = blocked.parse().unwrap();
@@ -466,9 +467,7 @@ mod tests {
             &uri,
             &ureq::Agent::config_builder().build(),
             NextTimeout {
-                after: ureq::unversioned::transport::time::Duration::from(
-                    Duration::from_secs(5),
-                ),
+                after: ureq::unversioned::transport::time::Duration::from(Duration::from_secs(5)),
                 reason: ureq::Timeout::Global,
             },
         );

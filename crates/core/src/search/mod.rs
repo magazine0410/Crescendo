@@ -46,8 +46,14 @@ pub enum Matcher {
     Contains(String),
     /// Quoted value: substring match that preserves spaces and special chars.
     /// Case-folded unless `case_sensitive` (the `c` flag) is set.
-    Phrase { value: String, case_sensitive: bool },
-    Regex { pattern: String, case_sensitive: bool },
+    Phrase {
+        value: String,
+        case_sensitive: bool,
+    },
+    Regex {
+        pattern: String,
+        case_sensitive: bool,
+    },
     AnyOf(Vec<Matcher>),
     AllOf(Vec<Matcher>),
 }
