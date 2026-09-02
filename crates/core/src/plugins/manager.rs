@@ -103,8 +103,16 @@ pub struct PluginMenuControlInfo {
     pub slot: String,
     pub label: String,
     pub target_tag: String,
-    pub setting_key: String,
-    pub checked: bool,
+    /// `"toggle_setting"` or `"run_command"`. The frontend renders a tick for
+    /// the first and a plain item for the second.
+    pub action: String,
+    /// Set for a toggle action only.
+    pub setting_key: Option<String>,
+    /// Set for a command action only.
+    pub command: Option<String>,
+    /// The tick state of a toggle action; `None` for a command action, which
+    /// has no state to show.
+    pub checked: Option<bool>,
 }
 
 /// A bounded, host-resolved passive asset. Package paths never cross the
@@ -1233,14 +1241,19 @@ impl PluginManager {
                 },
                 label: control.label.clone(),
                 target_tag: control.visible_when.active_tag.clone(),
-                setting_key: match &control.action {
-                    PluginMenuAction::ToggleSetting { setting } => setting.clone(),
+                action: match &control.action {
+                    PluginMenuAction::ToggleSetting { .. } => "toggle_setting".into(),
+                    PluginMenuAction::RunCommand { .. } => "run_command".into(),
                 },
-                checked: projection
-                    .settings
-                    .get(&(plugin_id.clone(), control.checked_setting.clone()))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
+                setting_key: control.action.setting().map(str::to_string),
+                command: control.action.command().map(str::to_string),
+                checked: control.checked_setting.as_ref().map(|setting| {
+                    projection
+                        .settings
+                        .get(&(plugin_id.clone(), setting.clone()))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                }),
             })
             .collect())
     }
@@ -1688,7 +1701,7 @@ mod tests {
             visible_when: super::super::manifest::PluginMenuVisibility {
                 active_tag: "grouping".into(),
             },
-            checked_setting: "collapse_titles".into(),
+            checked_setting: Some("collapse_titles".into()),
             action: PluginMenuAction::ToggleSetting {
                 setting: "collapse_titles".into(),
             },
@@ -1706,7 +1719,7 @@ mod tests {
             enabled_setting, ..
         } = &mut value.contributes.facet_transforms[0];
         *enabled_setting = GROUPING_PLUGIN_SETTING.into();
-        value.contributes.menu_controls[0].checked_setting = GROUPING_PLUGIN_SETTING.into();
+        value.contributes.menu_controls[0].checked_setting = Some(GROUPING_PLUGIN_SETTING.into());
         value.contributes.menu_controls[0].action = PluginMenuAction::ToggleSetting {
             setting: GROUPING_PLUGIN_SETTING.into(),
         };
@@ -1930,7 +1943,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mutation.snapshot.projection_revision, 1);
-        assert!(!mutation.snapshot.menu_controls[0].checked);
+        assert_eq!(mutation.snapshot.menu_controls[0].checked, Some(false));
         let stale = manager.projection(Some(0)).err().unwrap();
         assert!(stale.downcast_ref::<StaleProjection>().is_some());
         let projection = manager.projection(Some(1)).unwrap();
@@ -2254,6 +2267,45 @@ mod tests {
             clean.snapshot.plugins[0].settings[0].value,
             Value::String("one".into())
         );
+    }
+
+    #[test]
+    fn api_evolution_rules_decide_which_packages_this_host_accepts() {
+        let app = Version::parse("0.8.0").expect("valid app version");
+        let declarative = |api: &str| {
+            let mut value = manifest("1.0.0");
+            value.api_version = api.into();
+            compatibility_error(&value, &app)
+        };
+        // Declarative API 1.x: the host accepts its own version and any older
+        // compatible minor, and refuses anything newer or another major.
+        assert!(declarative(PLUGIN_API_VERSION).is_none());
+        assert!(declarative("1.0.0").is_none());
+        assert!(declarative("1.99.0").is_some(), "newer minor than the host");
+        assert!(declarative("2.0.0").is_some(), "another major");
+        assert!(declarative("0.9.0").is_some(), "an older major");
+
+        let wasm = |api: &str| {
+            let mut value = manifest("1.0.0");
+            value.kind = PluginKind::Wasm;
+            value.contributes = PluginContributions::default();
+            value.api_version = api.into();
+            compatibility_error(&value, &app)
+        };
+        // Wasm runtime API 0.x: a differing minor is breaking because the
+        // exported `commands` interface belongs to the world, while an older
+        // patch is a compatible addition and still loads.
+        assert!(wasm(WASM_API_VERSION).is_none());
+        assert!(wasm("0.2.0").is_none(), "an older patch stays compatible");
+        assert!(wasm("0.2.99").is_some(), "newer than the host");
+        assert!(wasm("0.1.0").is_some(), "a 0.x minor is breaking");
+        assert!(wasm("0.3.0").is_some(), "a 0.x minor is breaking");
+        assert!(wasm("1.0.0").is_some(), "another major");
+
+        // The two versions move independently: a Wasm package naming the
+        // declarative API is refused, and the reverse too.
+        assert!(wasm(PLUGIN_API_VERSION).is_some());
+        assert!(declarative(WASM_API_VERSION).is_some());
     }
 
     #[test]

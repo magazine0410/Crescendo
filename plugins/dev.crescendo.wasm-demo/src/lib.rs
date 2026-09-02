@@ -1,27 +1,23 @@
 //! Canonical sandboxed Wasm plugin example for Crescendo.
 //!
-//! Exercises the full Stage 5 runtime surface: host-rendered live settings,
-//! namespaced storage, windowed library reads, a coalesced settings-changed
-//! notification, and command dispatch through `plugin_invoke`. Build with
-//! `build.sh` and pack the result with the `crescendo-plugin` tool.
+//! Exercises the whole runtime surface a plugin author sees: host-rendered
+//! live settings, a host-rendered menu action, namespaced storage, windowed
+//! library reads, the coalesced event handlers, and command dispatch through
+//! `plugin_invoke`. Build with `build.sh` and pack the result with the
+//! `crescendo-plugin` tool.
+//!
+//! The manifest requests only `library.read` and `storage`, so the player,
+//! playlist, and network commands below are also the example of what a
+//! *denied* capability looks like from inside the sandbox: an ordinary error
+//! variant, reported as data, not a trap.
 
-wit_bindgen::generate!({
-    path: "../../plugin-sdk/wit",
-    world: "crescendo-plugin",
-    generate_all,
-});
-
-use crate::crescendo::host::host::{self, LogLevel};
-use crate::crescendo::host::library;
-use crate::crescendo::host::net;
-use crate::crescendo::host::player;
-use crate::crescendo::host::playlists;
-use crate::crescendo::host::storage::{self, StorageError};
-use crate::exports::crescendo::plugin::commands;
+use crescendo_plugin_sdk::{
+    export_plugin, host, library, net, player, playlists, storage, Guest, LogLevel, StorageError,
+};
 
 struct Component;
 
-export!(Component);
+export_plugin!(Component);
 
 fn json_escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
@@ -53,7 +49,7 @@ fn json_string_field(input: &str, key: &str) -> Option<String> {
     Some(rest[..end].replace("\\\"", "\"").replace("\\\\", "\\"))
 }
 
-impl commands::Guest for Component {
+impl Guest for Component {
     fn init() -> Result<(), ()> {
         let settings = host::settings();
         host::log(
@@ -127,6 +123,20 @@ impl commands::Guest for Component {
                 Err(player::PlayerError::Unavailable) => "unavailable".into(),
                 Err(player::PlayerError::InvalidRequest) => "invalid".into(),
             }),
+            // Enqueueing is the one player call that takes data from the
+            // plugin, so it is also the example of the host validating what a
+            // plugin hands it: an id that names no track is refused.
+            "player_enqueue" => {
+                let id = json_string_field(&input, "id")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                Ok(match player::enqueue(&[id]) {
+                    Ok(()) => "ok".into(),
+                    Err(player::PlayerError::Denied) => "denied".into(),
+                    Err(player::PlayerError::Unavailable) => "unavailable".into(),
+                    Err(player::PlayerError::InvalidRequest) => "invalid".into(),
+                })
+            }
             "playlists_all" => Ok(match playlists::all() {
                 Ok(list) => format!("{{\"count\":{}}}", list.len()),
                 Err(playlists::PlaylistError::Denied) => "denied".into(),

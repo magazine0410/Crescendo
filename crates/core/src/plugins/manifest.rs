@@ -102,13 +102,31 @@ pub struct PluginMenuVisibility {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PluginMenuAction {
+    /// Flip a declared boolean setting. The host runs its guarded projection
+    /// transition when that setting drives a facet.
     ToggleSetting { setting: String },
+    /// Dispatch one declared Wasm command. The host renders the item and calls
+    /// the component through the same bounded path as `plugin_invoke`; the
+    /// action carries no arguments, so a menu item can never widen what a
+    /// command receives.
+    RunCommand { command: String },
 }
 
 impl PluginMenuAction {
-    pub fn setting(&self) -> &str {
+    /// The setting a toggle action flips, or `None` for an action that runs a
+    /// command instead.
+    pub fn setting(&self) -> Option<&str> {
         match self {
-            Self::ToggleSetting { setting } => setting,
+            Self::ToggleSetting { setting } => Some(setting),
+            Self::RunCommand { .. } => None,
+        }
+    }
+
+    /// The command a run action dispatches, or `None` for a toggle.
+    pub fn command(&self) -> Option<&str> {
+        match self {
+            Self::ToggleSetting { .. } => None,
+            Self::RunCommand { command } => Some(command),
         }
     }
 }
@@ -120,7 +138,11 @@ pub struct PluginMenuControl {
     pub slot: PluginMenuSlot,
     pub label: String,
     pub visible_when: PluginMenuVisibility,
-    pub checked_setting: String,
+    /// The boolean setting whose value renders as the item's tick. Required by
+    /// a toggle action and refused by a command action, which has no state to
+    /// show.
+    #[serde(default)]
+    pub checked_setting: Option<String>,
     pub action: PluginMenuAction,
 }
 
@@ -314,14 +336,35 @@ impl PluginManifest {
             if !menu_ids.insert(control.id.as_str()) {
                 bail!("duplicate menu control id {:?}", control.id);
             }
-            if !boolean_settings.contains(control.checked_setting.as_str()) {
-                bail!(
-                    "menu checked_setting {:?} must name a declared boolean setting",
-                    control.checked_setting
-                );
-            }
-            if control.action.setting() != control.checked_setting {
-                bail!("a toggle_setting menu action must toggle its checked_setting");
+            match &control.action {
+                PluginMenuAction::ToggleSetting { setting } => {
+                    let checked = control.checked_setting.as_deref().ok_or_else(|| {
+                        anyhow!("a toggle_setting menu control must name a checked_setting")
+                    })?;
+                    if !boolean_settings.contains(checked) {
+                        bail!(
+                            "menu checked_setting {checked:?} must name a declared boolean setting"
+                        );
+                    }
+                    if setting != checked {
+                        bail!("a toggle_setting menu action must toggle its checked_setting");
+                    }
+                }
+                PluginMenuAction::RunCommand { command } => {
+                    // A command action dispatches plugin code, so it exists
+                    // only for Wasm packages, and only for a command the
+                    // manifest already declares — the menu can never reach a
+                    // command the plugin did not publish.
+                    if self.kind != PluginKind::Wasm {
+                        bail!("only Wasm plugins can contribute a run_command menu action");
+                    }
+                    if control.checked_setting.is_some() {
+                        bail!("a run_command menu control cannot declare a checked_setting");
+                    }
+                    if !command_ids.contains(command.as_str()) {
+                        bail!("menu action command {command:?} is not a declared command");
+                    }
+                }
             }
         }
         Ok(())
@@ -662,7 +705,7 @@ mod tests {
             visible_when: PluginMenuVisibility {
                 active_tag: "grouping".into(),
             },
-            checked_setting: "collapse_titles".into(),
+            checked_setting: Some("collapse_titles".into()),
             action: PluginMenuAction::ToggleSetting {
                 setting: "collapse_titles".into(),
             },
@@ -679,7 +722,7 @@ mod tests {
         assert!(bad.validate(false).is_err());
 
         let mut bad = value;
-        bad.contributes.menu_controls[0].checked_setting = "missing".into();
+        bad.contributes.menu_controls[0].checked_setting = Some("missing".into());
         assert!(bad.validate(false).is_err());
     }
 
@@ -689,6 +732,52 @@ mod tests {
         value.kind = PluginKind::Wasm;
         value.api_version = "0.1.0".into();
         value
+    }
+
+    #[test]
+    fn a_run_command_menu_action_needs_a_wasm_package_and_a_declared_command() {
+        let mut value = wasm_manifest();
+        value.contributes.commands = vec![PluginCommandDeclaration {
+            id: "library_summary".into(),
+        }];
+        value.contributes.menu_controls.push(PluginMenuControl {
+            id: "log_summary".into(),
+            slot: PluginMenuSlot::LibraryFilter,
+            label: "Log a library summary".into(),
+            visible_when: PluginMenuVisibility {
+                active_tag: "composer".into(),
+            },
+            checked_setting: None,
+            action: PluginMenuAction::RunCommand {
+                command: "library_summary".into(),
+            },
+        });
+        value.validate(true).unwrap();
+
+        // The menu can only reach a command the manifest already publishes.
+        let mut bad = value.clone();
+        bad.contributes.menu_controls[0].action = PluginMenuAction::RunCommand {
+            command: "not_declared".into(),
+        };
+        assert!(bad.validate(true).is_err());
+
+        // A command action shows no state, so a tick would be a lie.
+        let mut bad = value.clone();
+        bad.contributes.menu_controls[0].checked_setting = Some("demo_flag".into());
+        assert!(bad.validate(true).is_err());
+
+        // Declarative packages execute no code, so they cannot run commands.
+        let mut bad = value.clone();
+        bad.kind = PluginKind::Declarative;
+        bad.contributes.commands.clear();
+        assert!(bad.validate(false).is_err());
+
+        // And a toggle action still requires the setting it ticks.
+        let mut bad = value;
+        bad.contributes.menu_controls[0].action = PluginMenuAction::ToggleSetting {
+            setting: "demo_flag".into(),
+        };
+        assert!(bad.validate(true).is_err());
     }
 
     #[test]

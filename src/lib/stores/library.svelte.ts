@@ -171,7 +171,10 @@ class LibraryStore {
   /** One revision backs every projection-dependent object currently rendered. */
   projectionRevision = $state(0);
   projectionChanging = $state(false);
-  projectionNotice = $state<string | null>(null);
+  /** One dismissible banner line for the library tab: a stale-projection
+      retry that could not be revalidated, or a plugin menu action that
+      failed. Cleared when a projection change starts. */
+  notice = $state<string | null>(null);
 
   /** Track-list selection, by (flat) track index. `selectionAnchor` is the
       base row for Shift-range selects. Reset whenever the view reloads. */
@@ -457,7 +460,7 @@ class LibraryStore {
 
   private async runProjectionChange(write: () => Promise<number>): Promise<void> {
     this.projectionChanging = true;
-    this.projectionNotice = null;
+    this.notice = null;
     this.invalidateProjectionRequests();
     try {
       this.projectionRevision = await write();

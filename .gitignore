@@ -8,10 +8,13 @@ node_modules
 /target
 src-tauri/target
 plugins/*/target
+plugin-sdk/bindings/rust/target
 
 # The demo Wasm plugin's built component: regenerate with build.sh, commit
 # only the test fixture copy under crates/core/tests/fixtures/.
 plugins/dev.crescendo.wasm-demo/module.wasm
+# build.sh stages manifest.json + module.wasm here for the packer.
+plugins/*/dist
 .env
 .env.*
 !.env.example

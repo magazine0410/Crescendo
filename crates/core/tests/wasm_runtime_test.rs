@@ -5,8 +5,9 @@
 use crescendo_core::db::Db;
 use crescendo_core::plugins::wasm::{RuntimePaths, RuntimeLimits, WasmHandle, WasmPluginSpec};
 use crescendo_core::plugins::{
-    PluginCommandDeclaration, PluginContributions, PluginKind, PluginManifest,
-    PluginManager, PluginSettingDeclaration,
+    PluginCommandDeclaration, PluginContributions, PluginKind, PluginManager, PluginManifest,
+    PluginMenuAction, PluginMenuControl, PluginMenuSlot, PluginMenuVisibility,
+    PluginSettingDeclaration, WASM_API_VERSION,
 };
 use serde_json::Value;
 use std::fs::File;
@@ -19,6 +20,10 @@ use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 const MODULE: &[u8] = include_bytes!("fixtures/wasm-demo-module.wasm");
+/// The same demo component as it was built against runtime API 0.2.0, kept
+/// unchanged so every later host keeps proving that a component built for an
+/// older compatible API still loads. Never rebuild this file.
+const LEGACY_MODULE: &[u8] = include_bytes!("fixtures/wasm-legacy-0.2.0-module.wasm");
 const PLUGIN_ID: &str = "dev.crescendo.wasm-demo";
 
 fn wasm_manifest(version: &str, permissions: &[&str]) -> PluginManifest {
@@ -32,7 +37,11 @@ fn wasm_manifest(version: &str, permissions: &[&str]) -> PluginManifest {
         license: "MIT".into(),
         homepage: None,
         kind: PluginKind::Wasm,
-        api_version: "0.2.0".into(),
+        // The committed component is built against the current WIT, so the
+        // manifest must name the current runtime API. A test that pinned an
+        // older version here would package a component whose imports and
+        // exports disagree with what it declares.
+        api_version: WASM_API_VERSION.into(),
         min_crescendo_version: "0.8.0".into(),
         permissions: permissions.iter().map(|value| (*value).to_string()).collect(),
         network_domains: vec![],
@@ -137,6 +146,96 @@ fn install_and_enable(manager: &PluginManager, dir: &TempDir, manifest: &PluginM
     let package = dir.path().join("plugin.crescendo-plugin");
     write_package(&package, manifest, MODULE);
     manager.install(&package).unwrap();
+}
+
+#[test]
+fn a_component_built_against_an_older_compatible_api_still_loads() {
+    // The world's imports are versioned, so this is the test that a host
+    // patch release does not strand every installed component: the 0.2.0
+    // component imports `crescendo:host/*@0.2.0` while this host provides
+    // @0.2.1, and Wasmtime resolves the difference by semver.
+    let (dir, db, manager) = setup();
+    let mut manifest = wasm_manifest("1.0.0", &["library.read", "storage"]);
+    manifest.api_version = "0.2.0".into();
+    let package = dir.path().join("legacy.crescendo-plugin");
+    write_package(&package, &manifest, LEGACY_MODULE);
+    manager.install(&package).unwrap();
+    assert!(
+        plugin_info(&manager).compatible,
+        "an older compatible API must stay installable: {:?}",
+        plugin_info(&manager).compatibility_error
+    );
+    manager.approve_grants(PLUGIN_ID).unwrap();
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    drop(manager);
+
+    let manager = restart(&dir, db);
+    let info = plugin_info(&manager);
+    assert!(info.loaded, "expected the legacy component to load: {:?}", info.error);
+    let summary = invoke_once_ready(&manager, "library_summary", serde_json::json!({}));
+    assert_eq!(summary["total"], 2, "the legacy component still reaches the host");
+    assert!(plugin_info(&manager).runtime_error.is_none());
+}
+
+#[test]
+fn a_run_command_menu_control_reaches_the_snapshot_and_dispatches() {
+    let (dir, db, manager) = setup();
+    let mut manifest = wasm_manifest("1.0.0", &["library.read", "storage"]);
+    manifest.contributes.menu_controls.push(PluginMenuControl {
+        id: "log_library_summary".into(),
+        slot: PluginMenuSlot::LibraryFilter,
+        label: "Log a library summary (Wasm demo)".into(),
+        visible_when: PluginMenuVisibility {
+            active_tag: "composer".into(),
+        },
+        checked_setting: None,
+        action: PluginMenuAction::RunCommand {
+            command: "library_summary".into(),
+        },
+    });
+    install_and_enable(&manager, &dir, &manifest);
+    manager.approve_grants(PLUGIN_ID).unwrap();
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    drop(manager);
+
+    let manager = restart(&dir, db);
+    let controls = manager.snapshot().unwrap().menu_controls;
+    let control = controls
+        .iter()
+        .find(|control| control.id == "log_library_summary")
+        .expect("the command action is contributed");
+    assert_eq!(control.action, "run_command");
+    assert_eq!(control.command.as_deref(), Some("library_summary"));
+    // A command action carries no setting and no tick: there is no state for
+    // the host to render.
+    assert!(control.setting_key.is_none());
+    assert!(control.checked.is_none());
+
+    // The item dispatches through the one bounded path, exactly like
+    // `plugin_invoke`.
+    let result = invoke_once_ready(&manager, control.command.as_deref().unwrap(), serde_json::json!({}));
+    assert_eq!(result["total"], 2);
+}
+
+#[test]
+fn a_component_built_against_a_breaking_api_is_refused_before_it_runs() {
+    let (dir, _db, manager) = setup();
+    let mut manifest = wasm_manifest("1.0.0", &[]);
+    manifest.api_version = "0.1.0".into();
+    let package = dir.path().join("old.crescendo-plugin");
+    write_package(&package, &manifest, LEGACY_MODULE);
+    manager.install(&package).unwrap();
+    let info = plugin_info(&manager);
+    assert!(!info.compatible);
+    assert!(
+        info.compatibility_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Wasm runtime API"),
+        "expected an API explanation: {:?}",
+        info.compatibility_error
+    );
+    assert!(manager.set_enabled(PLUGIN_ID, true).is_err());
 }
 
 #[test]
@@ -497,6 +596,17 @@ impl Harness {
     fn with_domains(permissions: &[&str], domains: &[&str]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(Db::open(&dir.path().join("library.db")).unwrap());
+        db.with(|connection| {
+            for id in 1..=2 {
+                connection.execute(
+                    "INSERT INTO tracks(id, path, dir, filename, mtime, size, format, duration_ms, title, artist, album)
+                     VALUES (?1, ?2, '/m', ?3, 0, 0, 'FLAC', 1000, ?4, 'Artist', 'Album')",
+                    rusqlite::params![id, format!("/m/{id}.flac"), format!("{id}.flac"), format!("Title {id}")],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
         let module_path = dir.path().join("module.wasm");
         std::fs::write(&module_path, MODULE).unwrap();
         let mut manifest = wasm_manifest("1.0.0", permissions);
@@ -557,6 +667,99 @@ fn player_capabilities_are_separate_and_need_an_installed_player() {
     assert!(
         both.invoke("player_state", "{}").contains("\"playing\":true"),
         "an installed player must report its real state"
+    );
+
+    // Enqueueing is the one transport call carrying plugin-supplied data, so
+    // the host checks it: a real id is queued, an id that names no track is
+    // refused rather than left sitting in the user's queue.
+    assert_eq!(both.invoke("player_enqueue", "{\"id\":\"1\"}"), "ok");
+    assert_eq!(both.invoke("player_enqueue", "{\"id\":\"4242\"}"), "invalid");
+
+    // Denial comes before validation, so an ungranted plugin cannot use the
+    // enqueue error to probe which track ids exist.
+    assert_eq!(harness.invoke("player_enqueue", "{\"id\":\"1\"}"), "denied");
+    assert_eq!(harness.invoke("player_enqueue", "{\"id\":\"4242\"}"), "denied");
+}
+
+/// Namespaced storage is per plugin: identity comes from the store the call
+/// arrived on, never from the call, so two plugins writing the same key cannot
+/// see or overwrite each other. The quota is charged per plugin too.
+#[test]
+fn storage_is_namespaced_per_plugin_and_bounded_by_the_quota() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Db::open(&dir.path().join("library.db")).unwrap());
+    let module_path = dir.path().join("module.wasm");
+    std::fs::write(&module_path, MODULE).unwrap();
+
+    let second_id = "dev.crescendo.wasm-demo-two";
+    let specs = ["dev.crescendo.wasm-demo", second_id]
+        .iter()
+        .map(|id| {
+            let mut manifest = wasm_manifest("1.0.0", &["storage"]);
+            manifest.id = (*id).into();
+            WasmPluginSpec {
+                id: (*id).into(),
+                module_path: module_path.clone(),
+                manifest: Arc::new(manifest),
+            }
+        })
+        .collect();
+    let handle = WasmHandle::spawn(
+        specs,
+        db.clone(),
+        RuntimeLimits::default(),
+        Default::default(),
+        Default::default(),
+        RuntimePaths { safe_mode_marker: dir.path().join("safe-mode-requested") },
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !handle.runtime_info(second_id).ready {
+        if Instant::now() > deadline {
+            panic!("the second plugin never initialized");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // Both write the same key. Each reads back its own value.
+    assert_eq!(
+        handle.invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"first\"}").unwrap(),
+        "{\"stored\":\"first\"}"
+    );
+    assert_eq!(
+        handle.invoke(second_id, "storage_roundtrip", "{\"value\":\"second\"}").unwrap(),
+        "{\"stored\":\"second\"}"
+    );
+    assert_eq!(
+        handle.invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"first\"}").unwrap(),
+        "{\"stored\":\"first\"}",
+        "the second plugin must not have overwritten the first"
+    );
+    assert_eq!(
+        db.plugin_storage_get(PLUGIN_ID, "demo-key").unwrap().as_deref(),
+        Some("first")
+    );
+    assert_eq!(
+        db.plugin_storage_get(second_id, "demo-key").unwrap().as_deref(),
+        Some("second")
+    );
+
+    // Fill one plugin's namespace to its quota. The guest's next write is
+    // refused, and the other plugin is unaffected: the quota is namespaced
+    // the same way the values are.
+    let block = "x".repeat(256 * 1024);
+    for index in 0..21 {
+        db.plugin_storage_set(PLUGIN_ID, &format!("filler{index}"), &block)
+            .unwrap();
+    }
+    assert!(db.plugin_storage_usage(PLUGIN_ID).unwrap() > 5 * 1024 * 1024 - 256 * 1024);
+    assert_eq!(
+        handle.invoke(PLUGIN_ID, "storage_roundtrip", "{\"value\":\"overflow\"}").unwrap(),
+        "{\"quota\":true}"
+    );
+    assert_eq!(
+        handle.invoke(second_id, "storage_roundtrip", "{\"value\":\"still fine\"}").unwrap(),
+        "{\"stored\":\"still fine\"}"
     );
 }
 

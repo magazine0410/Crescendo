@@ -45,7 +45,7 @@
       );
     } catch (reason) {
       if (await library.recoverStaleProjection(reason)) {
-        library.projectionNotice = "Library view changed; try again";
+        library.notice = "Library view changed; try again";
         return;
       }
       throw reason;

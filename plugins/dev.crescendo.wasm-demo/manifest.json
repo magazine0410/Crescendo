@@ -2,13 +2,13 @@
   "schema_version": 1,
   "id": "dev.crescendo.wasm-demo",
   "name": "Wasm Demo Tools",
-  "version": "0.1.0",
-  "description": "Canonical sandboxed Wasm plugin example. Demonstrates host-rendered settings, namespaced storage, windowed library reads, and permission failures.",
+  "version": "0.2.0",
+  "description": "Canonical sandboxed Wasm plugin example. Demonstrates host-rendered settings and a menu action, namespaced storage, windowed library reads, and the denials a plugin sees for capabilities it did not request.",
   "authors": ["magazine"],
   "license": "MIT",
   "homepage": "https://github.com/magazine0410/Crescendo",
   "kind": "wasm",
-  "api_version": "0.2.0",
+  "api_version": "0.2.1",
   "min_crescendo_version": "0.8.0",
   "permissions": ["library.read", "storage"],
   "contributes": {
@@ -21,11 +21,26 @@
         "default": false
       }
     ],
+    "menu_controls": [
+      {
+        "id": "log_library_summary",
+        "slot": "library.filter",
+        "label": "Log a library summary (Wasm demo)",
+        "visible_when": { "active_tag": "composer" },
+        "action": { "type": "run_command", "command": "library_summary" }
+      }
+    ],
     "commands": [
       { "id": "identity" },
       { "id": "settings" },
       { "id": "storage_roundtrip" },
       { "id": "library_summary" },
+      { "id": "player_state" },
+      { "id": "player_stop" },
+      { "id": "player_enqueue" },
+      { "id": "playlists_all" },
+      { "id": "playlist_create" },
+      { "id": "net_fetch" },
       { "id": "spin" }
     ]
   }

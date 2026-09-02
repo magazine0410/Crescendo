@@ -102,7 +102,7 @@
     if (library.projectionChanging) return;
     const trackId = library.tracks[trackIndex]?.id;
     if (trackId == null) {
-      library.projectionNotice = "Library view changed; try again";
+      library.notice = "Library view changed; try again";
       return;
     }
     try {
@@ -111,13 +111,13 @@
       if (!(await library.recoverStaleProjection(reason))) throw reason;
       const newIndex = await library.indexOfTrack(trackId);
       if (newIndex == null) {
-        library.projectionNotice = "Library view changed; try again";
+        library.notice = "Library view changed; try again";
         return;
       }
       try {
         await player.playContext(playContext(), newIndex);
       } catch {
-        library.projectionNotice = "Library view changed; try again";
+        library.notice = "Library view changed; try again";
       }
     }
   }

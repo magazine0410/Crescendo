@@ -78,15 +78,15 @@
 
 <div class="tab">
   <ScanProgress />
-  {#if library.projectionChanging || library.projectionNotice}
+  {#if library.projectionChanging || library.notice}
     <button
       class="projection-status"
-      class:error={!!library.projectionNotice}
+      class:error={!!library.notice}
       disabled={library.projectionChanging}
-      title={library.projectionNotice ? "Dismiss" : undefined}
-      onclick={() => (library.projectionNotice = null)}
+      title={library.notice ? "Dismiss" : undefined}
+      onclick={() => (library.notice = null)}
     >
-      {library.projectionNotice ?? "Updating library view…"}
+      {library.notice ?? "Updating library view…"}
     </button>
   {/if}
   <div class="cols">

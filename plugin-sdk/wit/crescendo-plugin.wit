@@ -1,10 +1,10 @@
-/// Crescendo sandboxed Wasm plugin world, runtime API 0.2.0.
+/// Crescendo sandboxed Wasm plugin world, runtime API 0.2.1.
 ///
 /// A plugin component imports the `crescendo:host` interfaces it needs and
 /// exports the `commands` interface below. The host compiles and instantiates
 /// one isolated component per plugin, away from the UI and player threads,
 /// with memory, fuel, and wall-clock limits.
-package crescendo:plugin@0.2.0;
+package crescendo:plugin@0.2.1;
 
 /// The single interface every Wasm plugin exports.
 interface commands {
@@ -37,11 +37,11 @@ interface commands {
 }
 
 world crescendo-plugin {
-    import crescendo:host/host@0.2.0;
-    import crescendo:host/storage@0.2.0;
-    import crescendo:host/library@0.2.0;
-    import crescendo:host/player@0.2.0;
-    import crescendo:host/playlists@0.2.0;
-    import crescendo:host/net@0.2.0;
+    import crescendo:host/host@0.2.1;
+    import crescendo:host/storage@0.2.1;
+    import crescendo:host/library@0.2.1;
+    import crescendo:host/player@0.2.1;
+    import crescendo:host/playlists@0.2.1;
+    import crescendo:host/net@0.2.1;
     export commands;
 }

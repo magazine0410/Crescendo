@@ -10,6 +10,7 @@ import type {
   CollectionInfo,
   PlaylistInfo,
   PluginInfo,
+  PluginMenuControl,
   PluginMutationResult,
   PluginSnapshot,
   SortKey,
@@ -151,14 +152,14 @@ const mockGroupingPlugin: PluginInfo = {
 const mockWasmPlugin: PluginInfo = {
   id: "dev.crescendo.wasm-demo",
   name: "Wasm Demo Tools",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
     "Browser mock of the sandboxed Wasm plugin: commands, capability approval, and runtime diagnostics.",
   authors: ["magazine"],
   license: "MIT",
   homepage: "https://github.com/magazine0410/Crescendo",
   kind: "wasm",
-  api_version: "0.1.0",
+  api_version: "0.2.1",
   min_crescendo_version: "0.8.0",
   package_hash: "c0ffee000000000000000000000000000000000000000000000000000000dead",
   desired_enabled: true,
@@ -200,6 +201,29 @@ function groupingCollapseEnabled(): boolean {
   return Boolean(plugin?.settings[0]?.value);
 }
 
+/** The Wasm demo's host-rendered command action, shown on the CUSTOM tab
+    while its tag is `composer`. It runs a command instead of toggling a
+    setting, so it carries no tick. */
+function wasmDemoMenuControls(): PluginMenuControl[] {
+  const plugin = mockPlugins.find(
+    (candidate) => candidate.id === "dev.crescendo.wasm-demo" && candidate.loaded,
+  );
+  if (!plugin) return [];
+  return [
+    {
+      plugin_id: plugin.id,
+      id: "log_library_summary",
+      slot: "library.filter",
+      label: "Log a library summary (Wasm demo)",
+      target_tag: "composer",
+      action: "run_command",
+      setting_key: null,
+      command: "library_summary",
+      checked: null,
+    },
+  ];
+}
+
 function pluginSnapshot(): PluginSnapshot {
   return {
     plugins: structuredClone(mockPlugins),
@@ -219,9 +243,12 @@ function pluginSnapshot(): PluginSnapshot {
             slot: "library.filter",
             label: "Collapse multi-tagged titles under their first grouping",
             target_tag: "grouping",
+            action: "toggle_setting",
             setting_key: "collapse_multi_tagged_titles",
+            command: null,
             checked: true,
           },
+          ...wasmDemoMenuControls(),
         ]
       : mockPlugins.some(
             (candidate) => candidate.id === "dev.crescendo.primary-grouping" && candidate.loaded,
@@ -233,11 +260,14 @@ function pluginSnapshot(): PluginSnapshot {
               slot: "library.filter",
               label: "Collapse multi-tagged titles under their first grouping",
               target_tag: "grouping",
+              action: "toggle_setting",
               setting_key: "collapse_multi_tagged_titles",
+              command: null,
               checked: false,
             },
+            ...wasmDemoMenuControls(),
           ]
-        : [],
+        : wasmDemoMenuControls(),
     grouping_migration_pending: false,
   };
 }

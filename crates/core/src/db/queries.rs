@@ -550,6 +550,32 @@ impl Db {
         })
     }
 
+    /// Whether every id names an existing track row.
+    ///
+    /// For callers that supply raw ids from outside the UI — a `player.control`
+    /// plugin appending to the queue, for one — so nothing can put an entry
+    /// into the queue that resolves to no track at all. The id list is bounded
+    /// by the caller.
+    pub fn track_ids_all_exist(&self, ids: &[i64]) -> Result<bool> {
+        if ids.is_empty() {
+            return Ok(true);
+        }
+        let unique: std::collections::HashSet<i64> = ids.iter().copied().collect();
+        self.with(|conn| {
+            let placeholders = std::iter::repeat("?")
+                .take(unique.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!("SELECT COUNT(*) FROM tracks WHERE id IN ({placeholders})");
+            let found: i64 = conn.query_row(
+                &sql,
+                rusqlite::params_from_iter(unique.iter()),
+                |row| row.get(0),
+            )?;
+            Ok(found == unique.len() as i64)
+        })
+    }
+
     /// Count of live tracks matching (search filter AND optional mode values).
     /// **Ignores plugin facet transforms.** It builds a `FacetPlan::exact` from
     /// the stored `prefer_romanized` preference, so a plugin projecting this tag

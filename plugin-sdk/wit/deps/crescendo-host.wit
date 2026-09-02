@@ -1,4 +1,4 @@
-/// Crescendo host interfaces, runtime API 0.2.0.
+/// Crescendo host interfaces, runtime API 0.2.1.
 ///
 /// A plugin component imports the interfaces it needs and receives them from
 /// the host; there is no WASI. Every capability-gated interface denies calls
@@ -7,7 +7,7 @@
 /// on-demand read of live values — components must not cache
 /// initialization-time values, because `on-settings-changed` is coalesced,
 /// not guaranteed per change.
-package crescendo:host@0.2.0;
+package crescendo:host@0.2.1;
 
 /// Always-available host services: live settings and a bounded log.
 interface host {

@@ -703,12 +703,23 @@ impl crescendo::host::player::Host for StoreData {
         &mut self,
         track_ids: Vec<u64>,
     ) -> std::result::Result<(), crescendo::host::player::PlayerError> {
+        // Denial comes first. Validating the ids before the capability check
+        // would answer "does track 4242 exist?" for a plugin that was never
+        // granted the player at all.
+        if self.require(PluginPermission::PlayerControl).is_err() {
+            return Err(crescendo::host::player::PlayerError::Denied);
+        }
         if track_ids.is_empty() || track_ids.len() > MAX_LIBRARY_PAGE as usize {
             return Err(crescendo::host::player::PlayerError::InvalidRequest);
         }
-        self.control(BridgePlayerCommand::Enqueue {
-            track_ids: track_ids.into_iter().map(|id| id as i64).collect(),
-        })
+        let track_ids: Vec<i64> = track_ids.into_iter().map(|id| id as i64).collect();
+        // The queue holds concrete ids and nothing downstream re-checks them,
+        // so an unknown id would otherwise sit in the user's queue resolving
+        // to no track at all.
+        if !self.db.track_ids_all_exist(&track_ids).unwrap_or(false) {
+            return Err(crescendo::host::player::PlayerError::InvalidRequest);
+        }
+        self.control(BridgePlayerCommand::Enqueue { track_ids })
     }
 }
 

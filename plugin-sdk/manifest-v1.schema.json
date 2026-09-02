@@ -183,7 +183,7 @@
       "required": ["active_tag"],
       "properties": { "active_tag": { "$ref": "#/$defs/targetTag" } }
     },
-    "menuAction": {
+    "menuToggleAction": {
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "setting"],
@@ -192,7 +192,16 @@
         "setting": { "$ref": "#/$defs/key" }
       }
     },
-    "menuControl": {
+    "menuRunCommandAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "command"],
+      "properties": {
+        "type": { "const": "run_command" },
+        "command": { "$ref": "#/$defs/key" }
+      }
+    },
+    "menuToggleControl": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "slot", "label", "visible_when", "checked_setting", "action"],
@@ -202,8 +211,28 @@
         "label": { "$ref": "#/$defs/nonEmptyText" },
         "visible_when": { "$ref": "#/$defs/menuVisibility" },
         "checked_setting": { "$ref": "#/$defs/key" },
-        "action": { "$ref": "#/$defs/menuAction" }
+        "action": { "$ref": "#/$defs/menuToggleAction" }
       }
+    },
+    "menuCommandControl": {
+      "title": "A menu item that runs one declared Wasm command",
+      "description": "Has no checked_setting: a command action shows no state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "slot", "label", "visible_when", "action"],
+      "properties": {
+        "id": { "$ref": "#/$defs/key" },
+        "slot": { "const": "library.filter" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "visible_when": { "$ref": "#/$defs/menuVisibility" },
+        "action": { "$ref": "#/$defs/menuRunCommandAction" }
+      }
+    },
+    "menuControl": {
+      "oneOf": [
+        { "$ref": "#/$defs/menuToggleControl" },
+        { "$ref": "#/$defs/menuCommandControl" }
+      ]
     },
     "commandDeclaration": {
       "type": "object",

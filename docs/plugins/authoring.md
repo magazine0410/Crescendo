@@ -88,10 +88,25 @@ Wasm plugins additionally contribute `commands`: an id list (same key rules as
 settings, at most 32). Only declared command ids are dispatchable through the
 `plugin_invoke` application command, which is main-window only.
 
+A menu control declares one of two actions:
+
+```json
+{ "type": "toggle_setting", "setting": "collapse_multi_tagged_titles" }
+{ "type": "run_command", "command": "library_summary" }
+```
+
+A `toggle_setting` control names a `checked_setting`, and the host renders its
+value as the item's tick. A `run_command` control is Wasm-only, has no
+`checked_setting` — it shows no state — and may name only a command the same
+manifest declares, so a menu item can never reach a command the plugin did not
+publish. The action carries no arguments; the host dispatches it through the
+same bounded path as `plugin_invoke`, outside the projection transition,
+because running a command changes no projection.
+
 ## Wasm plugins
 
 Wasm packages carry a `module.wasm` built against the versioned WIT world in
-[`plugin-sdk/wit/`](../../plugin-sdk/wit) (runtime API `0.2.0`, matched by the
+[`plugin-sdk/wit/`](../../plugin-sdk/wit) (runtime API `0.2.1`, matched by the
 manifest's `api_version`). The component model interface is:
 
 - `crescendo:host/host` — always available: an on-demand `settings` read of the
@@ -102,8 +117,16 @@ manifest's `api_version`). The component model interface is:
 - `crescendo:host/library` — windowed, id-ordered read-only track metadata
   (requires `library.read`; `path` fields are filled only with
   `library.paths`), pages of at most 2000 rows.
-- exported `crescendo:plugin/commands` — `init`, `invoke(command, input)`, and
-  `on-settings-changed`.
+- `crescendo:host/player`, `crescendo:host/playlists`, `crescendo:host/net` —
+  playback observation and bounded transport, playlist reads and writes, and
+  HTTPS requests to approved domains, each behind its own capability.
+- exported `crescendo:plugin/commands` — `init`, `invoke(command, input)`,
+  `on-settings-changed`, and the four other event handlers listed below.
+
+Import only the interfaces the plugin uses. Imports are matched by semver, so a
+component keeps loading when a later host patch adds one. **Exports are the
+opposite**: the world names every export a component must provide, so a missing
+handler stops it from instantiating at all.
 
 There is no WASI: no filesystem, environment, process, socket, clock, or
 database access, and no per-track execution. Each plugin runs as one isolated
@@ -111,12 +134,52 @@ component on a dedicated runtime thread with a 64 MiB memory limit, per-call
 fuel, and a wall-clock deadline. Repeated runtime failures mark the plugin
 unhealthy for the session; repeated startup-init failures auto-disable it.
 
+### Rust bindings
+
+Rust plugins depend on the generated binding crate rather than running
+`wit_bindgen::generate!` themselves, so every plugin is built from one copy of
+the WIT and cannot drift from the host:
+
+```toml
+[dependencies]
+crescendo-plugin-sdk = { path = "path/to/plugin-sdk/bindings/rust" }
+```
+
+```rust
+use crescendo_plugin_sdk::{export_plugin, host, Guest, LogLevel};
+
+struct Component;
+export_plugin!(Component);
+
+impl Guest for Component {
+    fn init() -> Result<(), ()> {
+        host::log(LogLevel::Info, "hello");
+        Ok(())
+    }
+    // ... the remaining exports the world requires
+}
+```
+
+The crate version tracks the runtime API it was generated from; keep it equal
+to the `api_version` in the manifest.
+
+### Build and package
+
 Build the canonical example from
 [`plugins/dev.crescendo.wasm-demo/`](../../plugins/dev.crescendo.wasm-demo):
 it needs `rustup target add wasm32-unknown-unknown` and
-`cargo install wasm-tools`; run `./build.sh` there, then assemble the package
-source (manifest.json plus the built module.wasm) and pack it with the
-`crescendo-plugin` tool.
+`cargo install wasm-tools`. Running `./build.sh` there produces `module.wasm`
+and stages `dist/` — manifest.json plus the built module, which is all a
+package may contain — so the packer runs straight on it:
+
+```bash
+sh plugins/dev.crescendo.wasm-demo/build.sh
+cargo run -p crescendo-core --bin crescendo-plugin -- pack plugins/dev.crescendo.wasm-demo/dist
+```
+
+Pack a staged directory, never the Rust source directory: `Cargo.toml`,
+`src/`, and `target/` are not package content, and the validator refuses an
+archive that carries them.
 
 ## Capabilities
 
@@ -131,7 +194,7 @@ Wasm manifests may request capabilities from the fixed v1 vocabulary:
 
 Grants are user-approved actions recorded against the plugin identity,
 version, and package hash; any update voids the approval and must be approved
-again before the update can load. Runtime API `0.2.0` provides the host
+again before the update can load. Runtime API `0.2.1` provides the host
 interface for every capability in the vocabulary — see the table below. The
 compatibility check remains: a package naming a capability this build does not
 know stays installed but incompatible, and cannot be enabled, until a later
@@ -160,7 +223,7 @@ entries, and validates the completed archive through the runtime staging path.
 Identical source bytes produce an identical archive and SHA-256. The output is
 created without replacing an existing file.
 
-## Capabilities in runtime API 0.2.0
+## Capabilities in runtime API 0.2.1
 
 Every permission in the v1 vocabulary now has a host interface. Each is denied
 per call unless the user approved it for this exact package:

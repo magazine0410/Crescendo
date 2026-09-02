@@ -34,6 +34,33 @@ jobs:
           cargo run -p crescendo-core --bin crescendo-plugin -- validate plugins/dev.crescendo.primary-grouping
           cargo run -p crescendo-core --bin crescendo-plugin -- pack plugins/dev.crescendo.primary-grouping plugin-artifacts/dev.crescendo.primary-grouping-1.0.0.crescendo-plugin
           cargo run -p crescendo-core --bin crescendo-plugin -- validate plugin-artifacts/dev.crescendo.primary-grouping-1.0.0.crescendo-plugin
+      - name: Check the SDK reports the versions the host implements
+        run: |
+          set -eu
+          api=$(grep -oP 'WASM_API_VERSION: &str = "\K[^"]+' crates/core/src/plugins/mod.rs)
+          # Anchor on the package declaration itself. A bare "@$api" match
+          # would be satisfied by the world's import lines while the package
+          # declaration stayed on the old version.
+          check_package() {
+            grep -qE "^package $2@$api;\$" "$1" || {
+              echo "::error::$1 does not declare $2@$api"
+              exit 1
+            }
+            # And nothing in the file may name a different version of the
+            # contract, so an import cannot be left behind either.
+            stale=$(grep -oE '@[0-9]+\.[0-9]+\.[0-9]+' "$1" | sort -u | grep -v "^@$api\$" || true)
+            if [ -n "$stale" ]; then
+              echo "::error::$1 still references $stale, but the runtime API is $api"
+              exit 1
+            fi
+          }
+          check_package plugin-sdk/wit/crescendo-plugin.wit crescendo:plugin
+          check_package plugin-sdk/wit/deps/crescendo-host.wit crescendo:host
+          grep -q "^version = \"$api\"" plugin-sdk/bindings/rust/Cargo.toml || {
+            echo "::error::the Rust binding crate version is not $api"
+            exit 1
+          }
+          echo "runtime API $api is consistent across the WIT and the bindings"
       - uses: actions/upload-artifact@v4
         with:
           name: official-crescendo-plugins
@@ -54,6 +81,10 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Install wasm-tools
         run: cargo install wasm-tools --locked
+      - name: Build the published Rust bindings
+        # The crate third-party plugins depend on. If it stops compiling
+        # against the WIT, every Rust plugin stops compiling.
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path plugin-sdk/bindings/rust/Cargo.toml
       - name: Rebuild the demo component
         run: sh plugins/dev.crescendo.wasm-demo/build.sh
       - name: Compare against the committed fixture
@@ -66,21 +97,49 @@ jobs:
             exit 1
           fi
           echo "fixture matches its source"
+      - name: The frozen 0.2.0 component must never be rebuilt
+        # It is the evidence that a component built for an older compatible
+        # API still loads. Rebuilding it against today's WIT would make the
+        # compatibility test prove nothing.
+        run: |
+          echo "b7291437863c26ded8da7e9d155e40d08a3de4b572b5c4e9d9aacad0f43d966f  crates/core/tests/fixtures/wasm-legacy-0.2.0-module.wasm" \
+            | sha256sum -c -
+      - name: Pack the demo package
+        run: |
+          mkdir -p plugin-artifacts
+          cargo run -p crescendo-core --bin crescendo-plugin -- pack plugins/dev.crescendo.wasm-demo/dist plugin-artifacts/dev.crescendo.wasm-demo-0.2.0.crescendo-plugin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-demo-plugin
+          path: plugin-artifacts/*.crescendo-plugin
+          if-no-files-found: error
 
   publish-release-asset:
     if: github.event_name == 'release'
-    needs: validate-and-pack
+    needs: [validate-and-pack, wasm-fixture-provenance]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: official-crescendo-plugins
           path: plugin-artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-demo-plugin
+          path: plugin-artifacts
+      - name: Bundle the authoring contract
+        # The WIT world and the generated Rust bindings are what a plugin is
+        # built against, so they ship with the release that implements them.
+        run: tar -czf plugin-artifacts/crescendo-plugin-sdk.tar.gz plugin-sdk
       - name: Attach the official plugin to the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" plugin-artifacts/*.crescendo-plugin --clobber
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            plugin-artifacts/*.crescendo-plugin \
+            plugin-artifacts/crescendo-plugin-sdk.tar.gz --clobber
 

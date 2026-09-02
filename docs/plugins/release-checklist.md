@@ -1,4 +1,4 @@
-# Declarative v1 release checklist
+# Plugin release checklist
 
 Run these gates from the repository root before cutting a release:
 
@@ -10,7 +10,15 @@ cargo check -p crescendo
 npm run check
 cargo run -p crescendo-core --bin crescendo-plugin -- validate \
   plugins/dev.crescendo.primary-grouping
+sh plugins/dev.crescendo.wasm-demo/build.sh
+cargo run -p crescendo-core --bin crescendo-plugin -- validate \
+  plugins/dev.crescendo.wasm-demo/dist
 ```
+
+The last two need `rustup target add wasm32-unknown-unknown` and
+`cargo install wasm-tools`. If the rebuilt `module.wasm` differs from
+`crates/core/tests/fixtures/wasm-demo-module.wasm`, copy it over: the fixture
+is what the runtime tests actually run.
 
 The SDK workflow packs the canonical Primary Grouping source, validates the
 finished package, preserves it as a CI artifact, and attaches it to a published
@@ -43,6 +51,18 @@ then toggles grouping projection live.
 - The player thread owns concrete context IDs and the ad-hoc queue contains
   concrete track IDs. A projection setting write does not send a player command,
   so active playback and queued IDs remain unchanged.
+- The Wasm runtime tests run the real engine against the committed demo
+  component: capability denial per interface, grant pinning to version and
+  hash, storage namespacing and quota, host validation of plugin-supplied
+  playlist and queue ids, fuel/epoch/memory/table bounds, isolated failure and
+  auto-disable, and the network guard's single resolution.
+- Compatibility is proven both ways: the version matrix in
+  `api_evolution_rules_decide_which_packages_this_host_accepts`, and a frozen
+  0.2.0 component that must keep loading and reaching the host on today's
+  runtime.
+- The SDK workflow checks that the runtime API version, both WIT package
+  declarations, and the Rust binding crate agree, and builds the binding crate
+  for `wasm32-unknown-unknown`.
 
 ## Manual release checks
 
@@ -58,4 +78,11 @@ then toggles grouping projection live.
   is visible while the library and player remain usable.
 - Install the exact `.crescendo-plugin` file attached to the GitHub release and
   compare its printed/validated SHA-256 with the release artifact.
+- Install the packed Wasm demo, approve its capabilities, restart, and confirm:
+  its commands run from the Plugins page; `spin` fails on the deadline without
+  disturbing playback; the player, playlist, and network commands answer
+  "denied" because it never requested those capabilities; and, with the CUSTOM
+  filter set to `composer`, its menu action appears and runs.
+- Confirm the release carries `crescendo-plugin-sdk.tar.gz` and that a plugin
+  built from that copy of `plugin-sdk/` loads in the released build.
 

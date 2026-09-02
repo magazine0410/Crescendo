@@ -1,6 +1,6 @@
 [package]
 name = "crescendo-wasm-demo"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Canonical sandboxed Wasm plugin example for Crescendo"
 license = "MIT"
@@ -13,7 +13,10 @@ license = "MIT"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.48"
+# The published binding crate, so this example is built exactly the way a
+# third-party plugin is: one shared copy of plugin-sdk/wit, no local
+# wit_bindgen::generate! invocation to drift from the host.
+crescendo-plugin-sdk = { path = "../../plugin-sdk/bindings/rust" }
 
 [profile.release]
 opt-level = "s"

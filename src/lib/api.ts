@@ -204,8 +204,14 @@ export interface PluginMenuControl {
   slot: "library.filter";
   label: string;
   target_tag: string;
-  setting_key: string;
-  checked: boolean;
+  action: "toggle_setting" | "run_command";
+  /** Set for a toggle action only. */
+  setting_key: string | null;
+  /** Set for a command action only. */
+  command: string | null;
+  /** The tick of a toggle action; null for a command action, which shows no
+      state. */
+  checked: boolean | null;
 }
 
 export interface PluginMutationResult {

@@ -3,7 +3,7 @@
   import { plugins } from "$lib/stores/plugins.svelte";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { openSetFilter } from "./SetFilterDialog.svelte";
-  import type { BrowseMode } from "$lib/api";
+  import type { BrowseMode, PluginMenuControl } from "$lib/api";
 
   const modes: { id: BrowseMode; label: string }[] = [
     { id: "genre", label: "GENRE" },
@@ -69,46 +69,75 @@
   const hiddenModes = $derived(modes.slice(visibleCount));
   const hiddenActive = $derived(hiddenModes.some((m) => m.id === library.mode));
 
-  /** Right-click menus include only host-rendered controls contributed for the
-      active tag by the immutable loaded registry. */
-  function tabMenu(e: MouseEvent, id: BrowseMode) {
-    if (library.projectionChanging) return;
-    if (id === "custom") {
-      const controls =
-        plugins.snapshot?.menu_controls.filter(
-          (control) =>
-            control.slot === "library.filter" && control.target_tag === library.customTagName,
-        ) ?? [];
-      const items: MenuItem[] = controls.map((control) => ({
-        label: control.label,
-        checked: control.checked,
-        disabled: library.projectionChanging,
-        action: async () => {
-          await library.changeProjection(async () => {
-            const result = await plugins.setSetting(
-              control.plugin_id,
-              control.setting_key,
-              !control.checked,
-            );
-            return result.snapshot.projection_revision;
-          });
-        },
-      }));
-      if (controls.length > 0) items.push({ separator: true, label: "" });
-      items.push(
-        { label: "Set filter…", action: () => openSetFilter() },
-        {
-          label: "Clear filter",
-          disabled: library.customTag.trim() === "",
-          action: () => library.setCustomTag(""),
-        },
+  /** Flip the boolean setting a menu control is bound to, through the guarded
+      projection transition. */
+  async function toggleSettingControl(control: PluginMenuControl) {
+    if (control.setting_key == null) return;
+    await library.changeProjection(async () => {
+      const result = await plugins.setSetting(
+        control.plugin_id,
+        control.setting_key as string,
+        !control.checked,
       );
-      openContextMenu(e, items);
+      return result.snapshot.projection_revision;
+    });
+  }
+
+  /** Dispatch one declared Wasm command. This changes no projection, so it
+      runs outside the transition; a failing plugin only reports through the
+      library's notice line and never disturbs the view or playback. */
+  async function runCommandControl(control: PluginMenuControl) {
+    if (control.command == null) return;
+    try {
+      await plugins.invoke(control.plugin_id, control.command, {});
+    } catch (reason) {
+      library.notice = `${control.label} failed: ${reason instanceof Error ? reason.message : reason}`;
     }
   }
 
+  /** The CUSTOM tab's own menu: host-rendered controls contributed for the
+      active tag by the immutable loaded registry, then the filter actions. */
+  function customMenuItems(): MenuItem[] {
+    const controls =
+      plugins.snapshot?.menu_controls.filter(
+        (control) =>
+          control.slot === "library.filter" && control.target_tag === library.customTagName,
+      ) ?? [];
+    const items: MenuItem[] = controls.map((control) => ({
+      label: control.label,
+      // A toggle shows its setting as a tick; a command action has no state
+      // to show, so it renders as a plain item.
+      checked: control.checked ?? undefined,
+      disabled: library.projectionChanging,
+      action: () =>
+        control.action === "run_command"
+          ? runCommandControl(control)
+          : toggleSettingControl(control),
+    }));
+    if (controls.length > 0) items.push({ separator: true, label: "" });
+    items.push(
+      { label: "Set filter…", action: () => openSetFilter() },
+      {
+        label: "Clear filter",
+        disabled: library.customTag.trim() === "",
+        action: () => library.setCustomTag(""),
+      },
+    );
+    return items;
+  }
+
+  function tabMenu(e: MouseEvent, id: BrowseMode) {
+    if (library.projectionChanging) return;
+    if (id === "custom") openContextMenu(e, customMenuItems());
+  }
+
   /** The chevron's menu: the overflowed tabs, so a hidden one (e.g. CUSTOM)
-      stays reachable. The active tab is check-marked. */
+      stays reachable. The active tab is check-marked.
+
+      A hidden CUSTOM tab would otherwise take its whole menu with it. Choosing
+      it here does not bring the tab back into the strip, so its plugin
+      controls and filter actions have no other surface at this width; they are
+      appended below the tab list, under the CUSTOM entry they belong to. */
   function moreMenu(e: MouseEvent) {
     if (library.projectionChanging) return;
     const items: MenuItem[] = hiddenModes.map((m) => ({
@@ -116,6 +145,9 @@
       checked: library.mode === m.id,
       action: () => library.setMode(m.id),
     }));
+    if (hiddenModes.some((m) => m.id === "custom")) {
+      items.push({ separator: true, label: "" }, ...customMenuItems());
+    }
     openContextMenu(e, items);
   }
 </script>
