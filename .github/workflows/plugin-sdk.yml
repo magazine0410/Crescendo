@@ -17,6 +17,15 @@ on:
       - "crates/core/tests/fixtures/**"
   release:
     types: [published]
+  # A release run is pinned to the tag's commit, so a workflow fixed after a
+  # release was cut can never be replayed for it. This lets the packages be
+  # built from the current default branch and attached to an existing tag.
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to attach the packaged plugins to"
+        required: true
+        type: string
 
 jobs:
   validate-and-pack:
@@ -154,7 +163,7 @@ jobs:
           if-no-files-found: error
 
   publish-release-asset:
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [validate-and-pack, wasm-fixture-provenance]
     runs-on: ubuntu-latest
     permissions:
@@ -176,7 +185,7 @@ jobs:
       - name: Attach the official plugin to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: |
           gh release upload "$RELEASE_TAG" \
             plugin-artifacts/*.crescendo-plugin \
