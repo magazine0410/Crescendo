@@ -68,7 +68,7 @@ jobs:
             exit 1
           }
           echo "runtime API $api is consistent across the WIT and the bindings"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: official-crescendo-plugins
           path: plugin-artifacts/*.crescendo-plugin
@@ -147,7 +147,7 @@ jobs:
           id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$manifest")
           cargo run -p crescendo-core --bin crescendo-plugin -- \
             pack plugins/dev.crescendo.wasm-demo/dist "plugin-artifacts/$id-$version.crescendo-plugin"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: wasm-demo-plugin
           path: plugin-artifacts/*.crescendo-plugin
@@ -161,11 +161,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           name: official-crescendo-plugins
           path: plugin-artifacts
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           name: wasm-demo-plugin
           path: plugin-artifacts
