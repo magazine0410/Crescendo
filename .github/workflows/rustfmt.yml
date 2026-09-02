@@ -1,0 +1,55 @@
+name: Formatting
+
+# `cargo fmt` at the repository root only reaches the workspace. The plugin
+# SDK bindings and the demo plugin are deliberately outside it — they build
+# for wasm32 and are never compiled by the app — which is exactly how the demo
+# drifted out of format unnoticed. Every Rust crate in the repository is
+# checked here, so add new ones to MANIFESTS below.
+
+on:
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "rustfmt.toml"
+      - ".github/workflows/rustfmt.yml"
+  push:
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "rustfmt.toml"
+      - ".github/workflows/rustfmt.yml"
+
+jobs:
+  cargo-fmt:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Unpinned on purpose, unlike the fixture job: rustfmt's output is fixed
+      # by the crate's style edition, so a toolchain release does not silently
+      # reformat edition-2021 code the way it could change compiled bytes.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: |
+          set -eu
+          MANIFESTS="
+            Cargo.toml
+            plugin-sdk/bindings/rust/Cargo.toml
+            plugins/dev.crescendo.wasm-demo/Cargo.toml
+          "
+          failed=0
+          for manifest in $MANIFESTS; do
+            echo "::group::$manifest"
+            # --all is required for the virtual workspace manifest, which has
+            # no package of its own to format.
+            if ! cargo fmt --all --check --manifest-path "$manifest"; then
+              echo "::error file=$manifest::cargo fmt --check failed; run: cargo fmt --all --manifest-path $manifest"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"

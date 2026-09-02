@@ -3,6 +3,7 @@
 Run these gates from the repository root before cutting a release:
 
 ```bash
+cargo fmt --all --check
 cargo test -p crescendo-core
 cargo test --release -p crescendo-core \
   --test plugin_projection_performance_test -- --ignored --nocapture
@@ -63,6 +64,9 @@ then toggles grouping projection live.
 - The SDK workflow checks that the runtime API version, both WIT package
   declarations, and the Rust binding crate agree, and builds the binding crate
   for `wasm32-unknown-unknown`.
+- The formatting workflow runs `cargo fmt --check` over the workspace *and*
+  over the two crates outside it — the Rust bindings and the demo plugin —
+  which a root `cargo fmt` does not reach.
 
 ## Manual release checks
 
