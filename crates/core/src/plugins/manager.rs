@@ -1204,6 +1204,14 @@ impl PluginManager {
         plugin_id: &str,
         manifest: &PluginManifest,
     ) -> Result<()> {
+        // Judge every plugin by what it will *be* after the next start, not by
+        // the copy that is about to be replaced. A staged update can add a
+        // target, and a conflict missed here does not go away: startup finds
+        // it and resolves it by silently dropping one plugin the user enabled.
+        // That applies to the plugin being enabled as much as to the others —
+        // enabling it commits to its staged manifest too.
+        let staged_updates = self.staged_update_manifests()?;
+        let manifest = staged_updates.get(plugin_id).unwrap_or(manifest);
         let targets: HashSet<&str> = manifest
             .contributes
             .facet_transforms
@@ -1212,29 +1220,6 @@ impl PluginManager {
             .collect();
         if targets.is_empty() {
             return Ok(());
-        }
-        // What another plugin *will* own counts as much as what it owns now: a
-        // pending update can add a target, and if that is ignored here the
-        // conflict only surfaces at the next startup, which resolves it by
-        // silently dropping one plugin the user asked for. A staged manifest
-        // therefore replaces the installed one it is going to overwrite.
-        let mut staged_updates: HashMap<String, PluginManifest> = HashMap::new();
-        for pending in self.db.plugin_pending_all()? {
-            if pending.operation != "update" || pending.plugin_id == plugin_id {
-                continue;
-            }
-            let Ok(directory) = operation_dir(&self.staging_root, &pending.staged_path) else {
-                continue;
-            };
-            let candidate = directory.join("new");
-            let candidate = if candidate.try_exists().unwrap_or(false) {
-                candidate
-            } else {
-                continue;
-            };
-            if let Ok(package) = load_installed(&candidate, &pending.plugin_id) {
-                staged_updates.insert(pending.plugin_id.clone(), package.manifest);
-            }
         }
 
         for record in scan_installed(&self.installed_root)? {
@@ -1246,14 +1231,14 @@ impl PluginManager {
             {
                 continue;
             }
-            let manifest = match staged_updates.remove(&record.id) {
+            let other = match staged_updates.get(&record.id) {
                 Some(staged) => staged,
-                None => match record.package {
-                    Some(package) => package.manifest,
+                None => match record.package.as_ref() {
+                    Some(package) => &package.manifest,
                     None => continue,
                 },
             };
-            if let Some(target) = manifest
+            if let Some(target) = other
                 .contributes
                 .facet_transforms
                 .iter()
@@ -1267,6 +1252,31 @@ impl PluginManager {
             }
         }
         Ok(())
+    }
+
+    /// The manifests journalled updates will install, by plugin id.
+    ///
+    /// A staged package that can no longer be read is skipped rather than
+    /// failing the caller: startup validates it again and rolls it back, and
+    /// refusing to answer here would block enabling an unrelated plugin.
+    fn staged_update_manifests(&self) -> Result<HashMap<String, PluginManifest>> {
+        let mut staged = HashMap::new();
+        for pending in self.db.plugin_pending_all()? {
+            if pending.operation != "update" {
+                continue;
+            }
+            let Ok(directory) = operation_dir(&self.staging_root, &pending.staged_path) else {
+                continue;
+            };
+            let candidate = directory.join("new");
+            if !candidate.try_exists().unwrap_or(false) {
+                continue;
+            }
+            if let Ok(package) = load_installed(&candidate, &pending.plugin_id) {
+                staged.insert(pending.plugin_id.clone(), package.manifest);
+            }
+        }
+        Ok(staged)
     }
 
     fn menu_controls(&self) -> Result<Vec<PluginMenuControlInfo>> {
@@ -2139,6 +2149,59 @@ mod tests {
                 .plugins
                 .iter()
                 .find(|plugin| plugin.id == "dev.crescendo.transform-b")
+                .unwrap()
+                .desired_enabled
+        );
+    }
+
+    #[test]
+    fn enabling_a_plugin_uses_the_manifest_its_pending_update_will_install() {
+        let (dir, _db, manager) = setup();
+
+        // A is installed, disabled, and owns nothing yet; its staged update
+        // adds the grouping transform.
+        let mut plain = transform_manifest("dev.crescendo.transform-a");
+        plain.contributes.facet_transforms.clear();
+        plain.contributes.menu_controls.clear();
+        let package = dir.path().join("a-1.crescendo-plugin");
+        write_test_package(&package, &plain, &[]);
+        manager.install(&package).unwrap();
+
+        let mut updated = transform_manifest("dev.crescendo.transform-a");
+        updated.version = "2.0.0".into();
+        let update = dir.path().join("a-2.crescendo-plugin");
+        write_test_package(&update, &updated, &[]);
+        manager.install(&update).unwrap();
+
+        // B takes the target first, which is allowed: A does not own it yet.
+        let package = dir.path().join("b.crescendo-plugin");
+        write_test_package(
+            &package,
+            &transform_manifest("dev.crescendo.transform-b"),
+            &[],
+        );
+        manager.install(&package).unwrap();
+        manager
+            .set_enabled("dev.crescendo.transform-b", true)
+            .unwrap();
+
+        // Enabling A now is a promise about the package A is *becoming*. Its
+        // installed manifest claims nothing, so checking that one would let
+        // both through and leave startup to drop one of them.
+        let refusal = manager
+            .set_enabled("dev.crescendo.transform-a", true)
+            .unwrap_err();
+        assert!(
+            format!("{refusal:#}").contains("already owns"),
+            "unexpected refusal: {refusal:#}"
+        );
+        assert!(
+            !manager
+                .snapshot()
+                .unwrap()
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == "dev.crescendo.transform-a")
                 .unwrap()
                 .desired_enabled
         );

@@ -94,10 +94,18 @@
     try {
       const result = await plugins.invoke(plugin.id, commandId, {});
       commandOutput = JSON.stringify(result, null, 2);
-      await refresh();
     } catch (reason) {
       error = String(reason);
     } finally {
+      // Refresh after a failure too. The third failure is the one that marks
+      // a plugin unhealthy, and that is exactly the call that throws, so
+      // refreshing only on success would leave the buttons enabled on a
+      // plugin the runtime has already stopped serving — and would hide the
+      // diagnostics the failure just produced. The command's own error still
+      // wins over a refresh error: it is what the user just did.
+      const commandError = error;
+      await refresh();
+      if (commandError !== null) error = commandError;
       busy = false;
     }
   }
