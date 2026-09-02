@@ -21,6 +21,12 @@ The last two need `rustup target add wasm32-unknown-unknown` and
 `crates/core/tests/fixtures/wasm-demo-module.wasm`, copy it over: the fixture
 is what the runtime tests actually run.
 
+Compare the two with `wasm-tools strip --all` applied to both, not with a raw
+`cmp`. Rust hashes each crate's absolute path into its mangled symbols, so the
+name section differs between any two checkout locations while the code is
+identical. That is what the CI provenance job compares, together with the WIT
+world as text.
+
 The SDK workflow packs the canonical Primary Grouping source, validates the
 finished package, preserves it as a CI artifact, and attaches it to a published
 GitHub release. Install that release asset in a clean Crescendo profile and

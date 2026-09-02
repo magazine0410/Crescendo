@@ -9,7 +9,11 @@
 #   module.wasm  the built component. Its committed copy is the runtime test
 #                fixture at crates/core/tests/fixtures/wasm-demo-module.wasm —
 #                refresh that file whenever this source changes, or
-#                wasm_runtime_test exercises a stale component.
+#                wasm_runtime_test exercises a stale component. The two are
+#                compared after `wasm-tools strip --all`: Rust hashes each
+#                crate's absolute path into its symbol names, so two checkouts
+#                in different directories produce identical code under
+#                different names.
 #   dist/        manifest.json + module.wasm and nothing else, which is what a
 #                .crescendo-plugin package may contain. Pack it with:
 #                  cargo run -p crescendo-core --bin crescendo-plugin -- \

@@ -24,7 +24,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Test package tooling
         run: cargo test -p crescendo-core plugins::tooling
@@ -68,7 +68,7 @@ jobs:
             exit 1
           }
           echo "runtime API $api is consistent across the WIT and the bindings"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: official-crescendo-plugins
           path: plugin-artifacts/*.crescendo-plugin
@@ -89,7 +89,7 @@ jobs:
       FIXTURE_RUST: "1.97.1"
       FIXTURE_WASM_TOOLS: "1.258.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.FIXTURE_RUST }}
@@ -103,12 +103,31 @@ jobs:
       - name: Rebuild the demo component
         run: sh plugins/dev.crescendo.wasm-demo/build.sh
       - name: Compare against the committed fixture
+        # Not a raw byte comparison of the two files. Rust bakes a hash of the
+        # crate's absolute path into every mangled symbol, so the name section
+        # differs between any two checkout locations — this runner's
+        # /home/runner/work/... can never equal a contributor's own path, and
+        # no toolchain pin fixes that.
+        #
+        # Everything that executes *is* reproducible, so compare that instead:
+        # the component with all custom sections stripped, plus the WIT world
+        # as text. Together they cover the code, the structure, and the
+        # interface; only unreproducible debug metadata is excluded.
         run: |
-          if ! cmp -s plugins/dev.crescendo.wasm-demo/module.wasm \
-                      crates/core/tests/fixtures/wasm-demo-module.wasm; then
+          set -eu
+          fresh=plugins/dev.crescendo.wasm-demo/module.wasm
+          committed=crates/core/tests/fixtures/wasm-demo-module.wasm
+          wasm-tools strip --all "$fresh" -o fresh-stripped.wasm
+          wasm-tools strip --all "$committed" -o committed-stripped.wasm
+          if ! cmp -s fresh-stripped.wasm committed-stripped.wasm; then
             echo "::error::wasm-demo-module.wasm no longer matches its source."
             echo "Rebuild with plugins/dev.crescendo.wasm-demo/build.sh and copy"
-            echo "module.wasm to crates/core/tests/fixtures/wasm-demo-module.wasm."
+            echo "module.wasm to $committed."
+            exit 1
+          fi
+          if ! diff -u <(wasm-tools component wit "$committed") \
+                       <(wasm-tools component wit "$fresh"); then
+            echo "::error::the committed fixture's WIT world differs from its source."
             exit 1
           fi
           echo "fixture matches its source"
@@ -128,7 +147,7 @@ jobs:
           id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$manifest")
           cargo run -p crescendo-core --bin crescendo-plugin -- \
             pack plugins/dev.crescendo.wasm-demo/dist "plugin-artifacts/$id-$version.crescendo-plugin"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: wasm-demo-plugin
           path: plugin-artifacts/*.crescendo-plugin
@@ -141,12 +160,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
         with:
           name: official-crescendo-plugins
           path: plugin-artifacts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: wasm-demo-plugin
           path: plugin-artifacts

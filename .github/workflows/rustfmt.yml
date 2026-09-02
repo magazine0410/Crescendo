@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Unpinned on purpose, unlike the fixture job: rustfmt's output is fixed
       # by the crate's style edition, so a toolchain release does not silently
       # reformat edition-2021 code the way it could change compiled bytes.
