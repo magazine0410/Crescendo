@@ -57,13 +57,20 @@ pub fn run() {
             plugins.install_player_bridge(Arc::new(
                 plugin_bridge::ShellPlayerBridge::new(player.clone(), position_mirror.clone()),
             ));
+            // The track currently being reported, shared by the two listeners
+            // below: `player:position` carries no track id, so the mirror has
+            // to be told which song the tick belongs to.
+            let last_track: Arc<std::sync::Mutex<Option<i64>>> = Arc::default();
             {
                 let mirror = position_mirror.clone();
+                let current = last_track.clone();
                 app.listen("player:position", move |event| {
                     if let Ok(value) =
                         serde_json::from_str::<serde_json::Value>(event.payload())
                     {
+                        let track_id = current.lock().ok().and_then(|slot| *slot);
                         mirror.record(
+                            track_id,
                             value.get("ms").and_then(serde_json::Value::as_u64).unwrap_or(0),
                             value
                                 .get("duration_ms")
@@ -81,7 +88,7 @@ pub fn run() {
                 let event_plugins = plugins.clone();
                 // `listen` takes an Fn, so the last-seen track lives behind a
                 // mutex rather than in the closure.
-                let last_track: Arc<std::sync::Mutex<Option<i64>>> = Arc::default();
+                let last_track = last_track.clone();
                 app.listen("player:state", move |event| {
                     event_plugins.notify_event(HostEvent::PlayerStateChanged);
                     let track_id = serde_json::from_str::<serde_json::Value>(event.payload())
@@ -99,7 +106,10 @@ pub fn run() {
             }
             {
                 let scan_plugins = plugins.clone();
-                app.listen("scan:done", move |_| {
+                // `library:changed` is the canonical signal and covers more
+                // than a scan: importing an m3u's paths adds tracks and emits
+                // only this one. A scan emits both, so nothing arrives twice.
+                app.listen("library:changed", move |_| {
                     scan_plugins.notify_event(HostEvent::LibraryChanged);
                 });
             }
@@ -169,6 +179,7 @@ pub fn run() {
             commands::player::projectm_load_asset,
             commands::player::player_get_state,
             commands::player::queue_add,
+            commands::player::queue_add_context,
             commands::player::queue_remove,
             commands::player::queue_clear,
             commands::player::queue_list,

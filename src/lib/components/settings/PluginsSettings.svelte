@@ -232,7 +232,7 @@
             {#each selected.commands as commandId (commandId)}
               <button
                 class="btn"
-                disabled={busy || selected.runtime_error !== null}
+                disabled={busy || !selected.runtime_ready || selected.runtime_unhealthy}
                 onclick={() => runCommand(selected, commandId)}
               >
                 {commandId}

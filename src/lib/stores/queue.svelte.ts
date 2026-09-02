@@ -1,4 +1,4 @@
-import { call, type Track } from "../api";
+import { call, type PlayContext, type Track } from "../api";
 
 class QueueStore {
   tracks = $state<Track[]>([]);
@@ -13,6 +13,15 @@ class QueueStore {
 
   async add(trackIds: number[]) {
     await call("queue_add", { trackIds });
+    await this.refresh();
+  }
+
+  /** Append everything a context names. The backend resolves it under the
+      projection guard with the same SQL the view used, so the queue gets
+      exactly the tracks the user is looking at — and no track list crosses
+      IPC on the way. */
+  async addContext(ctx: PlayContext) {
+    await call<number>("queue_add_context", { ctx });
     await this.refresh();
   }
 

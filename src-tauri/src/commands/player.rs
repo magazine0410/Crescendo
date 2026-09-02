@@ -82,6 +82,50 @@ pub async fn player_play_context(
         .map_err(|message| ProjectionCommandError::Operation { message })
 }
 
+/// Append a whole context to the ad-hoc queue.
+///
+/// The queue must hold exactly the tracks the context names, so it is resolved
+/// here — under the projection guard, with the same plan and the same SQL the
+/// view used — rather than approximated in the frontend by expanding albums.
+/// As with playback, only concrete ids reach the player.
+#[tauri::command]
+pub async fn queue_add_context(
+    state: State<'_, AppState>,
+    ctx: PlayContext,
+) -> Result<usize, ProjectionCommandError> {
+    let expected_revision = match &ctx {
+        PlayContext::LibraryView {
+            projection_revision,
+            ..
+        }
+        | PlayContext::ValueTracks {
+            projection_revision,
+            ..
+        } => Some(*projection_revision),
+        _ => None,
+    };
+    let projection = state
+        .plugins
+        .projection(expected_revision)
+        .map_err(projection_error)?;
+    let plan = match &ctx {
+        PlayContext::ValueTracks { mode, .. } => projection.facet_plan(mode),
+        _ => None,
+    };
+    let ids = state
+        .db
+        .resolve_context_with_projection(&ctx, plan.as_ref(), projection.prefer_romanized())
+        .map_err(|error| ProjectionCommandError::Operation {
+            message: error.to_string(),
+        })?;
+    let queued = ids.len();
+    state
+        .player
+        .send(Cmd::QueueAdd(ids))
+        .map_err(|message| ProjectionCommandError::Operation { message })?;
+    Ok(queued)
+}
+
 #[tauri::command]
 pub async fn player_jump_to(state: State<'_, AppState>, index: usize) -> Result<(), String> {
     state.player.send(Cmd::JumpTo(index))

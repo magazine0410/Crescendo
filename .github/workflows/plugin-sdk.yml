@@ -30,10 +30,17 @@ jobs:
         run: cargo test -p crescendo-core plugins::tooling
       - name: Validate and pack the official plugin
         run: |
+          set -eu
           mkdir -p plugin-artifacts
-          cargo run -p crescendo-core --bin crescendo-plugin -- validate plugins/dev.crescendo.primary-grouping
-          cargo run -p crescendo-core --bin crescendo-plugin -- pack plugins/dev.crescendo.primary-grouping plugin-artifacts/dev.crescendo.primary-grouping-1.0.0.crescendo-plugin
-          cargo run -p crescendo-core --bin crescendo-plugin -- validate plugin-artifacts/dev.crescendo.primary-grouping-1.0.0.crescendo-plugin
+          source=plugins/dev.crescendo.primary-grouping
+          # Read the version from the manifest rather than repeating it here,
+          # or a version bump would publish new contents under the old name.
+          version=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$source/manifest.json")
+          id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$source/manifest.json")
+          package="plugin-artifacts/$id-$version.crescendo-plugin"
+          cargo run -p crescendo-core --bin crescendo-plugin -- validate "$source"
+          cargo run -p crescendo-core --bin crescendo-plugin -- pack "$source" "$package"
+          cargo run -p crescendo-core --bin crescendo-plugin -- validate "$package"
       - name: Check the SDK reports the versions the host implements
         run: |
           set -eu
@@ -74,13 +81,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # This job compares exact bytes, so the tools that produce them are
+      # pinned. On a floating toolchain a compiler release would fail
+      # provenance with no change to the repository. Raise these deliberately
+      # and commit the rebuilt fixture in the same change.
+      FIXTURE_RUST: "1.97.1"
+      FIXTURE_WASM_TOOLS: "1.258.0"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.FIXTURE_RUST }}
           targets: wasm32-unknown-unknown
       - name: Install wasm-tools
-        run: cargo install wasm-tools --locked
+        run: cargo install wasm-tools --version ${{ env.FIXTURE_WASM_TOOLS }} --locked
       - name: Build the published Rust bindings
         # The crate third-party plugins depend on. If it stops compiling
         # against the WIT, every Rust plugin stops compiling.
@@ -106,8 +121,13 @@ jobs:
             | sha256sum -c -
       - name: Pack the demo package
         run: |
+          set -eu
           mkdir -p plugin-artifacts
-          cargo run -p crescendo-core --bin crescendo-plugin -- pack plugins/dev.crescendo.wasm-demo/dist plugin-artifacts/dev.crescendo.wasm-demo-0.2.0.crescendo-plugin
+          manifest=plugins/dev.crescendo.wasm-demo/manifest.json
+          version=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$manifest")
+          id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$manifest")
+          cargo run -p crescendo-core --bin crescendo-plugin -- \
+            pack plugins/dev.crescendo.wasm-demo/dist "plugin-artifacts/$id-$version.crescendo-plugin"
       - uses: actions/upload-artifact@v4
         with:
           name: wasm-demo-plugin

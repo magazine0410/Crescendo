@@ -23,23 +23,40 @@ use std::sync::{Arc, Mutex};
 /// tick — so a scrobbler reading `player.read` would otherwise always see
 /// zero. Mirroring the event keeps the player thread free of plugin concerns,
 /// the same way the event bridge does.
+///
+/// Each sample carries the track it belongs to. A gapless handoff publishes
+/// the new track's state immediately but the next tick is up to 250 ms away,
+/// so without that a plugin reacting to `on-track-changed` would read the new
+/// track's id beside the outgoing track's near-end position. A sample that
+/// does not match the track being reported is ignored rather than shown.
 #[derive(Debug, Default)]
 pub struct PositionMirror {
-    position_ms: Mutex<(u64, u64)>,
+    sample: Mutex<Option<PositionSample>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PositionSample {
+    track_id: Option<i64>,
+    position_ms: u64,
+    duration_ms: u64,
 }
 
 impl PositionMirror {
-    pub fn record(&self, position_ms: u64, duration_ms: u64) {
-        if let Ok(mut slot) = self.position_ms.lock() {
-            *slot = (position_ms, duration_ms);
+    pub fn record(&self, track_id: Option<i64>, position_ms: u64, duration_ms: u64) {
+        if let Ok(mut slot) = self.sample.lock() {
+            *slot = Some(PositionSample { track_id, position_ms, duration_ms });
         }
     }
 
-    fn get(&self) -> (u64, u64) {
-        self.position_ms
+    /// The mirrored progress of `track_id`, or zeroes when the newest sample
+    /// belongs to a different track.
+    fn get(&self, track_id: Option<i64>) -> (u64, u64) {
+        self.sample
             .lock()
-            .map(|slot| *slot)
-            .unwrap_or((0, 0))
+            .ok()
+            .and_then(|slot| *slot)
+            .filter(|sample| sample.track_id == track_id)
+            .map_or((0, 0), |sample| (sample.position_ms, sample.duration_ms))
     }
 }
 
@@ -62,11 +79,12 @@ impl PlayerBridge for ShellPlayerBridge {
         let Ok(state) = self.player.state() else {
             return BridgePlayerState::default();
         };
-        let (position_ms, ticked_duration_ms) = self.position.get();
+        let track_id = state.track.as_ref().map(|track| track.id);
+        let (position_ms, ticked_duration_ms) = self.position.get(track_id);
         BridgePlayerState {
             playing: state.status == Status::Playing,
             paused: state.status == Status::Paused,
-            track_id: state.track.as_ref().map(|track| track.id),
+            track_id,
             position_ms,
             // The tick's duration is authoritative once it has arrived; the
             // track's tag is the fallback before the first tick of a song.
@@ -126,5 +144,26 @@ impl HostNotifier for ShellHostNotifier {
                 let _ = self.app.emit("playlist:changed", id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mirrored_position_is_only_reported_for_the_track_it_was_sampled_from() {
+        let mirror = PositionMirror::default();
+        mirror.record(Some(7), 180_000, 200_000);
+        assert_eq!(mirror.get(Some(7)), (180_000, 200_000));
+
+        // The gapless case: the player already reports track 8 while the last
+        // tick still belongs to track 7's final moments. Reporting it would
+        // put the outgoing track's near-end position on the new song.
+        assert_eq!(mirror.get(Some(8)), (0, 0));
+        assert_eq!(mirror.get(None), (0, 0));
+
+        mirror.record(Some(8), 250, 300_000);
+        assert_eq!(mirror.get(Some(8)), (250, 300_000));
     }
 }

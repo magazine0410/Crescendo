@@ -109,6 +109,8 @@ const mockPluginPackage: PluginInfo = {
   grants_approved: true,
   commands: [],
   runtime_error: null,
+  runtime_ready: true,
+  runtime_unhealthy: false,
   diagnostics: [],
 };
 
@@ -146,6 +148,8 @@ const mockGroupingPlugin: PluginInfo = {
   grants_approved: true,
   commands: [],
   runtime_error: null,
+  runtime_ready: true,
+  runtime_unhealthy: false,
   diagnostics: [],
 };
 
@@ -184,6 +188,8 @@ const mockWasmPlugin: PluginInfo = {
   grants_approved: true,
   commands: ["identity", "settings", "storage_roundtrip", "library_summary"],
   runtime_error: null,
+  runtime_ready: true,
+  runtime_unhealthy: false,
   diagnostics: ["info: demo initialized with 1 live settings"],
 };
 
@@ -977,6 +983,28 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
         throw { kind: "stale_projection", current_revision: projectionRevision };
       }
       return undefined as T;
+    }
+    case "queue_add_context": {
+      const ctx = args.ctx as {
+        type?: string;
+        mode?: WireMode;
+        values?: string[];
+        query?: string | null;
+        projection_revision?: number;
+      };
+      if (
+        (ctx.type === "library_view" || ctx.type === "value_tracks") &&
+        ctx.projection_revision !== projectionRevision
+      ) {
+        throw { kind: "stale_projection", current_revision: projectionRevision };
+      }
+      // Resolve exactly like the view does — matching the selected values and
+      // the search — rather than expanding whole albums.
+      const matched = tracks.filter((t) =>
+        trackListMatch(t, { query: ctx.query, values: ctx.values, mode: ctx.mode }),
+      );
+      queue.push(...matched.map((t) => t.id));
+      return matched.length as T;
     }
     case "player_jump_to":
       return undefined as T;

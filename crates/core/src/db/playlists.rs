@@ -189,6 +189,53 @@ impl Db {
         })
     }
 
+    /// Rename, refusing an unknown playlist in the same transaction that
+    /// writes the new name. Checking first and renaming afterwards would let a
+    /// concurrent delete land in between — and SQLite reuses row ids, so the
+    /// write could even reach a different playlist created since the check.
+    pub fn playlist_rename_checked(&self, id: i64, name: &str) -> Result<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            let changed = tx.execute(
+                "UPDATE playlists SET name = ?2 WHERE id = ?1",
+                rusqlite::params![id, name],
+            )?;
+            if changed == 0 {
+                anyhow::bail!("playlist {id} does not exist");
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Remove positions, refusing an unknown playlist in the same transaction.
+    /// Positions that do not exist are ignored, as they are for the UI's own
+    /// removal, but a missing playlist is an error rather than a silent no-op.
+    pub fn playlist_remove_tracks_checked(&self, id: i64, positions: &[i64]) -> Result<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM playlists WHERE id = ?1)",
+                [id],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                anyhow::bail!("playlist {id} does not exist");
+            }
+            {
+                let mut del = tx.prepare(
+                    "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND position = ?2",
+                )?;
+                for position in positions {
+                    del.execute(rusqlite::params![id, position])?;
+                }
+            }
+            renumber(&tx, id)?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
     /// Whether a playlist exists, for host-boundary checks that must not
     /// silently no-op on a bad id.
     pub fn playlist_exists(&self, id: i64) -> Result<bool> {

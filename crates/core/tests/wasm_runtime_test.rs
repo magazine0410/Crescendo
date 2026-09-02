@@ -3,7 +3,9 @@
 //! `plugins/dev.crescendo.wasm-demo` (fixture: `fixtures/wasm-demo-module.wasm`).
 
 use crescendo_core::db::Db;
-use crescendo_core::plugins::wasm::{RuntimePaths, RuntimeLimits, WasmHandle, WasmPluginSpec};
+use crescendo_core::plugins::wasm::{
+    HostEvent, RuntimeLimits, RuntimePaths, WasmHandle, WasmPluginSpec,
+};
 use crescendo_core::plugins::{
     PluginCommandDeclaration, PluginContributions, PluginKind, PluginManager, PluginManifest,
     PluginMenuAction, PluginMenuControl, PluginMenuSlot, PluginMenuVisibility,
@@ -217,6 +219,53 @@ fn a_run_command_menu_control_reaches_the_snapshot_and_dispatches() {
     assert_eq!(result["total"], 2);
 }
 
+/// An update replaces a copy that worked, and its backup is deleted as soon as
+/// startup commits the journal. A package that is structurally valid but
+/// carries a component this build cannot load must therefore be caught before
+/// that commit, not later on the runtime thread.
+#[test]
+fn an_update_carrying_an_unloadable_component_is_rolled_back() {
+    let (dir, db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &[]));
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    drop(manager);
+
+    let manager = restart(&dir, db.clone());
+    assert!(plugin_info(&manager).loaded);
+    invoke_once_ready(&manager, "identity", serde_json::json!({}));
+
+    // A well-formed package whose module.wasm is not a component at all.
+    let update = dir.path().join("broken-update.crescendo-plugin");
+    write_package(&update, &wasm_manifest("2.0.0", &[]), b"this is not a component");
+    manager.install(&update).unwrap();
+    assert_eq!(
+        plugin_info(&manager).pending.as_ref().map(|pending| pending.operation.as_str()),
+        Some("update"),
+        "the update should be journalled for the next start"
+    );
+    drop(manager);
+
+    let manager = restart(&dir, db);
+    let info = plugin_info(&manager);
+    assert_eq!(
+        info.version.as_deref(),
+        Some("1.0.0"),
+        "the working version must survive an unloadable update"
+    );
+    assert!(info.pending.is_none(), "the journal entry should be resolved");
+    assert!(
+        info.error.as_deref().unwrap_or("").contains("could not be loaded"),
+        "the rollback should explain itself: {:?}",
+        info.error
+    );
+    assert!(info.loaded, "the restored version must still load");
+    assert_eq!(
+        invoke_once_ready(&manager, "identity", serde_json::json!({"n": 1}))["n"],
+        1,
+        "the restored component must still run"
+    );
+}
+
 #[test]
 fn a_component_built_against_a_breaking_api_is_refused_before_it_runs() {
     let (dir, _db, manager) = setup();
@@ -422,6 +471,36 @@ fn guest_work_is_bounded_by_the_epoch_deadline_and_failures_mark_it_unhealthy() 
     // Unhealthy plugins fail fast without touching guest code again.
     let failure = handle.invoke(PLUGIN_ID, "identity", "{}").unwrap_err();
     assert!(format!("{failure:#}").contains("unhealthy"));
+
+    // And events stop reaching it. The demo logs from every handler, so a
+    // delivered event shows up as a diagnostic; an invoke afterwards is the
+    // sync point, because the runtime queue is FIFO.
+    let before = handle.runtime_info(PLUGIN_ID).diagnostics.len();
+    for _ in 0..5 {
+        handle.notify_event(HostEvent::LibraryChanged);
+        handle.notify_event(HostEvent::TrackChanged(Some(1)));
+    }
+    let _ = handle.invoke(PLUGIN_ID, "identity", "{}");
+    assert_eq!(
+        handle.runtime_info(PLUGIN_ID).diagnostics.len(),
+        before,
+        "an unhealthy plugin must not keep running event handlers"
+    );
+}
+
+/// The counterpart to the assertion above: while a plugin is healthy the
+/// events really are delivered, so the unhealthy case is not passing for want
+/// of a working event path.
+#[test]
+fn events_reach_a_healthy_plugin() {
+    let harness = Harness::new(&[]);
+    let before = harness.handle.runtime_info(PLUGIN_ID).diagnostics.len();
+    harness.handle.notify_event(HostEvent::LibraryChanged);
+    let _ = harness.handle.invoke(PLUGIN_ID, "identity", "{}");
+    assert!(
+        harness.handle.runtime_info(PLUGIN_ID).diagnostics.len() > before,
+        "a healthy plugin should have handled the event"
+    );
 }
 
 #[test]

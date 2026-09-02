@@ -79,6 +79,13 @@ pub struct PluginInfo {
     /// Live runtime status of the sandboxed component (startup failure,
     /// traps, unhealthy session), when the runtime reports one.
     pub runtime_error: Option<String>,
+    /// The component is instantiated and its `init` succeeded.
+    pub runtime_ready: bool,
+    /// Too many runtime failures this session; the runtime refuses further
+    /// calls. `runtime_error` records the *last* failure, which is not the
+    /// same thing — one trapped command leaves an error behind on a plugin
+    /// that still works.
+    pub runtime_unhealthy: bool,
     /// Tail of this session's bounded per-plugin diagnostic log.
     pub diagnostics: Vec<String>,
 }
@@ -324,12 +331,31 @@ impl PluginManager {
             .collect();
         let mut committed = Vec::new();
         for operation in applied {
-            if operation.row.operation == "update" && invalid_ids.contains(&operation.row.plugin_id)
+            // An update has already replaced the working copy by now, and its
+            // only rollback copy is about to be deleted. Package validation
+            // proves the archive is well formed; for a Wasm package it says
+            // nothing about whether the component loads, and the runtime
+            // thread does not find that out until long after this point. So
+            // compile and link the replacement here, synchronously, and roll
+            // back a package that this build cannot run.
+            let unloadable = if operation.row.operation == "update" {
+                wasm_update_error(&installed_root, &inventory, &operation.row.plugin_id)
+            } else {
+                None
+            };
+            if operation.row.operation == "update"
+                && (invalid_ids.contains(&operation.row.plugin_id) || unloadable.is_some())
             {
-                let message = format!(
+                let message = match &unloadable {
+                    Some(reason) => format!(
+                        "Updated package for {} could not be loaded ({reason}); the previous version was restored.",
+                        operation.row.plugin_id
+                    ),
+                    None => format!(
                     "Updated package for {} failed installed validation; the previous version was restored.",
                     operation.row.plugin_id
-                );
+                    ),
+                };
                 rollback_operation(&installed_root, &operation)?;
                 db.plugin_record_error_preserving_state(&operation.row.plugin_id, &message)?;
                 db.plugin_pending_delete(&operation.row.plugin_id)?;
@@ -1062,6 +1088,11 @@ impl PluginManager {
                         }
                     })
                     .collect();
+                let runtime = self
+                    .wasm
+                    .as_ref()
+                    .map(|handle| handle.runtime_info(&record.id))
+                    .unwrap_or_default();
                 plugins.push(PluginInfo {
                     id: record.id.clone(),
                     name: package.manifest.name.clone(),
@@ -1091,17 +1122,10 @@ impl PluginManager {
                         .iter()
                         .map(|command| command.id.clone())
                         .collect(),
-                    runtime_error: self
-                        .wasm
-                        .as_ref()
-                        .and_then(|handle| {
-                            handle.runtime_info(&record.id).error
-                        }),
-                    diagnostics: self
-                        .wasm
-                        .as_ref()
-                        .map(|handle| handle.runtime_info(&record.id).diagnostics)
-                        .unwrap_or_default(),
+                    runtime_error: runtime.error.clone(),
+                    runtime_ready: runtime.ready,
+                    runtime_unhealthy: runtime.unhealthy,
+                    diagnostics: runtime.diagnostics.clone(),
                 });
             } else {
                 let validation_error = record.validation_error.or(state_error);
@@ -1132,6 +1156,8 @@ impl PluginManager {
                     grants_approved: true,
                     commands: vec![],
                     runtime_error: None,
+                    runtime_ready: false,
+                    runtime_unhealthy: false,
                     diagnostics: vec![],
                 });
             }
@@ -1195,6 +1221,30 @@ impl PluginManager {
         if targets.is_empty() {
             return Ok(());
         }
+        // What another plugin *will* own counts as much as what it owns now: a
+        // pending update can add a target, and if that is ignored here the
+        // conflict only surfaces at the next startup, which resolves it by
+        // silently dropping one plugin the user asked for. A staged manifest
+        // therefore replaces the installed one it is going to overwrite.
+        let mut staged_updates: HashMap<String, PluginManifest> = HashMap::new();
+        for pending in self.db.plugin_pending_all()? {
+            if pending.operation != "update" || pending.plugin_id == plugin_id {
+                continue;
+            }
+            let Ok(directory) = operation_dir(&self.staging_root, &pending.staged_path) else {
+                continue;
+            };
+            let candidate = directory.join("new");
+            let candidate = if candidate.try_exists().unwrap_or(false) {
+                candidate
+            } else {
+                continue;
+            };
+            if let Ok(package) = load_installed(&candidate, &pending.plugin_id) {
+                staged_updates.insert(pending.plugin_id.clone(), package.manifest);
+            }
+        }
+
         for record in scan_installed(&self.installed_root)? {
             if record.id == plugin_id
                 || !self
@@ -1204,11 +1254,14 @@ impl PluginManager {
             {
                 continue;
             }
-            let Some(package) = record.package else {
-                continue;
+            let manifest = match staged_updates.remove(&record.id) {
+                Some(staged) => staged,
+                None => match record.package {
+                    Some(package) => package.manifest,
+                    None => continue,
+                },
             };
-            if let Some(target) = package
-                .manifest
+            if let Some(target) = manifest
                 .contributes
                 .facet_transforms
                 .iter()
@@ -1435,6 +1488,24 @@ fn scan_installed(installed_root: &Path) -> Result<Vec<InstalledRecord>> {
     }
     records.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(records)
+}
+
+/// Whether a just-promoted update is a Wasm package this build cannot load.
+///
+/// Only updates are preflighted. A *first* install that turns out to be
+/// unloadable costs nothing — it is disabled, reports its error, and replaced
+/// nothing — while an update has already overwritten a copy that worked.
+fn wasm_update_error(
+    installed_root: &Path,
+    inventory: &[InstalledRecord],
+    plugin_id: &str,
+) -> Option<String> {
+    let record = inventory.iter().find(|record| record.id == plugin_id)?;
+    let package = record.package.as_ref()?;
+    if package.manifest.kind != PluginKind::Wasm {
+        return None;
+    }
+    super::wasm::preflight_component(&installed_root.join(plugin_id).join("module.wasm")).err()
 }
 
 fn apply_pending_operation(
@@ -2023,6 +2094,53 @@ mod tests {
         drop(old_projection);
         assert!(done_rx.recv().unwrap());
         assert_eq!(manager.projection(Some(1)).unwrap().revision(), 1);
+    }
+
+    #[test]
+    fn a_pending_update_reserves_the_target_it_is_about_to_add() {
+        let (dir, _db, manager) = setup();
+
+        // A is enabled and owns nothing yet.
+        let mut plain = transform_manifest("dev.crescendo.transform-a");
+        plain.contributes.facet_transforms.clear();
+        plain.contributes.menu_controls.clear();
+        let package = dir.path().join("a-1.crescendo-plugin");
+        write_test_package(&package, &plain, &[]);
+        manager.install(&package).unwrap();
+        manager
+            .set_enabled("dev.crescendo.transform-a", true)
+            .unwrap();
+
+        // Its staged update adds the grouping transform. Nothing owns that
+        // target *yet*, but A will the moment the update applies.
+        let mut updated = transform_manifest("dev.crescendo.transform-a");
+        updated.version = "2.0.0".into();
+        let update = dir.path().join("a-2.crescendo-plugin");
+        write_test_package(&update, &updated, &[]);
+        manager.install(&update).unwrap();
+
+        // So enabling B for the same target must be refused now, rather than
+        // succeeding and leaving the next startup to drop one of them.
+        let package = dir.path().join("b.crescendo-plugin");
+        write_test_package(&package, &transform_manifest("dev.crescendo.transform-b"), &[]);
+        manager.install(&package).unwrap();
+        let refusal = manager
+            .set_enabled("dev.crescendo.transform-b", true)
+            .unwrap_err();
+        assert!(
+            format!("{refusal:#}").contains("already owns"),
+            "unexpected refusal: {refusal:#}"
+        );
+        assert!(
+            !manager
+                .snapshot()
+                .unwrap()
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == "dev.crescendo.transform-b")
+                .unwrap()
+                .desired_enabled
+        );
     }
 
     #[test]

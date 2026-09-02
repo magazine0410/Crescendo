@@ -24,7 +24,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -605,10 +605,16 @@ impl crescendo::host::library::Host for StoreData {
         if limit < 1 || limit > MAX_LIBRARY_PAGE {
             return Err(crescendo::host::library::LibraryError::InvalidPage);
         }
+        // The guest picks the offset. Casting a u64 past i64::MAX would wrap
+        // negative, and SQLite reads a negative OFFSET as none at all, handing
+        // back the first page instead of refusing the request.
+        let Ok(offset) = i64::try_from(offset) else {
+            return Err(crescendo::host::library::LibraryError::InvalidPage);
+        };
         let include_paths = self.permissions.contains(&PluginPermission::LibraryPaths);
         let page = self
             .db
-            .plugin_library_page(offset as i64, limit, include_paths)
+            .plugin_library_page(offset, limit, include_paths)
             .map_err(|_| crescendo::host::library::LibraryError::Denied)?;
         Ok(crescendo::host::library::Page {
             tracks: page
@@ -765,9 +771,14 @@ impl crescendo::host::playlists::Host for StoreData {
         {
             return Err(crescendo::host::playlists::PlaylistError::NotFound);
         }
+        // Same wrap as the library page: a u64 offset past i64::MAX would go
+        // negative and SQLite would ignore it, returning the first page.
+        let Ok(offset) = i64::try_from(offset) else {
+            return Err(crescendo::host::playlists::PlaylistError::InvalidRequest);
+        };
         let ids = self
             .db
-            .playlist_track_ids_page(playlist_id as i64, offset as i64, limit as i64)
+            .playlist_track_ids_page(playlist_id as i64, offset, limit as i64)
             .map_err(|_| crescendo::host::playlists::PlaylistError::NotFound)?;
         Ok(ids.into_iter().map(|id| id as u64).collect())
     }
@@ -797,15 +808,10 @@ impl crescendo::host::playlists::Host for StoreData {
         if !valid_playlist_name(&name) {
             return Err(crescendo::host::playlists::PlaylistError::InvalidRequest);
         }
-        if !self
-            .db
-            .playlist_exists(playlist_id as i64)
-            .unwrap_or(false)
-        {
-            return Err(crescendo::host::playlists::PlaylistError::NotFound);
-        }
+        // Checked, so the playlist cannot be deleted between the test and the
+        // write — the same reason `add_tracks` uses the checked form.
         self.db
-            .playlist_rename(playlist_id as i64, &name)
+            .playlist_rename_checked(playlist_id as i64, &name)
             .map_err(|_| crescendo::host::playlists::PlaylistError::NotFound)?;
         self.announce_playlist(Some(playlist_id as i64));
         Ok(())
@@ -839,16 +845,12 @@ impl crescendo::host::playlists::Host for StoreData {
         if positions.is_empty() || positions.len() > MAX_LIBRARY_PAGE as usize {
             return Err(crescendo::host::playlists::PlaylistError::InvalidRequest);
         }
-        if !self
-            .db
-            .playlist_exists(playlist_id as i64)
-            .unwrap_or(false)
-        {
-            return Err(crescendo::host::playlists::PlaylistError::NotFound);
-        }
-        let positions: Vec<i64> = positions.into_iter().map(|value| value as i64).collect();
+        let positions: Vec<i64> = positions
+            .into_iter()
+            .map(|value| i64::try_from(value).unwrap_or(i64::MAX))
+            .collect();
         self.db
-            .playlist_remove_tracks(playlist_id as i64, &positions)
+            .playlist_remove_tracks_checked(playlist_id as i64, &positions)
             .map_err(|_| crescendo::host::playlists::PlaylistError::NotFound)?;
         self.announce_playlist(Some(playlist_id as i64));
         Ok(())
@@ -981,6 +983,36 @@ fn run(
     }
 }
 
+/// Compile and link a component without running any guest code.
+///
+/// The package validator can tell that `module.wasm` exists and is the right
+/// size; it cannot tell that the bytes are a component this host can load. An
+/// update promotes over a working copy, so without this a structurally valid
+/// package carrying a broken module would replace a working plugin and the
+/// only rollback copy would be deleted before anything discovered the problem.
+///
+/// This parses the component and resolves its imports and exports against the
+/// real linker. It stops short of `init`: instantiating would run guest code,
+/// and a plugin that fails at `init` is the case the runtime already handles
+/// by reporting and eventually auto-disabling it.
+pub fn preflight_component(module_path: &Path) -> Result<(), String> {
+    let bytes = read_module(module_path).map_err(|error| format!("{error:#}"))?;
+    let mut config = Config::new();
+    config.consume_fuel(true);
+    config.epoch_interruption(true);
+    let engine =
+        Engine::new(&config).map_err(|error| format!("could not start the Wasm engine: {error}"))?;
+    let component = Component::new(&engine, bytes)
+        .map_err(|error| format!("module.wasm is not a valid component: {error}"))?;
+    let linker = build_linker(&engine);
+    let instance_pre = linker
+        .instantiate_pre(&component)
+        .map_err(|error| format!("module.wasm does not match this runtime's world: {error}"))?;
+    CrescendoPluginPre::new(instance_pre)
+        .map(|_| ())
+        .map_err(|error| format!("module.wasm does not export the plugin interface: {error}"))
+}
+
 fn build_linker(engine: &Engine) -> Linker<StoreData> {
     let mut linker: Linker<StoreData> = Linker::new(engine);
     // A component imports only what its code uses, so every interface is
@@ -1081,6 +1113,13 @@ impl RuntimeThread<'_> {
     fn dispatch_event(&mut self, event: &HostEvent) {
         let ids: Vec<String> = self.plugins.keys().cloned().collect();
         for plugin_id in ids {
+            // An unhealthy plugin is done for the session. Invoke and settings
+            // delivery already refuse it; without the same check here every
+            // track change would keep paying its deadline and adding failures.
+            let info = self.states.info(&plugin_id);
+            if !info.ready || info.unhealthy {
+                continue;
+            }
             let Some(plugin) = self.plugins.get_mut(&plugin_id) else {
                 continue;
             };
@@ -1148,6 +1187,21 @@ impl RuntimeThread<'_> {
 
         self.plugins.insert(spec.id.clone(), PluginInstance { instance, store });
         self.states.mark_ready(&spec.id);
+        // `mark_ready` clears only this session's view. The persisted count is
+        // what decides auto-disable, and it must mean *consecutive* failures:
+        // without this a plugin that failed once, started cleanly, and failed
+        // again months later would be disabled as though it had never worked.
+        // It is also what Settings shows, so a stale error would outlive the
+        // problem it described.
+        if self
+            .db
+            .plugin_state_get(&spec.id)
+            .ok()
+            .flatten()
+            .is_some_and(|state| state.failure_count > 0 || state.last_error.is_some())
+        {
+            let _ = self.db.plugin_record_error(&spec.id, None);
+        }
         Ok(())
     }
 
@@ -1268,7 +1322,7 @@ impl RuntimeThread<'_> {
     }
 }
 
-fn read_module(path: &PathBuf) -> Result<Vec<u8>> {
+fn read_module(path: &Path) -> Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("could not inspect {}", path.display()))?;
     if !metadata.file_type().is_file() {

@@ -41,6 +41,7 @@
     "allow-projectm-load-asset",
     "allow-player-get-state",
     "allow-queue-add",
+    "allow-queue-add-context",
     "allow-queue-remove",
     "allow-queue-clear",
     "allow-queue-list",

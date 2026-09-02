@@ -183,6 +183,12 @@ export interface PluginInfo {
   grants_approved: boolean;
   commands: string[];
   runtime_error: string | null;
+  /** The component is instantiated and its init succeeded. */
+  runtime_ready: boolean;
+  /** Too many runtime failures this session; the runtime refuses further
+      calls. Not the same as having a `runtime_error`, which records only the
+      last failure. */
+  runtime_unhealthy: boolean;
   diagnostics: string[];
 }
 

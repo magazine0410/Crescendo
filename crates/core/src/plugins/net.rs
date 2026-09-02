@@ -148,6 +148,25 @@ pub fn check_url(url: &str, approved: &[String]) -> std::result::Result<(), NetR
     Ok(())
 }
 
+/// How many lookups may be outstanding at once.
+///
+/// A timed-out lookup cannot be cancelled — `getaddrinfo` is a blocking libc
+/// call with no interruption — so its thread lives until the resolver gives
+/// up on its own. That is fine for one stalled lookup and not fine without a
+/// ceiling, so refuse to start a new one while this many are still hanging.
+const MAX_OUTSTANDING_LOOKUPS: usize = 4;
+static OUTSTANDING_LOOKUPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Decrements the outstanding-lookup count however the resolver thread ends.
+struct LookupSlot;
+
+impl Drop for LookupSlot {
+    fn drop(&mut self) {
+        OUTSTANDING_LOOKUPS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Resolve with a deadline. `getaddrinfo` has no timeout of its own, and this
 /// runs on the shared Wasm runtime thread, so a hanging lookup would stall
 /// every plugin rather than just this request.
@@ -156,18 +175,36 @@ fn resolve_within(
     port: u16,
     budget: Duration,
 ) -> std::result::Result<Vec<std::net::SocketAddr>, String> {
+    // Claim a slot before spawning, and release it from the thread itself so
+    // an abandoned lookup still frees its slot when the resolver returns.
+    if OUTSTANDING_LOOKUPS
+        .fetch_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |count| (count < MAX_OUTSTANDING_LOOKUPS).then_some(count + 1),
+        )
+        .is_err()
+    {
+        return Err("too many name lookups are already outstanding".into());
+    }
     let (tx, rx) = std::sync::mpsc::channel();
     let lookup_host = host.to_string();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("crescendo-plugin-dns".into())
         .spawn(move || {
+            // Held by the lookup itself, so the slot is returned when the
+            // resolver finally answers — even long after the caller gave up.
+            let _slot = LookupSlot;
             let result = (lookup_host.as_str(), port)
                 .to_socket_addrs()
                 .map(|addresses| addresses.collect::<Vec<_>>())
                 .map_err(|error| error.to_string());
             let _ = tx.send(result);
-        })
-        .map_err(|error| format!("could not start the resolver: {error}"))?;
+        });
+    if let Err(error) = spawned {
+        OUTSTANDING_LOOKUPS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        return Err(format!("could not start the resolver: {error}"));
+    }
     match rx.recv_timeout(budget) {
         Ok(Ok(addresses)) => Ok(addresses),
         Ok(Err(error)) => Err(error),

@@ -47,6 +47,7 @@ const COMMANDS: &[&str] = &[
     "projectm_load_asset",
     "player_get_state",
     "queue_add",
+    "queue_add_context",
     "queue_remove",
     "queue_clear",
     "queue_list",

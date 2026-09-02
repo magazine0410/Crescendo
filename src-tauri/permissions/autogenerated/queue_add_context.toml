@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-queue-add-context"
+description = "Enables the queue_add_context command without any pre-configured scope."
+commands.allow = ["queue_add_context"]
+
+[[permission]]
+identifier = "deny-queue-add-context"
+description = "Denies the queue_add_context command without any pre-configured scope."
+commands.deny = ["queue_add_context"]

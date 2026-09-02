@@ -2,7 +2,7 @@
   import { library } from "$lib/stores/library.svelte";
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
-  import { call, type Track } from "$lib/api";
+  import { type PlayContext } from "$lib/api";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import {
@@ -29,20 +29,23 @@
     return sort && sort !== v ? v : undefined;
   }
 
+  /** One descriptor for both actions: the same values, search, sort, and
+      projection revision the visible list was built from. */
+  function valueContext(value: string): PlayContext {
+    return {
+      type: "value_tracks",
+      mode: library.wireMode,
+      values: [value],
+      query: library.query,
+      projection_revision: library.projectionRevision,
+      sort: library.sort,
+    };
+  }
+
   async function playValue(value: string) {
     if (library.projectionChanging) return;
     try {
-      await player.playContext(
-        {
-          type: "value_tracks",
-          mode: library.wireMode,
-          values: [value],
-          query: library.query,
-          projection_revision: library.projectionRevision,
-          sort: library.sort,
-        },
-        0,
-      );
+      await player.playContext(valueContext(value), 0);
     } catch (reason) {
       if (await library.recoverStaleProjection(reason)) {
         library.notice = "Library view changed; try again";
@@ -54,8 +57,15 @@
 
   async function queueValue(value: string) {
     if (library.projectionChanging) return;
-    const ids = await valueTrackIds(value);
-    await queue.add(ids);
+    try {
+      await queue.addContext(valueContext(value));
+    } catch (reason) {
+      if (await library.recoverStaleProjection(reason)) {
+        library.notice = "Library view changed; try again";
+        return;
+      }
+      throw reason;
+    }
   }
 
   /** Plain click selects only this value; Ctrl (or Cmd) toggles it in/out of a
@@ -65,22 +75,6 @@
     if (e.shiftKey) library.selectValueRange(value);
     else if (e.ctrlKey || e.metaKey) library.toggleValue(value);
     else library.selectValue(value);
-  }
-
-  async function valueTrackIds(value: string): Promise<number[]> {
-    // Reuse browse_albums + album_tracks would be N calls; ask for the whole
-    // value's track list in one range call is not filtered by value, so go
-    // through albums for now (values rarely exceed a few hundred albums).
-    const albums = await call<{ id: number }[]>("browse_albums", {
-      mode: library.wireMode,
-      values: [value],
-      query: library.query,
-      projectionRevision: library.projectionRevision,
-    });
-    const lists = await Promise.all(
-      albums.map((a) => call<Track[]>("album_tracks", { albumId: a.id })),
-    );
-    return lists.flat().map((t) => t.id);
   }
 
   function onRowContext(e: MouseEvent, value: string) {

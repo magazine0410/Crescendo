@@ -237,3 +237,56 @@ fn grouping_is_reachable_only_through_the_custom_wire_variant() {
         custom("grouping")
     );
 }
+
+/// Queueing a facet value must resolve the *value*, not the albums it happens
+/// to touch. The frontend used to expand each matching album and queue every
+/// track in it, which quietly added the rest of a mixed-genre album; both Play
+/// and Add-to-queue now go through this one resolution.
+#[test]
+fn a_value_context_excludes_other_tracks_from_the_same_album() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("t.db")).unwrap();
+    db.with(|conn| {
+        // One album, two genres — a compilation, or a mistagged rip.
+        let mut ins = conn.prepare(
+            "INSERT INTO tracks(id, path, dir, filename, mtime, size, format, duration_ms,
+                                title, genre, album, albumartist)
+             VALUES (?1, ?2, '/m', ?3, 0, 0, 'FLAC', 1000, ?4, ?5, 'Mixed', 'Various')",
+        )?;
+        for (id, genre) in [(1, "Rock"), (2, "Jazz"), (3, "Rock")] {
+            ins.execute(rusqlite::params![
+                id,
+                format!("/m/{id}.flac"),
+                format!("{id}.flac"),
+                format!("Track {id}"),
+                genre,
+            ])?;
+        }
+        Ok(())
+    })
+    .unwrap();
+
+    let ctx = PlayContext::ValueTracks {
+        mode: BrowseMode::Genre,
+        values: vec!["Rock".into()],
+        query: None,
+        projection_revision: 0,
+        sort: None,
+    };
+    assert_eq!(
+        db.resolve_context_exact(&ctx).unwrap(),
+        vec![1, 3],
+        "the Jazz track shares the album but not the selected value"
+    );
+
+    // Selecting a value the album does not carry queues nothing at all, rather
+    // than the album that merely sits next to it.
+    let ctx = PlayContext::ValueTracks {
+        mode: BrowseMode::Genre,
+        values: vec!["Ambient".into()],
+        query: None,
+        projection_revision: 0,
+        sort: None,
+    };
+    assert!(db.resolve_context_exact(&ctx).unwrap().is_empty());
+}
