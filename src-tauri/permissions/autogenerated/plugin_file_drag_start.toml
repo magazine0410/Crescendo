@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plugin-file-drag-start"
+description = "Enables the plugin_file_drag_start command without any pre-configured scope."
+commands.allow = ["plugin_file_drag_start"]
+
+[[permission]]
+identifier = "deny-plugin-file-drag-start"
+description = "Denies the plugin_file_drag_start command without any pre-configured scope."
+commands.deny = ["plugin_file_drag_start"]

@@ -241,6 +241,7 @@ function pluginSnapshot(): PluginSnapshot {
       (plugin) => plugin.pending !== null || plugin.desired_enabled !== plugin.loaded,
     ),
     projection_revision: projectionRevision,
+    file_drag_provider: null,
     menu_controls: groupingCollapseEnabled()
       ? [
           {
@@ -646,6 +647,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       if (quotes % 2 !== 0) return "invalid" as T;
       return (/[=#&|!/<>]|"/.test(q) ? "syntax" : "plain") as T;
     }
+    case "plugin_file_drag_start":
+      // Browser preview cannot initiate an OS file drag; keep direct mock API
+      // calls harmless and the command surface synchronized with Tauri.
+      return { count: 1, truncated: false } as T;
     case "playlist_list":
       return playlists as T;
     case "playlist_tracks": {

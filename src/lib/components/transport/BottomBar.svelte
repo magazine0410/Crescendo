@@ -10,6 +10,7 @@
   import SpriteButton from "../common/SpriteButton.svelte";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { jumpToNowPlaying, viewAlbum } from "$lib/navigate";
+  import { fileDrag } from "$lib/fileDrag";
 
   const titleLine = $derived(formatTitle(prefs.values.titlebar_format, player.track));
   const titleLine2 = $derived(formatTitle(prefs.values.titlebar_format_2, player.track));
@@ -102,6 +103,10 @@
          and a jump to the song in whichever list view can show it. -->
     <button
       class="titleblock"
+      use:fileDrag={{
+        source: () =>
+          player.track ? { type: "track_ids", ids: [player.track.id] } : null,
+      }}
       class:with-second={useSecondTitle}
       class:actionable={nowPlayingAlbumId != null}
       title={nowPlayingAlbumId != null ? "View album" : undefined}

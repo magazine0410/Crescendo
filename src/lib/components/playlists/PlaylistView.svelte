@@ -3,7 +3,7 @@
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
   import { ui } from "$lib/stores/ui.svelte";
-  import { artUrl, type Track } from "$lib/api";
+  import { artUrl, type PlayContext, type Track } from "$lib/api";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayName, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
@@ -12,6 +12,7 @@
   import { openTrackInFileManagerItem } from "$lib/menu";
   import { viewAlbum } from "$lib/navigate";
   import { tick, untrack } from "svelte";
+  import { fileDrag, FILE_DRAG_LIMIT } from "$lib/fileDrag";
 
   let list = $state<VirtualList | null>(null);
 
@@ -30,6 +31,7 @@
     year: number | null;
     durationMs: number;
     count: number;
+    trackIds: number[];
   }
   interface PlaylistRow {
     type: "playlist";
@@ -130,12 +132,14 @@
           year: track.year,
           durationMs: 0,
           count: 0,
+          trackIds: [],
         };
         out.push(header);
       }
       if (header) {
         header.durationMs += track.duration_ms;
         header.count += 1;
+        header.trackIds.push(track.id);
       }
       if (band) {
         band.durationMs += track.duration_ms;
@@ -158,17 +162,23 @@
 
   /** Resolve exactly what is visible: while filtered, the backend rebuilds
       the matches and the clicked row is addressed by its visible ordinal. */
+  function playlistContext(ids = playlists.selectedIds): PlayContext | null {
+    if (ids.length === 0) return null;
+    const query = filterQuery;
+    return query
+      ? ids.length === 1
+        ? { type: "filtered_playlist", id: ids[0], query }
+        : { type: "filtered_playlists", ids, query }
+      : ids.length === 1
+        ? { type: "playlist", id: ids[0] }
+        : { type: "playlists", ids };
+  }
+
   async function playAt(row: TrackRow) {
     const ids = playlists.selectedIds;
-    if (ids.length === 0) return;
+    const context = playlistContext(ids);
+    if (!context) return;
     const query = filterQuery;
-    const context = query
-      ? ids.length === 1
-        ? { type: "filtered_playlist" as const, id: ids[0], query }
-        : { type: "filtered_playlists" as const, ids, query }
-      : ids.length === 1
-        ? { type: "playlist" as const, id: ids[0] }
-        : { type: "playlists" as const, ids };
     await player.playContext(
       context,
       query ? row.visibleIndex : row.index,
@@ -223,7 +233,15 @@
     playlists.dropTargetId === playlists.selectedId}
   data-drop-playlist={playlists.selectedId}
 >
-  <header class="viewheader">
+  <header
+    class="viewheader"
+    use:fileDrag={{
+      source: () => {
+        const ctx = playlistContext();
+        return ctx ? { type: "context", ctx } : null;
+      },
+    }}
+  >
     <span class="title">
       {#if multi}
         Playlists : {playlists.selectedIds.length} selected
@@ -259,13 +277,29 @@
   {@const r = rows[i]}
   {#if r.type === "playlist"}
     <div class="pband">
-      <span class="pname">{r.name}</span>
-      <span class="pmeta">{r.count} items · {formatTime(r.durationMs)}</span>
+      <span
+        class="pdrag"
+        use:fileDrag={{
+          source: () => {
+            const ctx = playlistContext([r.playlistId]);
+            return ctx ? { type: "context", ctx } : null;
+          },
+        }}
+      >
+        <span class="pname">{r.name}</span>
+        <span class="pmeta">{r.count} items · {formatTime(r.durationMs)}</span>
+      </span>
     </div>
   {:else if r.type === "header"}
     <div class="ah">
       <button
         class="album-link"
+        use:fileDrag={{
+          source: () => ({
+            type: "track_ids",
+            ids: r.trackIds.slice(0, FILE_DRAG_LIMIT + 1),
+          }),
+        }}
         disabled={r.albumId == null}
         aria-label={r.albumId != null ? `View album ${r.album ?? "Unknown album"}` : undefined}
         onclick={() => {
@@ -288,6 +322,7 @@
     {@const detail2 = formatTitle(prefs.values.track_detail_format_2, r.track)}
     <button
       class="trow"
+      use:fileDrag={{ source: () => ({ type: "track_ids", ids: [r.track.id] }) }}
       class:alt={r.visibleIndex % 2 === 1}
       class:playing={player.track?.id === r.track.id}
       class:missing={r.track.missing}
@@ -364,6 +399,13 @@
     background: var(--bg-panel);
     border-top: 1px solid var(--hairline);
     border-bottom: 1px solid var(--hairline);
+  }
+  .pdrag {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    height: 100%;
   }
   .pname {
     font-weight: 600;

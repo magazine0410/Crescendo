@@ -143,7 +143,7 @@ pub async fn plugin_invoke(
 mod tests {
     use serde_json::Value;
 
-    const PLUGIN_PERMISSIONS: [&str; 9] = [
+    const PLUGIN_PERMISSIONS: [&str; 10] = [
         "allow-plugin-list",
         "allow-plugin-choose-install",
         "allow-plugin-set-enabled",
@@ -153,6 +153,7 @@ mod tests {
         "allow-plugin-restart-app",
         "allow-plugin-approve-grants",
         "allow-plugin-invoke",
+        "allow-plugin-file-drag-start",
     ];
 
     fn capability(source: &str) -> Value {

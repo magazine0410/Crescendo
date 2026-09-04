@@ -160,6 +160,7 @@ pub fn run() {
             commands::library::track_index,
             commands::library::album_by_id,
             commands::library::search_classify,
+            commands::file_drag::plugin_file_drag_start,
             commands::player::player_play_context,
             commands::player::player_jump_to,
             commands::player::player_toggle_pause,

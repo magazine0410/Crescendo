@@ -43,6 +43,9 @@ pub struct PluginSnapshot {
     pub restart_required: bool,
     pub projection_revision: u64,
     pub menu_controls: Vec<PluginMenuControlInfo>,
+    /// Loaded declarative plugin that owns outbound file dragging. `None`
+    /// means the host surface and its native command are unavailable.
+    pub file_drag_provider: Option<String>,
     pub grouping_migration_pending: bool,
 }
 
@@ -141,6 +144,7 @@ struct RegisteredFacetTransform {
 struct ContributionRegistry {
     facets: BTreeMap<String, RegisteredFacetTransform>,
     menus: Vec<(String, super::manifest::PluginMenuControl)>,
+    file_drag_provider: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -376,6 +380,7 @@ impl PluginManager {
 
         let mut loaded = BTreeMap::new();
         let mut reserved_targets = BTreeMap::<String, String>::new();
+        let mut file_drag_owner: Option<String> = None;
         for record in &inventory {
             let Some(package) = &record.package else {
                 continue;
@@ -420,6 +425,19 @@ impl PluginManager {
                     db.plugin_record_error(&record.id, Some(&message))?;
                     startup_errors.push(message);
                     continue;
+                }
+                if package.manifest.contributes.file_drag.is_some() {
+                    if let Some(owner) = &file_drag_owner {
+                        let message = format!(
+                            "Could not enable {} because {owner} already provides file drag support.",
+                            record.id
+                        );
+                        db.plugin_set_desired_enabled(&record.id, false)?;
+                        db.plugin_record_error(&record.id, Some(&message))?;
+                        startup_errors.push(message);
+                        continue;
+                    }
+                    file_drag_owner = Some(record.id.clone());
                 }
                 for transform in &package.manifest.contributes.facet_transforms {
                     reserved_targets.insert(transform.target_tag().to_string(), record.id.clone());
@@ -559,6 +577,12 @@ impl PluginManager {
             .lock()
             .map_err(|_| anyhow!("plugin manager lock poisoned"))?;
         self.snapshot_unlocked()
+    }
+
+    /// The immutable loaded plugin that enables the host-owned outbound file
+    /// drag surface. Callers must refuse the operation when this is absent.
+    pub fn file_drag_provider(&self) -> Option<&str> {
+        self.registry.file_drag_provider.as_deref()
     }
 
     /// Capture one immutable projection generation. The returned guard keeps
@@ -1176,6 +1200,7 @@ impl PluginManager {
                 .map_err(|_| anyhow!("plugin projection lock poisoned"))?
                 .revision,
             menu_controls: self.menu_controls()?,
+            file_drag_provider: self.registry.file_drag_provider.clone(),
             grouping_migration_pending: self.db.meta_get(GROUPING_MIGRATION_KEY)?.as_deref()
                 == Some("pending"),
         })
@@ -1218,7 +1243,8 @@ impl PluginManager {
             .iter()
             .map(PluginFacetTransform::target_tag)
             .collect();
-        if targets.is_empty() {
+        let provides_file_drag = manifest.contributes.file_drag.is_some();
+        if targets.is_empty() && !provides_file_drag {
             return Ok(());
         }
 
@@ -1247,6 +1273,12 @@ impl PluginManager {
             {
                 bail!(
                     "{} already owns the {target} facet transform; disable it before enabling {plugin_id}",
+                    record.id
+                );
+            }
+            if provides_file_drag && other.contributes.file_drag.is_some() {
+                bail!(
+                    "{} already provides file drag support; disable it before enabling {plugin_id}",
                     record.id
                 );
             }
@@ -1318,6 +1350,9 @@ impl ContributionRegistry {
     fn from_loaded(loaded: &BTreeMap<String, PluginManifest>) -> Self {
         let mut registry = Self::default();
         for (plugin_id, manifest) in loaded {
+            if manifest.contributes.file_drag.is_some() {
+                registry.file_drag_provider = Some(plugin_id.clone());
+            }
             for contribution in &manifest.contributes.facet_transforms {
                 registry.facets.insert(
                     contribution.target_tag().to_string(),
@@ -1708,7 +1743,10 @@ fn asset_media_type(path: &Path) -> Result<&'static str> {
 mod tests {
     use super::*;
     use crate::plugins::package::write_test_package;
-    use crate::plugins::{PluginContributions, PluginSelectOption, PluginSettingDeclaration};
+    use crate::plugins::{
+        PluginContributions, PluginFileDragContribution, PluginSelectOption,
+        PluginSettingDeclaration,
+    };
     use std::fs::File;
 
     fn manifest(version: &str) -> PluginManifest {
@@ -1804,6 +1842,14 @@ mod tests {
         value
     }
 
+    fn file_drag_manifest(id: &str) -> PluginManifest {
+        let mut value = manifest("1.0.0");
+        value.id = id.into();
+        value.api_version = PLUGIN_API_VERSION.into();
+        value.contributes.file_drag = Some(PluginFileDragContribution {});
+        value
+    }
+
     fn setup() -> (tempfile::TempDir, Arc<Db>, PluginManager) {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(Db::open(&dir.path().join("library.db")).unwrap());
@@ -1826,6 +1872,57 @@ mod tests {
         assert!(!result.snapshot.plugins[0].desired_enabled);
         assert!(!result.snapshot.plugins[0].loaded);
         assert!(!result.snapshot.restart_required);
+    }
+
+    #[test]
+    fn file_drag_exists_only_while_its_declarative_provider_is_loaded() {
+        let (dir, db, manager) = setup();
+        let id = "dev.crescendo.file-drag";
+        let package = dir.path().join("file-drag.crescendo-plugin");
+        write_test_package(&package, &file_drag_manifest(id), &[]);
+
+        let installed = manager.install(&package).unwrap();
+        assert_eq!(installed.snapshot.file_drag_provider, None);
+        assert_eq!(manager.file_drag_provider(), None);
+
+        let enabled = manager.set_enabled(id, true).unwrap();
+        assert_eq!(enabled.snapshot.file_drag_provider, None);
+        drop(manager);
+
+        let restarted = PluginManager::start(dir.path().join("plugins"), db, "0.8.0").unwrap();
+        assert_eq!(restarted.file_drag_provider(), Some(id));
+        assert_eq!(
+            restarted.snapshot().unwrap().file_drag_provider.as_deref(),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn only_one_enabled_plugin_can_provide_file_drag() {
+        let (dir, _db, manager) = setup();
+        for id in ["dev.crescendo.file-drag-a", "dev.crescendo.file-drag-b"] {
+            let package = dir.path().join(format!("{id}.crescendo-plugin"));
+            write_test_package(&package, &file_drag_manifest(id), &[]);
+            manager.install(&package).unwrap();
+        }
+
+        manager
+            .set_enabled("dev.crescendo.file-drag-a", true)
+            .unwrap();
+        let error = manager
+            .set_enabled("dev.crescendo.file-drag-b", true)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("already provides file drag support"));
+        assert!(
+            !manager
+                .snapshot()
+                .unwrap()
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == "dev.crescendo.file-drag-b")
+                .unwrap()
+                .desired_enabled
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ version 1. A different value, an unknown field, or an unknown contribution is a
 validation error; Crescendo leaves the package disabled and reports the error.
 
 `api_version` identifies contribution semantics. For declarative packages the
-host currently implements `1.0.0`. A plugin is compatible when its API major
+host currently implements `1.1.0`. A plugin is compatible when its API major
 matches the host and its version is not newer than the host API. For example,
 an API `1.0.0` package is accepted by host `1.1.0`, while `1.1.0` is not
 accepted by host `1.0.0`, and API `2.x` requires an explicit new compatibility
@@ -70,10 +70,12 @@ something the newer API added. A package that declares the newest version it
 was built against is refused by every older Crescendo, including the one the
 user is running.
 
+Declarative API `1.1.0` adds the empty `file_drag` marker; `1.0.x` packages
+remain compatible and cannot accidentally opt into it.
+
 The declarative contribution set is immutable for a running process. First
 install is immediately listed but disabled; install, update, enable, disable,
 and uninstall changes are reflected after the required restart. Values for
 declared settings use a guarded write-then-publish path and apply live. Views
 and newly created play contexts carry a projection revision so one response
 cannot combine old and new projection semantics.
-

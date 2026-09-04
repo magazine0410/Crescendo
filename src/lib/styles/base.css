@@ -33,6 +33,14 @@ button {
   cursor: pointer;
 }
 
+.file-drag-plugin-enabled .file-draggable:not(:disabled) {
+  cursor: grab;
+}
+
+.file-drag-plugin-enabled .file-draggable.file-drag-active:not(:disabled) {
+  cursor: grabbing;
+}
+
 input {
   font: inherit;
   color: inherit;

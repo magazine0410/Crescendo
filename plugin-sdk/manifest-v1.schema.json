@@ -240,6 +240,12 @@
       "required": ["id"],
       "properties": { "id": { "$ref": "#/$defs/key" } }
     },
+    "fileDragContribution": {
+      "title": "Host-owned outbound file dragging",
+      "description": "Enables Crescendo's fixed, bounded file-drag behavior. The plugin cannot supply paths, selectors, limits, or native code.",
+      "type": "object",
+      "additionalProperties": false
+    },
     "contributions": {
       "type": "object",
       "additionalProperties": false,
@@ -259,6 +265,7 @@
           "maxItems": 64,
           "items": { "$ref": "#/$defs/menuControl" }
         },
+        "file_drag": { "$ref": "#/$defs/fileDragContribution" },
         "commands": {
           "type": "array",
           "maxItems": 32,

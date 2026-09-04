@@ -9,6 +9,7 @@
   import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem, openTrackInFileManagerItem } from "$lib/menu";
+  import { fileDrag } from "$lib/fileDrag";
 
   const album = $derived(library.selectedAlbum);
   const returnsToAnotherTab = $derived(
@@ -42,7 +43,12 @@
     <button class="back" onclick={goBack}>
       {returnsToAnotherTab || prefs.values.library_view === "track_list" ? "‹ Back" : "‹ Albums"}
     </button>
-    <header>
+    <header
+      use:fileDrag={{
+        source: () => ({ type: "context", ctx: { type: "album", id: album.id } }),
+        disabled: () => library.projectionChanging,
+      }}
+    >
       <img class="cover" src={artUrl("album", album.id, "thumb")} alt="" onerror={onImgError} />
       <div class="info">
         <h1>{album.album ?? "?"}</h1>
@@ -71,6 +77,10 @@
         {@const detail2 = formatTitle(prefs.values.track_detail_format_2, t)}
         <button
           class="trow"
+          use:fileDrag={{
+            source: () => ({ type: "track_ids", ids: [t.id] }),
+            disabled: () => library.projectionChanging,
+          }}
           disabled={library.projectionChanging}
           class:playing={player.track?.id === t.id}
           ondblclick={() => player.playContext({ type: "album", id: album.id }, i)}

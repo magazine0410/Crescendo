@@ -201,6 +201,8 @@ export interface PluginSnapshot {
   restart_required: boolean;
   projection_revision: number;
   menu_controls: PluginMenuControl[];
+  /** Loaded declarative plugin enabling outbound file dragging. */
+  file_drag_provider: string | null;
   grouping_migration_pending: boolean;
 }
 
@@ -432,6 +434,17 @@ export type PlayContext =
       projection_revision: number;
       sort: TrackSort | null;
     };
+
+/** A native outbound drag can name explicit rows or let Rust resolve one of
+    the same bounded context descriptors used by playback. */
+export type FileDragSource =
+  | { type: "track_ids"; ids: number[] }
+  | { type: "context"; ctx: PlayContext };
+
+export interface FileDragResult {
+  count: number;
+  truncated: boolean;
+}
 
 export function artUrl(
   kind: "album" | "track",

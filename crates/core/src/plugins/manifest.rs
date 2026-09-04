@@ -44,10 +44,18 @@ pub struct PluginContributions {
     pub settings: Vec<PluginSettingDeclaration>,
     pub facet_transforms: Vec<PluginFacetTransform>,
     pub menu_controls: Vec<PluginMenuControl>,
+    /// Declarative marker enabling Crescendo's host-owned outbound file-drag
+    /// surface. The descriptor is deliberately empty: paths, limits, gesture
+    /// targets, and native behavior are not plugin-controlled.
+    pub file_drag: Option<PluginFileDragContribution>,
     /// Wasm-only: commands the host may dispatch to the plugin's module.
     /// Declarative plugins cannot contribute commands.
     pub commands: Vec<PluginCommandDeclaration>,
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginFileDragContribution {}
 
 /// A host-dispatchable command exposed by a Wasm plugin. The id is the only
 /// surface; labels, UI, and arguments stay host-owned.
@@ -231,7 +239,7 @@ impl PluginManifest {
         }
         Version::parse(&self.version)
             .map_err(|_| anyhow!("version must be semantic versioning"))?;
-        Version::parse(&self.api_version)
+        let api_version = Version::parse(&self.api_version)
             .map_err(|_| anyhow!("api_version must be semantic versioning"))?;
         Version::parse(&self.min_crescendo_version)
             .map_err(|_| anyhow!("min_crescendo_version must be semantic versioning"))?;
@@ -274,6 +282,12 @@ impl PluginManifest {
         }
         if self.contributes.menu_controls.len() > 64 {
             bail!("plugins cannot declare more than 64 menu controls");
+        }
+        if self.contributes.file_drag.is_some() && self.kind != PluginKind::Declarative {
+            bail!("only declarative plugins can contribute file drag support");
+        }
+        if self.contributes.file_drag.is_some() && api_version < Version::new(1, 1, 0) {
+            bail!("file drag support requires declarative plugin API 1.1.0 or newer");
         }
         let mut command_ids = HashSet::new();
         for command in &self.contributes.commands {
@@ -727,6 +741,37 @@ mod tests {
         let mut bad = value;
         bad.contributes.menu_controls[0].checked_setting = Some("missing".into());
         assert!(bad.validate(false).is_err());
+    }
+
+    #[test]
+    fn file_drag_is_an_empty_declarative_only_contribution() {
+        let mut value = manifest();
+        value.contributes.file_drag = Some(PluginFileDragContribution {});
+        value.api_version = "1.1.0".into();
+        value.validate(false).unwrap();
+
+        let mut old_api = value.clone();
+        old_api.api_version = "1.0.0".into();
+        assert!(old_api.validate(false).is_err());
+
+        let mut wasm = value;
+        wasm.kind = PluginKind::Wasm;
+        assert!(wasm.validate(true).is_err());
+
+        let unknown: Result<PluginManifest, _> = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "id": "dev.crescendo.file-drag",
+            "name": "File drag",
+            "version": "1.0.0",
+            "description": "",
+            "authors": ["Crescendo"],
+            "license": "MIT",
+            "kind": "declarative",
+            "api_version": "1.1.0",
+            "min_crescendo_version": "0.9.0",
+            "contributes": { "file_drag": { "limit": 99 } }
+        }));
+        assert!(unknown.is_err());
     }
 
     fn wasm_manifest() -> PluginManifest {

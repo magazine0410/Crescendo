@@ -11,6 +11,8 @@ cargo check -p crescendo
 npm run check
 cargo run -p crescendo-core --bin crescendo-plugin -- validate \
   plugins/dev.crescendo.primary-grouping
+cargo run -p crescendo-core --bin crescendo-plugin -- validate \
+  plugins/dev.crescendo.file-drag
 sh plugins/dev.crescendo.wasm-demo/build.sh
 cargo run -p crescendo-core --bin crescendo-plugin -- validate \
   plugins/dev.crescendo.wasm-demo/dist
@@ -27,11 +29,12 @@ name section differs between any two checkout locations while the code is
 identical. That is what the CI provenance job compares, together with the WIT
 world as text.
 
-The SDK workflow packs the canonical Primary Grouping source, validates the
-finished package, preserves it as a CI artifact, and attaches it to a published
-GitHub release. Install that release asset in a clean Crescendo profile and
-confirm it starts disabled, requires one restart to enter the loaded set, and
-then toggles grouping projection live.
+The SDK workflow packs the canonical declarative sources, validates the
+finished packages, preserves them as CI artifacts, and attaches them to a
+published GitHub release. Install each release asset in a clean Crescendo
+profile and confirm it starts disabled and requires one restart to enter the
+loaded set; Primary Grouping then toggles projection live, while File Drag and
+Drop alone enables outbound dragging.
 
 ## Automated invariants
 
@@ -88,6 +91,9 @@ then toggles grouping projection live.
   is visible while the library and player remain usable.
 - Install the exact `.crescendo-plugin` file attached to the GitHub release and
   compare its printed/validated SHA-256 with the release artifact.
+- With no file-drag provider loaded, confirm rows have their normal cursor and
+  `plugin_file_drag_start` is refused; after enabling the official provider and
+  restarting, confirm quick and 2,000-track-limited drops work.
 - Install the packed Wasm demo, approve its capabilities, restart, and confirm:
   its commands run from the Plugins page; `spin` fails on the deadline without
   disturbing playback; the player, playlist, and network commands answer
@@ -95,4 +101,3 @@ then toggles grouping projection live.
   filter set to `composer`, its menu action appears and runs.
 - Confirm the release carries `crescendo-plugin-sdk.tar.gz` and that a plugin
   built from that copy of `plugin-sdk/` loads in the released build.
-

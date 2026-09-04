@@ -9,6 +9,7 @@
   import { addToPlaylistItem, openInFileManager } from "$lib/menu";
   import VirtualGrid from "$lib/virtual/VirtualGrid.svelte";
   import { displayName } from "$lib/format";
+  import { fileDrag } from "$lib/fileDrag";
 
   const CELL_W = 150;
   const CELL_H = 196; // 150 art + text
@@ -76,6 +77,10 @@
   {@const a = library.albums[i]}
   <button
     class="cell"
+    use:fileDrag={{
+      source: () => ({ type: "context", ctx: { type: "album", id: a.id } }),
+      disabled: () => library.projectionChanging,
+    }}
     disabled={library.projectionChanging}
     onclick={() => showAlbum(a)}
     ondblclick={() => playAlbum(a)}

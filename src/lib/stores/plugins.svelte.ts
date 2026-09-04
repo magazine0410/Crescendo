@@ -8,14 +8,28 @@ import {
 class PluginsStore {
   snapshot = $state<PluginSnapshot | null>(null);
 
-  async refresh(): Promise<PluginSnapshot> {
-    const snapshot = await call<PluginSnapshot>("plugin_list");
+  get fileDragEnabled(): boolean {
+    return this.snapshot?.file_drag_provider != null;
+  }
+
+  private publish(snapshot: PluginSnapshot): PluginSnapshot {
     this.snapshot = snapshot;
+    if (typeof document !== "undefined") {
+      document.documentElement.classList.toggle(
+        "file-drag-plugin-enabled",
+        snapshot.file_drag_provider != null,
+      );
+    }
     return snapshot;
   }
 
+  async refresh(): Promise<PluginSnapshot> {
+    const snapshot = await call<PluginSnapshot>("plugin_list");
+    return this.publish(snapshot);
+  }
+
   apply(result: PluginMutationResult): PluginMutationResult {
-    this.snapshot = result.snapshot;
+    this.publish(result.snapshot);
     return result;
   }
 

@@ -26,6 +26,7 @@ const COMMANDS: &[&str] = &[
     "track_index",
     "album_by_id",
     "search_classify",
+    "plugin_file_drag_start",
     "player_play_context",
     "player_jump_to",
     "player_toggle_pause",

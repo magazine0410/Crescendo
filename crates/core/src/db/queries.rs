@@ -561,6 +561,27 @@ impl Db {
         })
     }
 
+    /// Existing file paths for a bounded id list, preserving the caller's
+    /// order. Missing tracks are deliberately omitted: unlike playback, a
+    /// native file drag can only advertise files that are actually present.
+    pub fn track_paths_by_ids(&self, ids: &[i64], limit: usize) -> Result<Vec<String>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.with(|conn| {
+            let mut stmt = conn.prepare("SELECT path FROM tracks WHERE id = ?1 AND missing = 0")?;
+            let mut out = Vec::with_capacity(ids.len().min(limit));
+            for id in ids.iter().take(limit) {
+                match stmt.query_row([id], |row| row.get(0)) {
+                    Ok(path) => out.push(path),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Ok(out)
+        })
+    }
+
     /// Whether every id names an existing track row.
     ///
     /// For callers that supply raw ids from outside the UI — a `player.control`
@@ -949,6 +970,98 @@ impl Db {
         }
     }
 
+    /// Resolve the existing files represented by a context, in the same order
+    /// as its visible/playback rows, without first materializing the context's
+    /// complete id list. `limit` is applied in SQL (and across concatenated
+    /// playlists), which keeps file drags bounded even for the whole library.
+    /// Missing playlist entries are omitted because there is no file to offer
+    /// to the receiving application.
+    pub fn resolve_context_paths_exact(
+        &self,
+        ctx: &PlayContext,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let romanized = self.prefer_romanized();
+        let plan = match ctx {
+            PlayContext::ValueTracks { mode, .. } => FacetPlan::exact(mode, romanized),
+            _ => None,
+        };
+        self.resolve_context_paths_with_projection(ctx, plan.as_ref(), romanized, limit)
+    }
+
+    pub fn resolve_context_paths_with_projection(
+        &self,
+        ctx: &PlayContext,
+        plan: Option<&FacetPlan>,
+        romanized: bool,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        match ctx {
+            PlayContext::Album { id } => self.with(|conn| {
+                collect_paths(
+                    conn,
+                    "SELECT path FROM tracks WHERE album_id = ?1 AND missing = 0 \
+                     ORDER BY disc_no, track_no, path LIMIT ?2",
+                    vec![Value::from(*id), Value::from(limit as i64)],
+                )
+            }),
+            PlayContext::Playlist { id } => self
+                .with(|conn| collect_playlist_paths(conn, std::slice::from_ref(id), None, limit)),
+            PlayContext::FilteredPlaylist { id, query } => self.with(|conn| {
+                collect_playlist_paths(conn, std::slice::from_ref(id), Some(query), limit)
+            }),
+            PlayContext::Playlists { ids } => {
+                self.with(|conn| collect_playlist_paths(conn, ids, None, limit))
+            }
+            PlayContext::FilteredPlaylists { ids, query } => {
+                self.with(|conn| collect_playlist_paths(conn, ids, Some(query), limit))
+            }
+            PlayContext::LibraryView { query, sort, .. } => {
+                let filter = compile_optional_query(query.as_deref())?;
+                let (where_sql, mut params) = track_where(filter.as_ref());
+                let order = order_sql(*sort, romanized);
+                params.push(Value::from(limit as i64));
+                self.with(|conn| {
+                    collect_paths(
+                        conn,
+                        &format!(
+                            "SELECT path FROM tracks WHERE {where_sql} ORDER BY {order} \
+                             LIMIT ?{}",
+                            params.len()
+                        ),
+                        params,
+                    )
+                })
+            }
+            PlayContext::ValueTracks {
+                values,
+                query,
+                sort,
+                ..
+            } => {
+                let filter = compile_optional_query(query.as_deref())?;
+                let (mut where_sql, mut params) = track_where(filter.as_ref());
+                push_values_clause(&mut where_sql, &mut params, plan, values);
+                let order = order_sql(*sort, romanized);
+                params.push(Value::from(limit as i64));
+                self.with(|conn| {
+                    collect_paths(
+                        conn,
+                        &format!(
+                            "SELECT path FROM tracks WHERE {where_sql} ORDER BY {order} \
+                             LIMIT ?{}",
+                            params.len()
+                        ),
+                        params,
+                    )
+                })
+            }
+        }
+    }
+
     pub fn lastfm_cache_get(&self, key: &str, max_age_secs: i64) -> Result<Option<String>> {
         self.with(|conn| {
             let now = now_unix();
@@ -1047,6 +1160,12 @@ fn collect_ids(conn: &Connection, sql: &str, params: Vec<Value>) -> Result<Vec<i
     rows.map(|r| Ok(r?)).collect()
 }
 
+fn collect_paths(conn: &Connection, sql: &str, params: Vec<Value>) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), |r| r.get::<_, String>(0))?;
+    rows.map(|r| Ok(r?)).collect()
+}
+
 /// Resolve one or more playlists in the same concatenated order PlaylistView
 /// uses. Its filter is deliberately simple rather than the library's search
 /// language: a Unicode-insensitive substring over the five fields shown by
@@ -1082,6 +1201,64 @@ fn collect_playlist_ids(
             let mut stmt = conn.prepare(UNFILTERED)?;
             for id in playlist_ids {
                 for row in stmt.query_map([id], |row| row.get(0))? {
+                    out.push(row?);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// File-path counterpart to `collect_playlist_ids`, with one limit shared by
+/// every playlist in the concatenated view. Missing members remain visible in
+/// PlaylistView but cannot participate in an external file drag.
+fn collect_playlist_paths(
+    conn: &Connection,
+    playlist_ids: &[i64],
+    query: Option<&str>,
+    limit: usize,
+) -> Result<Vec<String>> {
+    const UNFILTERED: &str = "SELECT t.path FROM playlist_tracks pt \
+         JOIN tracks t ON t.id = pt.track_id \
+         WHERE pt.playlist_id = ?1 AND t.missing = 0 \
+         ORDER BY pt.position LIMIT ?2";
+    const FILTERED: &str = "SELECT t.path FROM playlist_tracks pt \
+         JOIN tracks t ON t.id = pt.track_id \
+         WHERE pt.playlist_id = ?1 AND t.missing = 0 AND (\
+           ucontains(t.title, ?2) OR ucontains(t.artist, ?2) OR \
+           ucontains(t.album, ?2) OR ucontains(t.albumartist, ?2) OR \
+           ucontains(t.genre, ?2)\
+         ) ORDER BY pt.position LIMIT ?3";
+
+    let query = query.map(str::trim).filter(|query| !query.is_empty());
+    let mut out = Vec::with_capacity(limit.min(256));
+    match query {
+        Some(query) => {
+            let mut stmt = conn.prepare(FILTERED)?;
+            for id in playlist_ids {
+                let remaining = limit.saturating_sub(out.len());
+                if remaining == 0 {
+                    break;
+                }
+                for row in stmt
+                    .query_map(rusqlite::params![id, query, remaining as i64], |row| {
+                        row.get(0)
+                    })?
+                {
+                    out.push(row?);
+                }
+            }
+        }
+        None => {
+            let mut stmt = conn.prepare(UNFILTERED)?;
+            for id in playlist_ids {
+                let remaining = limit.saturating_sub(out.len());
+                if remaining == 0 {
+                    break;
+                }
+                for row in
+                    stmt.query_map(rusqlite::params![id, remaining as i64], |row| row.get(0))?
+                {
                     out.push(row?);
                 }
             }

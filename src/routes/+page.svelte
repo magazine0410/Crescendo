@@ -16,6 +16,7 @@
   import SetCollectionDialog from "$lib/components/playlists/SetCollectionDialog.svelte";
   import SearchHelp from "$lib/components/SearchHelp.svelte";
   import GroupingPluginMigration from "$lib/components/settings/GroupingPluginMigration.svelte";
+  import FileDragNotice from "$lib/components/common/FileDragNotice.svelte";
 
   let settingsOpen = $state(false);
   let visualizerMounted = $state(false);
@@ -136,6 +137,9 @@
   <SetCollectionDialog />
   <SearchHelp open={ui.searchHelpOpen} onclose={() => (ui.searchHelpOpen = false)} />
   <GroupingPluginMigration />
+  {#if plugins.snapshot?.file_drag_provider}
+    <FileDragNotice />
+  {/if}
 </div>
 
 <style>

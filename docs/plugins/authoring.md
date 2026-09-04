@@ -80,6 +80,14 @@ Declarative API 1.0 provides:
   whose `toggle_setting` action and `checked_setting` must name the same Boolean
   setting.
 
+Declarative API 1.1 adds exactly one marker contribution:
+
+- `file_drag: {}` enables Crescendo's fixed outbound file-drag surface. The
+  descriptor is intentionally empty: the plugin cannot provide paths, choose
+  UI selectors, alter the 2,000-file ceiling, or run native code. Only one
+  enabled plugin may own it, and the native command refuses calls unless that
+  provider is in the immutable loaded set.
+
 Only one enabled plugin may own a transform for a given target tag. The app
 rejects conflicting enable requests rather than choosing an order implicitly.
 Plugin data never supplies SQL; delimiters are quoted by trusted host code.

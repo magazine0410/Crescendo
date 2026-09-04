@@ -2,7 +2,7 @@
 
 This directory is the versioned authoring contract for Crescendo's plugin
 system. The current contracts are manifest schema version 1, declarative plugin
-API `1.0.0`, and the sandboxed Wasm runtime API `0.2.1`. Each release attaches
+API `1.1.0`, and the sandboxed Wasm runtime API `0.2.1`. Each release attaches
 a copy of this directory to its GitHub release, so a plugin can be built
 against the exact contract a given Crescendo implements.
 
@@ -17,6 +17,8 @@ against the exact contract a given Crescendo implements.
   `wit/` directly, but only the Rust path is tested here.
 - [`../plugins/dev.crescendo.primary-grouping/`](../plugins/dev.crescendo.primary-grouping/)
   is the canonical declarative source example.
+- [`../plugins/dev.crescendo.file-drag/`](../plugins/dev.crescendo.file-drag/)
+  is the installable outbound file-drag contribution.
 - [`../plugins/dev.crescendo.wasm-demo/`](../plugins/dev.crescendo.wasm-demo/)
   is the canonical sandboxed Wasm source example.
 - [`../docs/plugins/authoring.md`](../docs/plugins/authoring.md) explains the

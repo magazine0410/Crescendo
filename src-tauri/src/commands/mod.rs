@@ -1,3 +1,4 @@
+pub mod file_drag;
 pub mod library;
 pub mod misc;
 pub mod player;

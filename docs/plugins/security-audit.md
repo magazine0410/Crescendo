@@ -94,6 +94,12 @@ and `storage_is_namespaced_per_plugin_and_bounded_by_the_quota`.
 The host must never do something on a plugin's behalf that the plugin could
 not do itself.
 
+The declarative `file_drag` marker is not a path capability. It receives no
+data and runs no code: the user's pointer gesture supplies one host-defined
+selection descriptor, the host resolves it against the current projection,
+and the host clips the result to 2,000 existing files. The native command is
+unavailable unless exactly one provider is loaded.
+
 - **Identity is never an argument.** No host import takes a plugin id; it comes
   from the store the call arrived on. A plugin cannot name another plugin's
   storage namespace, settings, or grants.

@@ -3,6 +3,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { call, artUrl, isTauri, type Album, type ArtistInfo, type AlbumInfo, type LyricsResult } from "$lib/api";
   import { formatTime, displayOriginalTitle, displayAlbumartist, latinTitleSort } from "$lib/format";
+  import { fileDrag } from "$lib/fileDrag";
 
   let artistInfo = $state<ArtistInfo | null>(null);
   let albumInfo = $state<AlbumInfo | null>(null);
@@ -166,6 +167,7 @@
     <div class="left">
       <img
         class="bigcover"
+        use:fileDrag={{ source: () => ({ type: "track_ids", ids: [track.id] }) }}
         src={track.album_id != null
           ? artUrl("album", track.album_id, "full")
           : artUrl("track", track.id, "full")}

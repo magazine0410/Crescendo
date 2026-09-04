@@ -37,19 +37,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test package tooling
         run: cargo test -p crescendo-core plugins::tooling
-      - name: Validate and pack the official plugin
+      - name: Validate and pack the official declarative plugins
         run: |
           set -eu
           mkdir -p plugin-artifacts
-          source=plugins/dev.crescendo.primary-grouping
-          # Read the version from the manifest rather than repeating it here,
-          # or a version bump would publish new contents under the old name.
-          version=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$source/manifest.json")
-          id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$source/manifest.json")
-          package="plugin-artifacts/$id-$version.crescendo-plugin"
-          cargo run -p crescendo-core --bin crescendo-plugin -- validate "$source"
-          cargo run -p crescendo-core --bin crescendo-plugin -- pack "$source" "$package"
-          cargo run -p crescendo-core --bin crescendo-plugin -- validate "$package"
+          for source in \
+            plugins/dev.crescendo.primary-grouping \
+            plugins/dev.crescendo.file-drag
+          do
+            # Read metadata from the manifest rather than repeating it here,
+            # or a version bump would publish new contents under the old name.
+            version=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$source/manifest.json")
+            id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$source/manifest.json")
+            package="plugin-artifacts/$id-$version.crescendo-plugin"
+            cargo run -p crescendo-core --bin crescendo-plugin -- validate "$source"
+            cargo run -p crescendo-core --bin crescendo-plugin -- pack "$source" "$package"
+            cargo run -p crescendo-core --bin crescendo-plugin -- validate "$package"
+          done
       - name: Check the SDK reports the versions the host implements
         run: |
           set -eu
@@ -182,7 +186,7 @@ jobs:
         # The WIT world and the generated Rust bindings are what a plugin is
         # built against, so they ship with the release that implements them.
         run: tar -czf plugin-artifacts/crescendo-plugin-sdk.tar.gz plugin-sdk
-      - name: Attach the official plugin to the release
+      - name: Attach the official plugins to the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
@@ -190,4 +194,3 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             plugin-artifacts/*.crescendo-plugin \
             plugin-artifacts/crescendo-plugin-sdk.tar.gz --clobber
-

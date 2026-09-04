@@ -4,7 +4,8 @@
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import { call, type PlayContext, type SortKey, type Track } from "$lib/api";
+  import { call, type FileDragSource, type PlayContext, type SortKey, type Track } from "$lib/api";
+  import { fileDrag, FILE_DRAG_LIMIT } from "$lib/fileDrag";
   import Icon from "../common/Icon.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
@@ -128,6 +129,12 @@
       ctrl: e.ctrlKey || e.metaKey,
       shift: e.shiftKey,
     });
+  }
+
+  async function trackDragSource(trackIndex: number, track: Track): Promise<FileDragSource> {
+    if (!library.isSelected(trackIndex)) return { type: "track_ids", ids: [track.id] };
+    const selected = await library.collectSelectedTracks(FILE_DRAG_LIMIT + 1);
+    return { type: "track_ids", ids: selected.map((item) => item.id) };
   }
 
   async function trackMenu(e: MouseEvent, trackIndex: number, clickedTrack: Track) {
@@ -257,6 +264,10 @@
       {@const detail2 = formatTitle(prefs.values.track_detail_format_2, t)}
       <button
         class="trow"
+        use:fileDrag={{
+          source: () => trackDragSource(cell.trackIndex, t),
+          disabled: () => library.projectionChanging,
+        }}
         class:alt
         class:selected={library.isSelected(cell.trackIndex)}
         class:playing={player.track?.id === t.id}
@@ -292,6 +303,13 @@
     <div class="sep">
       <button
         class="sepname"
+        use:fileDrag={{
+          source: () =>
+            cell.albumId == null
+              ? null
+              : { type: "context", ctx: { type: "album", id: cell.albumId } },
+          disabled: () => library.projectionChanging,
+        }}
         disabled={library.projectionChanging}
         title={cell.sep.album ?? "?"}
         onclick={() => cell.albumId != null && library.openAlbumById(cell.albumId)}

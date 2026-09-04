@@ -2,7 +2,8 @@
   import { library } from "$lib/stores/library.svelte";
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
-  import { type PlayContext } from "$lib/api";
+  import { type FileDragSource, type PlayContext } from "$lib/api";
+  import { fileDrag } from "$lib/fileDrag";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import {
@@ -31,7 +32,7 @@
 
   /** One descriptor for both actions: the same values, search, sort, and
       projection revision the visible list was built from. */
-  function valueContext(value: string): PlayContext {
+  function valueContext(value: string): Extract<PlayContext, { type: "value_tracks" }> {
     return {
       type: "value_tracks",
       mode: library.wireMode,
@@ -39,6 +40,28 @@
       query: library.query,
       projection_revision: library.projectionRevision,
       sort: library.sort,
+    };
+  }
+
+  function valueDragSource(value: string): FileDragSource {
+    const values = library.selectedValues.includes(value)
+      ? library.selectedValues
+      : [value];
+    return {
+      type: "context",
+      ctx: { ...valueContext(value), values },
+    };
+  }
+
+  function allDragSource(): FileDragSource {
+    return {
+      type: "context",
+      ctx: {
+        type: "library_view",
+        query: library.query,
+        projection_revision: library.projectionRevision,
+        sort: library.sort,
+      },
     };
   }
 
@@ -94,6 +117,10 @@
   {#if i === 0}
     <button
       class="row all"
+      use:fileDrag={{
+        source: allDragSource,
+        disabled: () => library.projectionChanging,
+      }}
       class:selected={library.selectedValues.length === 0}
       disabled={library.projectionChanging}
       onclick={() => library.selectValue(null)}
@@ -112,6 +139,10 @@
     {@const item = library.filteredValues[i - 1]}
     <button
       class="row"
+      use:fileDrag={{
+        source: () => valueDragSource(item.value),
+        disabled: () => library.projectionChanging,
+      }}
       class:selected={library.selectedValues.includes(item.value)}
       disabled={library.projectionChanging}
       ondblclick={() => playValue(item.value)}

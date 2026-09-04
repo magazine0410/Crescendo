@@ -771,10 +771,18 @@ class LibraryStore {
   /** The selected tracks (in row order), loading any pages the selection spans
       that aren't in cache yet — so acting on a Shift-range that reaches past the
       visible window still yields every track. */
-  async collectSelectedTracks(): Promise<Track[]> {
-    const idx = [...this.selection].sort((a, b) => a - b);
+  async collectSelectedTracks(limit = Number.POSITIVE_INFINITY): Promise<Track[]> {
+    const idx = [...this.selection].sort((a, b) => a - b).slice(0, limit);
     if (idx.length === 0) return [];
-    await this.ensureTrackRangeLoaded(idx[0], idx[idx.length - 1]);
+    if (Number.isFinite(limit)) {
+      // A Ctrl-selection can be sparse across the whole library. Loading only
+      // its pages avoids turning a 2,000-file drag into one enormous contiguous
+      // range fetch between the first and last selected rows.
+      const pages = new Set(idx.map((i) => Math.floor(i / TRACK_PAGE)));
+      await Promise.all([...pages].map((page) => this.loadTrackPage(page)));
+    } else {
+      await this.ensureTrackRangeLoaded(idx[0], idx[idx.length - 1]);
+    }
     return idx.map((i) => this.tracks[i]).filter((t): t is Track => t != null);
   }
 
