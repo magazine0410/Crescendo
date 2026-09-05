@@ -312,3 +312,112 @@ fn validate_flags_bad_queries() {
     assert!(search::validate("artist=parker").is_none());
     assert!(search::validate("").is_none());
 }
+
+/// The search bar tints each top-level term on its own: plain words stay white
+/// next to a green tag match, and a broken term reddens only itself.
+#[test]
+fn highlight_tints_each_term_separately() {
+    use search::{QueryKind, QuerySpan};
+    fn spans(q: &str) -> Vec<(&str, QueryKind)> {
+        search::highlight(q)
+            .into_iter()
+            .map(|QuerySpan { start, end, kind }| (&q[start..end], kind))
+            .collect()
+    }
+    assert_eq!(spans(""), vec![]);
+    assert_eq!(spans("   "), vec![]);
+    assert_eq!(
+        spans("zun title=necrofantasia"),
+        vec![
+            ("zun", QueryKind::Plain),
+            ("title=necrofantasia", QueryKind::Syntax),
+        ]
+    );
+    // An unterminated quote runs to the end of the query; the words before it
+    // keep their own colour.
+    assert_eq!(
+        spans("zun title=\"maiden's capriccio"),
+        vec![
+            ("zun", QueryKind::Plain),
+            ("title=\"maiden's capriccio", QueryKind::Invalid),
+        ]
+    );
+    // A term that reads nothing still ends at the next space, so the walk goes on.
+    assert_eq!(
+        spans("ok )bad fine"),
+        vec![
+            ("ok", QueryKind::Plain),
+            (")bad", QueryKind::Invalid),
+            ("fine", QueryKind::Plain),
+        ]
+    );
+    // Terms with spaces inside stay one span.
+    assert_eq!(
+        spans("#(year >= 2010) rock"),
+        vec![
+            ("#(year >= 2010)", QueryKind::Syntax),
+            ("rock", QueryKind::Plain),
+        ]
+    );
+    assert_eq!(
+        spans("&(electro, !ambient)"),
+        vec![("&(electro, !ambient)", QueryKind::Syntax)]
+    );
+    assert_eq!(
+        spans("東方 artist=zun"),
+        vec![("東方", QueryKind::Plain), ("artist=zun", QueryKind::Syntax)]
+    );
+    // Every span stays inside the query and in order.
+    for q in ["plays>", "artist=", "/loose/", "!", "\"", "a b c", "#("] {
+        let mut last = 0;
+        for s in search::highlight(q) {
+            assert!(s.start >= last && s.start < s.end && s.end <= q.len(), "{q}");
+            assert!(q.is_char_boundary(s.start) && q.is_char_boundary(s.end), "{q}");
+            last = s.end;
+        }
+    }
+}
+
+/// Short aliases stand in for the full tag names everywhere a tag is read.
+#[test]
+fn tag_aliases_resolve_to_full_tags() {
+    let same = |a: &str, b: &str| {
+        assert_eq!(
+            search::parse(a).unwrap(),
+            search::parse(b).unwrap(),
+            "{a} != {b}"
+        )
+    };
+    same("t=necrofantasia", "title=necrofantasia");
+    same("a=perfect", "album=perfect");
+    same("aa=zun", "albumartist=zun");
+    same("aart=zun", "albumartist=zun");
+    same("aas=zun", "albumartistsort=zun");
+    same("art=zun", "artist=zun");
+    same("as=zun", "artistsort=zun");
+    same("arts=zun", "artistsort=zun");
+    same("arr=zun", "arranger=zun");
+    same("com=zun", "composer=zun");
+    same("lyr=zun", "lyricist=zun");
+    same("voc=zun", "vocalist=zun");
+    same("g=jazz", "genre=jazz");
+    same("gr=set", "grouping=set");
+    same("e=C83", "event=C83");
+    same("f=flac", "format=flac");
+    same("cat=DRCD-0002", "catalognumber=DRCD-0002");
+    same("cn=DRCD-0002", "catalognumber=DRCD-0002");
+    same("dir=touhou", "dirname=touhou");
+    same("file=01", "filename=01");
+    same("fn=01", "filename=01");
+    same("ts=hakurei", "titlesort=hakurei");
+    same("y>=2010", "year>=2010");
+    same("p>2", "plays>2");
+    same("l>2:00", "length>2:00");
+    same("r>3", "rating>3");
+    same("rat>3", "rating>3");
+    same("tr<5", "track<5");
+    same("bd=24", "bitdepth=24");
+    same("br>320", "bitrate>320");
+    same("sr>44100", "samplerate>44100");
+    same("#(y >= 2010)", "#(year >= 2010)");
+}

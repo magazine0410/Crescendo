@@ -337,7 +337,10 @@ pub async fn album_by_id(
     state.db.album_by_id(album_id).map_err(|e| e.to_string())
 }
 
+/// Byte ranges to tint in the search bar, one per top-level term.
 #[tauri::command]
-pub async fn search_classify(query: String) -> Result<crescendo_core::search::QueryKind, String> {
-    Ok(crescendo_core::search::classify(&query))
+pub async fn search_highlight(
+    query: String,
+) -> Result<Vec<crescendo_core::search::QuerySpan>, String> {
+    Ok(crescendo_core::search::highlight(&query))
 }

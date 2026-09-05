@@ -121,6 +121,35 @@ pub enum QueryKind {
     Invalid,
 }
 
+/// One top-level term of a query and how the search bar should tint it. Byte
+/// offsets into the query as typed; the text between two spans is whitespace
+/// and stays uncoloured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct QuerySpan {
+    pub start: usize,
+    pub end: usize,
+    pub kind: QueryKind,
+}
+
+/// Classify every top-level term on its own, so a query mixing plain words with
+/// tag syntax tints only the parts that use it — and a term that fails to parse
+/// reddens only itself.
+pub fn highlight(query: &str) -> Vec<QuerySpan> {
+    parser::segments(query)
+        .into_iter()
+        .map(|s| QuerySpan {
+            start: s.start,
+            end: s.end,
+            kind: match &s.node {
+                None => QueryKind::Invalid,
+                Some(node) if uses_syntax(node) => QueryKind::Syntax,
+                Some(_) => QueryKind::Plain,
+            },
+        })
+        .filter(|s| s.end > s.start)
+        .collect()
+}
+
 /// Classify a query for the search-bar tint.
 pub fn classify(query: &str) -> QueryKind {
     if query.trim().is_empty() {

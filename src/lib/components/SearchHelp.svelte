@@ -6,38 +6,38 @@
   let { open, onclose }: Props = $props();
 
   // Every tag usable in a search, alphabetical. "Text" tags take = / != / regex
-  // matchers; "Number" tags compare with < <= = != >= >. Keep in sync with
-  // search/sql.rs.
+  // matchers; "Number" tags compare with < <= = != >= >. Aliases are shorter
+  // names for the same tag. Keep in sync with search/sql.rs.
   const tagRows: [string, string][] = [
-    ["album", "Text — album title."],
-    ["albumartist", "Text — album artist."],
-    ["albumartistsort", "Text — album-artist sort name (romaji)."],
-    ["arranger", "Text — arranger."],
-    ["artist", "Text — track artist."],
-    ["artistsort", "Text — artist sort name (romaji)."],
-    ["bitdepth", "Number — bits per sample."],
-    ["bitrate", "Number — bitrate."],
+    ["album", "Text — album title (short: a)."],
+    ["albumartist", "Text — album artist (short: aa, aart)."],
+    ["albumartistsort", "Text — album-artist sort name, romaji (short: aas)."],
+    ["arranger", "Text — arranger (short: arr)."],
+    ["artist", "Text — track artist (short: art)."],
+    ["artistsort", "Text — artist sort name, romaji (short: as, arts)."],
+    ["bitdepth", "Number — bits per sample (short: bd)."],
+    ["bitrate", "Number — bitrate (short: br)."],
     ["bpm", "Number — beats per minute."],
-    ["catalognumber", "Text — catalogue number, e.g. DRCD-0002 (alias: catalog)."],
-    ["composer", "Text — composer."],
-    ["dirname", "Text — name of the containing folder."],
+    ["catalognumber", "Text — catalogue number, e.g. DRCD-0002 (short: cat, cn; alias: catalog)."],
+    ["composer", "Text — composer (short: com)."],
+    ["dirname", "Text — name of the containing folder (short: dir)."],
     ["disc", "Number — disc number (alias: discnumber)."],
-    ["event", "Text — release event, e.g. C83."],
-    ["filename", "Text — file name."],
-    ["format", "Text — codec / container, e.g. FLAC (alias: codec)."],
-    ["genre", "Text — genre."],
-    ["grouping", "Text — grouping tag."],
-    ["length", "Number — duration in seconds; times are written as m:ss."],
-    ["lyricist", "Text — lyricist."],
+    ["event", "Text — release event, e.g. C83 (short: e)."],
+    ["filename", "Text — file name (short: file, fn)."],
+    ["format", "Text — codec / container, e.g. FLAC (short: f; alias: codec)."],
+    ["genre", "Text — genre (short: g)."],
+    ["grouping", "Text — grouping tag (short: gr)."],
+    ["length", "Number — duration in seconds; times are written as m:ss (short: l)."],
+    ["lyricist", "Text — lyricist (short: lyr)."],
     ["path", "Text — full file path."],
-    ["plays", "Number — times the track was played (alias: playcount)."],
-    ["rating", "Number — rating."],
-    ["samplerate", "Number — sample rate in Hz."],
-    ["title", "Text — track title."],
-    ["titlesort", "Text — title sort name (romaji)."],
-    ["track", "Number — track number (alias: tracknumber)."],
-    ["vocalist", "Text — vocalist."],
-    ["year", "Number — release year (alias: date)."],
+    ["plays", "Number — times the track was played (short: p; alias: playcount)."],
+    ["rating", "Number — rating (short: r, rat)."],
+    ["samplerate", "Number — sample rate in Hz (short: sr)."],
+    ["title", "Text — track title (short: t)."],
+    ["titlesort", "Text — title sort name, romaji (short: ts)."],
+    ["track", "Number — track number (short: tr; alias: tracknumber)."],
+    ["vocalist", "Text — vocalist (short: voc)."],
+    ["year", "Number — release year (short: y; alias: date)."],
   ];
 
   const sections: { title: string; rows: [string, string][] }[] = [
@@ -56,6 +56,7 @@
       title: "Tag searches",
       rows: [
         ["artist=parker", "Tag contains the value (case-insensitive). See the tag list above."],
+        ["art=parker", "Most tags have a short name; it means exactly the same thing."],
         ["artist=\"Charlie Parker\"", "Quote a value to include spaces; it still matches as a substring (also matches “Charlie Parker Quartet”)."],
         ["artist=\"BoA\"c", "Trailing c makes the match case-sensitive."],
         ["genre!=rock", "Excludes matches (tracks without the tag count as not matching)."],
@@ -109,7 +110,8 @@
       <p class="intro">
         The search bar uses Quod Libet-style queries. Plain words are enough for
         most searches; the operators below unlock precise filters. Invalid
-        queries turn the text red.
+        queries turn the text red. Each part of a query is coloured on its own,
+        so a bad tag reddens only itself.
       </p>
       {#each sections as s (s.title)}
         <section>

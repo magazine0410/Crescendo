@@ -640,13 +640,36 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       const idx = filtered.findIndex((t) => t.id === (args.trackId as number));
       return (idx < 0 ? null : idx) as T;
     }
-    case "search_classify": {
-      const q = (args.query as string).trim();
-      if (!q) return "plain" as T;
-      // crude stand-in: unbalanced quote = invalid, any operator = syntax.
-      const quotes = (q.match(/"/g) ?? []).length;
-      if (quotes % 2 !== 0) return "invalid" as T;
-      return (/[=#&|!/<>]|"/.test(q) ? "syntax" : "plain") as T;
+    case "search_highlight": {
+      // Crude stand-in for the real parser: split on spaces outside quotes and
+      // brackets, then per term an unbalanced quote = invalid, any operator =
+      // syntax. Offsets are UTF-8 bytes, as the Rust side reports them.
+      const q = args.query as string;
+      const bytes = (s: string) => new TextEncoder().encode(s).length;
+      const spans: { start: number; end: number; kind: string }[] = [];
+      let depth = 0;
+      let quoted = false;
+      let from = -1;
+      for (let i = 0; i <= q.length; i++) {
+        const c = q[i];
+        if (c === '"') quoted = !quoted;
+        if (!quoted && (c === "(" )) depth++;
+        if (!quoted && c === ")") depth = Math.max(0, depth - 1);
+        const breaks = i === q.length || (/\s/.test(c) && !quoted && depth === 0);
+        if (breaks) {
+          if (from >= 0) {
+            const term = q.slice(from, i);
+            const kind = (term.match(/"/g) ?? []).length % 2 !== 0 || depth > 0
+              ? "invalid"
+              : /[=#&|!/<>]|"/.test(term)
+                ? "syntax"
+                : "plain";
+            spans.push({ start: bytes(q.slice(0, from)), end: bytes(q.slice(0, i)), kind });
+            from = -1;
+          }
+        } else if (from < 0) from = i;
+      }
+      return spans as T;
     }
     case "plugin_file_drag_start":
       // Browser preview cannot initiate an OS file drag; keep direct mock API

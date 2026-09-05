@@ -1,4 +1,4 @@
-use super::sql::is_numeric_tag;
+use super::sql::{canonical_tag, is_numeric_tag};
 use super::{CmpOp, Matcher, Node, NumOperand, ParseError};
 
 pub fn parse(input: &str) -> Result<Node, ParseError> {
@@ -19,6 +19,62 @@ pub fn parse(input: &str) -> Result<Node, ParseError> {
         1 => Ok(terms.pop().unwrap()),
         _ => Ok(Node::And(terms)),
     }
+}
+
+/// One top-level term of a query with the byte range it covers, so the search
+/// bar can tint each piece on its own instead of the whole input. The terms are
+/// exactly the ones `parse` reads, so a span means the same thing there and
+/// here; `node` is None for a term that does not parse.
+pub struct Segment {
+    pub start: usize,
+    pub end: usize,
+    pub node: Option<Node>,
+}
+
+/// Split a query into its top-level terms. A term that fails to parse ends
+/// where the parser gave up (a missing quote therefore runs to the end of the
+/// query, while a stray character stops at the next space), and the walk
+/// continues after it, so one bad term never discolours the good ones.
+pub fn segments(input: &str) -> Vec<Segment> {
+    let mut p = Parser {
+        chars: input.char_indices().collect(),
+        pos: 0,
+    };
+    let mut out = Vec::new();
+    loop {
+        p.skip_ws();
+        if p.eof() {
+            break;
+        }
+        let start_pos = p.pos;
+        let start = p.offset();
+        let (node, end) = match p.term() {
+            Ok(node) => (Some(node), p.offset()),
+            Err(e) => {
+                // Always consume at least one whole word, so a term that failed
+                // without reading anything cannot loop here.
+                if p.pos <= start_pos {
+                    p.pos = start_pos;
+                    while matches!(p.peek(), Some(c) if !c.is_whitespace()) {
+                        p.pos += 1;
+                    }
+                    if p.pos == start_pos {
+                        p.pos += 1;
+                    }
+                }
+                while !p.eof() && p.offset() < e.offset {
+                    p.pos += 1;
+                }
+                (None, p.offset().max(e.offset))
+            }
+        };
+        let end = end.min(input.len());
+        // A term stops after the whitespace it skipped looking for an operator;
+        // that space belongs to no term.
+        let end = input[start..end].trim_end().len() + start;
+        out.push(Segment { start, end, node });
+    }
+    out
 }
 
 struct Parser {
@@ -444,5 +500,6 @@ fn parse_time_literal(s: &str) -> Option<f64> {
 }
 
 fn normalize_tag(tag: &str) -> String {
-    tag.trim().trim_start_matches('~').to_lowercase()
+    let name = tag.trim().trim_start_matches('~').to_lowercase();
+    canonical_tag(&name).to_string()
 }

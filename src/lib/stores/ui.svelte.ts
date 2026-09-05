@@ -1,12 +1,16 @@
 export type Tab = "library" | "playlists" | "nowplaying" | "visualizer";
 
+export type SearchSpan = { start: number; end: number; kind: "plain" | "syntax" | "invalid" };
+
 class UiStore {
   activeTab = $state<Tab>("playlists");
   /** Tab to return to when an album was opened through cross-tab navigation. */
   albumReturnTab = $state<Tab | null>(null);
   searchQuery = $state("");
-  /** how to tint the search input: plain free text, valid syntax, or a parse error */
-  searchKind = $state<"plain" | "syntax" | "invalid">("plain");
+  /** How to tint the search input, one span per top-level term: plain free
+      text, valid syntax, or a parse error. Byte-free character offsets into
+      the query, so the text between two spans stays uncoloured. */
+  searchSpans = $state<SearchSpan[]>([]);
   searchHelpOpen = $state(false);
   /** left time readout shows remaining (foobar-style "-3:30") vs elapsed */
   timeRemaining = $state(false);

@@ -164,7 +164,7 @@ pub fn run() {
             commands::library::track_groups,
             commands::library::track_index,
             commands::library::album_by_id,
-            commands::library::search_classify,
+            commands::library::search_highlight,
             commands::file_drag::plugin_file_drag_start,
             commands::player::player_play_context,
             commands::player::player_jump_to,

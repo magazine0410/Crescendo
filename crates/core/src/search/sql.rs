@@ -1,6 +1,43 @@
 use super::{CmpOp, Matcher, Node, NumOperand, SearchFilter};
 use rusqlite::types::Value;
 
+/// Short aliases a query may use in place of a full tag name. Applied once by
+/// the parser's `normalize_tag`, so every lookup below sees a canonical name
+/// and only that name has to be handled here. The custom browse filter and the
+/// plugin manifest keep their canonical-only vocabulary (`browse_column`), so
+/// an alias is a search-bar convenience and never a stored tag identity.
+pub(super) fn canonical_tag(tag: &str) -> &str {
+    match tag {
+        "a" => "album",
+        "aa" | "aart" => "albumartist",
+        "aas" => "albumartistsort",
+        "arr" => "arranger",
+        "art" => "artist",
+        "arts" | "as" => "artistsort",
+        "bd" => "bitdepth",
+        "br" => "bitrate",
+        "cat" | "cn" => "catalognumber",
+        "com" => "composer",
+        "dir" => "dirname",
+        "e" => "event",
+        "f" => "format",
+        "file" | "fn" => "filename",
+        "g" => "genre",
+        "gr" => "grouping",
+        "l" => "length",
+        "lyr" => "lyricist",
+        "p" => "plays",
+        "r" | "rat" => "rating",
+        "sr" => "samplerate",
+        "t" => "title",
+        "tr" => "track",
+        "ts" => "titlesort",
+        "voc" => "vocalist",
+        "y" => "year",
+        other => other,
+    }
+}
+
 /// String-tag -> column. Unknown tags match nothing (Quod Libet behavior).
 fn str_col(tag: &str) -> Option<&'static str> {
     Some(match tag {

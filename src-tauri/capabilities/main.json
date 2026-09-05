@@ -19,7 +19,7 @@
     "allow-track-groups",
     "allow-track-index",
     "allow-album-by-id",
-    "allow-search-classify",
+    "allow-search-highlight",
     "allow-plugin-file-drag-start",
     "allow-player-play-context",
     "allow-player-jump-to",
