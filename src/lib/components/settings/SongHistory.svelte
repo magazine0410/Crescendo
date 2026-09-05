@@ -115,7 +115,21 @@
   .heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   h3 { font-size: 13px; font-weight: 500; }
   label { display: block; color: var(--txt-faded); font-size: 12px; margin-bottom: 4px; }
-  select { width: 100%; background: var(--bg-panel); border: 1px solid var(--border); padding: 6px 8px; color: var(--txt); }
+  select {
+    width: 100%;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 6px 26px 6px 8px;
+    color: var(--txt);
+    /* WebKitGTK renders a native (light) combobox unless appearance is cleared */
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    cursor: pointer;
+  }
+  select option { background: var(--bg-main); color: var(--txt); }
   .hint { color: var(--txt-faded); font-size: 11px; line-height: 1.5; margin: 8px 0; }
   .history { max-height: 280px; overflow-y: auto; border: 1px solid var(--border); background: var(--bg-panel); }
   .history-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 5px 8px; text-align: left; }
