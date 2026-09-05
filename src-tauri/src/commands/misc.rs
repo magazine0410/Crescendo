@@ -48,6 +48,9 @@ pub async fn prefs_set(
     key: String,
     value: String,
 ) -> Result<PreferenceMutationResult, String> {
+    if key == "lastfm_scrobbling_enabled" {
+        return Err("use the Last.fm scrobbling control to change this preference".into());
+    }
     if key == "visualizer_import_path" {
         return Err("that preference is managed by the projectM folder chooser".into());
     }

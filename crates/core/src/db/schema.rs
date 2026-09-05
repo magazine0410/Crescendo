@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -322,6 +322,20 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
                value TEXT NOT NULL,
                PRIMARY KEY(plugin_id, storage_key)
              ) WITHOUT ROWID;",
+        )?;
+    }
+    if version < 11 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS lastfm_outbox (
+               id INTEGER PRIMARY KEY,
+               account TEXT NOT NULL,
+               track_json TEXT NOT NULL,
+               started_at INTEGER NOT NULL,
+               state TEXT NOT NULL DEFAULT 'pending',
+               message TEXT,
+               UNIQUE(account, started_at, track_json)
+             );
+             CREATE INDEX IF NOT EXISTS idx_lastfm_outbox_pending ON lastfm_outbox(state, id);",
         )?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

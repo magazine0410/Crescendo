@@ -4,6 +4,8 @@
 //! next uri inside `about-to-finish`.
 
 use crescendo_core::db::Db;
+use crescendo_core::lastfm::scrobble::{now, Scrobbler};
+use crescendo_core::listening::ListeningProgress;
 use crescendo_core::model::Track;
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use gstreamer::prelude::*;
@@ -241,7 +243,11 @@ fn report_player_failure(
     let _ = app.emit("player:fatal", message);
 }
 
-pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
+pub fn spawn(
+    app: AppHandle,
+    db: Arc<Db>,
+    scrobbler: Arc<Scrobbler>,
+) -> anyhow::Result<PlayerHandle> {
     gstreamer::init()?;
     let (tx, rx) = channel::<Cmd>();
     let shared = Arc::new(Mutex::new(PlayerState {
@@ -273,7 +279,7 @@ pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
         .name("player".into())
         .spawn(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                run_player(app, db, rx, shared, queue_shared, projectm_pcm)
+                run_player(app, db, scrobbler, rx, shared, queue_shared, projectm_pcm)
             }));
             let failure = match outcome {
                 Ok(Ok(())) => None,
@@ -294,6 +300,16 @@ pub fn spawn(app: AppHandle, db: Arc<Db>) -> anyhow::Result<PlayerHandle> {
     Ok(handle)
 }
 
+struct ListenSession {
+    track: Track,
+    started_at: i64,
+    generation: Option<u64>,
+    progress: ListeningProgress,
+    last_sample: Instant,
+    history_recorded: bool,
+    scrobble_recorded: bool,
+}
+
 struct Engine {
     playbin: gstreamer::Element,
     /// `spectrum` element spliced into playbin's audio path as its audio-filter;
@@ -304,6 +320,8 @@ struct Engine {
     projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
     app: AppHandle,
     db: Arc<Db>,
+    scrobbler: Arc<Scrobbler>,
+    listening: Option<ListenSession>,
     queue: Arc<Mutex<PlayQueue>>,
     shared: Arc<Mutex<PlayerState>>,
     queue_shared: Arc<Mutex<Vec<i64>>>,
@@ -315,10 +333,6 @@ struct Engine {
     /// The track currently loaded in playbin, tracked so its play can be
     /// credited when it is replaced, skipped, or ends.
     current_track_id: Option<i64>,
-    /// Highest position (ms) reached in the current track. Sampled on the tick
-    /// so a gapless handoff (which resets the pipeline position) still knows how
-    /// far the outgoing track got.
-    max_position_ms: u64,
     /// Set inside about-to-finish; consumed on the next stream-start.
     gapless_pending: Arc<Mutex<bool>>,
     /// Serializes queue/URI gapless handoffs with explicit track changes.
@@ -332,6 +346,7 @@ struct Engine {
 fn run_player(
     app: AppHandle,
     db: Arc<Db>,
+    scrobbler: Arc<Scrobbler>,
     rx: Receiver<Cmd>,
     shared: Arc<Mutex<PlayerState>>,
     queue_shared: Arc<Mutex<Vec<i64>>>,
@@ -477,6 +492,8 @@ fn run_player(
         projectm_pcm,
         app,
         db,
+        scrobbler,
+        listening: None,
         queue,
         shared,
         queue_shared,
@@ -485,7 +502,6 @@ fn run_player(
         status: Status::Stopped,
         current_duration_ms: 0,
         current_track_id: None,
-        max_position_ms: 0,
         gapless_pending,
         handoff,
         stop_after_current,
@@ -515,9 +531,9 @@ fn run_player(
             }
         }
         // Position tick
-        if engine.status == Status::Playing && last_tick.elapsed() >= Duration::from_millis(250) {
+        if last_tick.elapsed() >= Duration::from_millis(250) {
             last_tick = Instant::now();
-            engine.max_position_ms = engine.max_position_ms.max(engine.position_ms());
+            engine.sample_listening();
             engine.emit_position();
         }
     }
@@ -638,6 +654,7 @@ impl Engine {
     }
 
     fn handle_cmd(&mut self, cmd: Cmd) {
+        self.sample_listening();
         match cmd {
             Cmd::PlayResolvedContext { ids, start_index } => {
                 if ids.is_empty() {
@@ -704,6 +721,9 @@ impl Engine {
                 }
             }
             Cmd::Seek(ms) => {
+                if let Some(session) = &mut self.listening {
+                    session.progress.reset_position();
+                }
                 let _ = self.playbin.seek_simple(
                     gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
                     gstreamer::ClockTime::from_mseconds(ms),
@@ -838,16 +858,16 @@ impl Engine {
                     std::mem::take(&mut *pending)
                 };
                 if was_gapless {
-                    // about-to-finish only fires near the natural end, so the
-                    // outgoing track is credited here (its max position, sampled
-                    // by the tick, still holds the near-end value). Commit before
-                    // refreshing the duration to the new track.
+                    // Finish the outgoing session before changing its identity;
+                    // queued scrobbles already contain a snapshot of its tags.
                     self.commit_play();
                     self.sync_queue_shared();
                     self.refresh_current_duration();
                     self.current_track_id = self.queue.lock().expect("queue poisoned").current();
-                    self.max_position_ms = 0;
                     self.publish_state();
+                }
+                if was_gapless || self.listening.is_none() {
+                    self.begin_listening();
                 }
             }
             _ => {}
@@ -884,7 +904,6 @@ impl Engine {
         self.status = Status::Playing;
         self.current_duration_ms = track.duration_ms.max(0) as u64;
         self.current_track_id = Some(track_id);
-        self.max_position_ms = 0;
         self.publish_state();
         self.emit_position();
     }
@@ -909,24 +928,62 @@ impl Engine {
         );
     }
 
-    /// Count a play for the current track if more than half of it was heard,
-    /// then clear the per-track progress. Idempotent: a second call before a new
-    /// track starts is a no-op (the id has been taken).
-    fn commit_play(&mut self) {
-        let Some(id) = self.current_track_id.take() else {
+    fn begin_listening(&mut self) {
+        self.listening = self
+            .current_track_id
+            .and_then(|id| self.db.track_by_id(id).ok().flatten())
+            .map(|track| ListenSession {
+                track,
+                started_at: now(),
+                generation: self.scrobbler.generation(),
+                progress: ListeningProgress::default(),
+                last_sample: Instant::now(),
+                history_recorded: false,
+                scrobble_recorded: false,
+            });
+    }
+
+    fn sample_listening(&mut self) {
+        let position = self.position_ms();
+        let playing = self.status == Status::Playing
+            && self.playbin.current_state() == gstreamer::State::Playing;
+        let Some(session) = &mut self.listening else {
             return;
         };
-        let pos = self.max_position_ms.max(self.position_ms());
-        let dur = self.current_duration_ms;
-        self.max_position_ms = 0;
-        if dur > 0 && pos * 2 > dur {
-            match self.db.record_play(id) {
+        let elapsed = session.last_sample.elapsed().as_millis() as u64;
+        session.last_sample = Instant::now();
+        session.progress.sample(position, elapsed, playing);
+        let duration = session.track.duration_ms.max(0) as u64;
+        if !session.history_recorded && session.progress.history_due(duration) {
+            match self.db.record_play_at(session.track.id, session.started_at) {
                 Ok(plays) => {
-                    let _ = self.app.emit("play:recorded", PlayRecorded { id, plays });
+                    session.history_recorded = true;
+                    let _ = self.app.emit(
+                        "play:recorded",
+                        PlayRecorded {
+                            id: session.track.id,
+                            plays,
+                        },
+                    );
                 }
-                Err(e) => log::warn!("record_play failed for track {id}: {e}"),
+                Err(e) => log::warn!("record_play failed: {e}"),
             }
         }
+        if !session.scrobble_recorded && session.progress.scrobble_due(duration) {
+            match self
+                .scrobbler
+                .enqueue(&session.track, session.started_at, session.generation)
+            {
+                Ok(()) => session.scrobble_recorded = true,
+                Err(e) => log::warn!("Cannot queue Last.fm scrobble: {e}"),
+            }
+        }
+    }
+
+    fn commit_play(&mut self) {
+        self.sample_listening();
+        self.listening = None;
+        self.current_track_id = None;
     }
 
     fn apply_volume(&self) {

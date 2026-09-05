@@ -1,4 +1,5 @@
 pub mod collections;
+pub mod history;
 pub mod playlists;
 pub mod plugins;
 pub mod prefs;

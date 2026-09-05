@@ -48,7 +48,11 @@ pub fn run() {
                         )
                     }),
             );
-            let player = player::spawn(app.handle().clone(), db.clone())?;
+            let scrobbler = crescendo_core::lastfm::scrobble::Scrobbler::start(
+                db.clone(),
+                state::data_dir().join("lastfm-credentials.json"),
+            )?;
+            let player = player::spawn(app.handle().clone(), db.clone(), scrobbler.clone())?;
             // The manager starts before the player thread exists, so the
             // bridge is installed here; player.* calls before this point
             // answer Unavailable rather than blocking.
@@ -141,6 +145,7 @@ pub fn run() {
                 waveform,
                 plugins,
                 player,
+                scrobbler,
                 projectm_grants: Arc::new(std::sync::Mutex::new(Default::default())),
                 scanning: Arc::new(AtomicBool::new(false)),
                 scan_cancel: Arc::new(AtomicBool::new(false)),
@@ -220,6 +225,14 @@ pub fn run() {
             commands::misc::lastfm_artist_info,
             commands::misc::lastfm_album_info,
             commands::misc::lastfm_test_key,
+            commands::lastfm::lastfm_status,
+            commands::lastfm::lastfm_connect,
+            commands::lastfm::lastfm_finish_connect,
+            commands::lastfm::lastfm_set_enabled,
+            commands::lastfm::lastfm_disconnect,
+            commands::lastfm::song_history,
+            commands::lastfm::lastfm_track_url,
+            commands::lastfm::lastfm_open_track,
             commands::misc::lyrics_for_track,
             commands::misc::autostart_get,
             commands::misc::autostart_set,

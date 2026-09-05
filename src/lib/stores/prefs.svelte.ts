@@ -14,6 +14,7 @@ export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "pro
 export interface Prefs {
   library_path: string;
   lastfm_api_key: string;
+  history_time_format: "absolute" | "relative";
   /** Send the playing track's title/artist/album/duration to VocaDB and
       LRCLIB when no local lyrics exist (Now Playing). Off keeps lyrics to
       sidecar files and embedded tags only. */
@@ -63,6 +64,7 @@ export interface Prefs {
 const DEFAULTS: Prefs = {
   library_path: "/mnt/Mythic_Meme/Music/",
   lastfm_api_key: "",
+  history_time_format: "absolute",
   lyrics_online: true,
   prefer_romanized: true,
   titlebar_format: "%albumartist% - %title%",
@@ -103,6 +105,7 @@ class PrefsStore {
     const v: Prefs = { ...DEFAULTS };
     if (raw.library_path) v.library_path = raw.library_path;
     if (raw.lastfm_api_key) v.lastfm_api_key = raw.lastfm_api_key;
+    if (raw.history_time_format === "relative") v.history_time_format = "relative";
     if (raw.lyrics_online) v.lyrics_online = raw.lyrics_online === "true";
     if (raw.prefer_romanized) v.prefer_romanized = raw.prefer_romanized === "true";
     // %title_display% and friends became the prefer_romanized toggle: fold any

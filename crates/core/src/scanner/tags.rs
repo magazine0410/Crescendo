@@ -125,6 +125,15 @@ fn read_tagged<R: Read + Seek>(
 }
 
 pub fn read_meta(path: &Path) -> Result<TrackMeta> {
+    read_meta_inner(path, true)
+}
+
+/// Last.fm forbids deriving scrobble metadata from filenames.
+pub fn read_scrobble_meta(path: &Path) -> Result<TrackMeta> {
+    read_meta_inner(path, false)
+}
+
+fn read_meta_inner(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
     // Relaxed parsing: skip malformed tag items (broken ID3 timestamps and
     // the like are common in the wild) instead of rejecting the whole file.
     let opts = ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
@@ -199,7 +208,7 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
     meta.event = extras.event;
 
     // Untagged files still get a display title from the filename.
-    if meta.title.is_none() {
+    if filename_fallback && meta.title.is_none() {
         meta.title = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())

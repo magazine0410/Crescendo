@@ -4,6 +4,8 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { call, isTauri } from "$lib/api";
   import { formatLongDuration } from "$lib/format";
+  import LastfmSettings from "./LastfmSettings.svelte";
+  import SongHistory from "./SongHistory.svelte";
   import PluginsSettings from "./PluginsSettings.svelte";
 
   interface Props {
@@ -396,6 +398,7 @@
         {#if keyTest === "ok"}<p class="ok">Key works.</p>{/if}
         {#if keyTest === "bad"}<p class="bad">Key rejected by Last.fm.</p>{/if}
         <p class="hint">Without a key, Now Playing falls back to local tags.</p>
+        <LastfmSettings />
 
         <label class="check">
           <input
@@ -410,6 +413,7 @@
           LRCLIB when there is no sidecar .lrc/.txt file or embedded lyrics tag. Off
           keeps lyrics to those local sources only.
         </p>
+        {#key prefs.values.lastfm_api_key}<SongHistory />{/key}
       </div>
 
       {:else if activeSection === "visualizer"}

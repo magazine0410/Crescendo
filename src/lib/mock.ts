@@ -489,6 +489,7 @@ let preferRomanized = true;
     no sidecar file or embedded tag, so switching it off leaves it with no
     lyrics at all — same as the real backend would. */
 let lyricsOnline = true;
+const mockHistoryStart = Math.floor(Date.now() / 1000);
 
 /** Sort key of a title: the romanized tag only while it is what the row shows. */
 function titleKey(t: Track): string {
@@ -952,6 +953,28 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "lastfm_artist_info":
     case "lastfm_album_info":
       return null as T;
+    case "lastfm_status":
+      return { username: null, enabled: false, pending: 0, error: null, authorizing: false } as T;
+    case "lastfm_connect":
+    case "lastfm_finish_connect":
+    case "lastfm_set_enabled":
+    case "lastfm_disconnect":
+      throw new Error("Last.fm account connection is available in the desktop app.");
+    case "song_history": {
+      const before = (args as { before?: number } | undefined)?.before ?? 121;
+      return Array.from({ length: 120 }, (_, i) => ({
+        id: 120 - i,
+        played_at: mockHistoryStart - (i < 20 ? i * 210 : i * 86400),
+        track: tracks[i % tracks.length],
+      })).filter(row => row.id < before).slice(0, 50) as T;
+    }
+    case "lastfm_track_url": {
+      const id = (args as { trackId: number }).trackId;
+      return (id % 3 === 0 ? null : "https://www.last.fm/music/Cher/_/Believe") as T;
+    }
+    case "lastfm_open_track":
+      window.open("https://www.last.fm/music/Cher/_/Believe", "_blank", "noopener,noreferrer");
+      return undefined as T;
     case "lastfm_test_key":
       return Boolean((args as { apiKey?: string } | undefined)?.apiKey?.trim()) as T;
     case "lyrics_for_track": {

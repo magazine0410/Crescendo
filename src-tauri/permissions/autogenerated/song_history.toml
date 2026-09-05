@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-song-history"
+description = "Enables the song_history command without any pre-configured scope."
+commands.allow = ["song_history"]
+
+[[permission]]
+identifier = "deny-song-history"
+description = "Denies the song_history command without any pre-configured scope."
+commands.deny = ["song_history"]

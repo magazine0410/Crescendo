@@ -3,6 +3,7 @@
 //! this returns None (no key, offline, or no result).
 
 use crate::db::Db;
+pub mod scrobble;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;

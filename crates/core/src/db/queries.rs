@@ -523,15 +523,24 @@ impl Db {
     /// `localtime`, so a play is filed under the day the listener saw on the
     /// clock, not the UTC day.
     pub fn record_play(&self, id: i64) -> Result<i64> {
+        self.record_play_at(
+            id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs() as i64,
+        )
+    }
+
+    pub fn record_play_at(&self, id: i64, started_at: i64) -> Result<i64> {
         self.with(|conn| {
             let tx = conn.transaction()?;
             tx.execute(
                 "INSERT INTO play_history(track_id, played_at, year, month, day) \
-                 SELECT ?1, unixepoch(), \
-                        CAST(strftime('%Y', 'now', 'localtime') AS INTEGER), \
-                        CAST(strftime('%m', 'now', 'localtime') AS INTEGER), \
-                        CAST(strftime('%d', 'now', 'localtime') AS INTEGER)",
-                [id],
+                 SELECT ?1, ?2, \
+                        CAST(strftime('%Y', ?2, 'unixepoch', 'localtime') AS INTEGER), \
+                        CAST(strftime('%m', ?2, 'unixepoch', 'localtime') AS INTEGER), \
+                        CAST(strftime('%d', ?2, 'unixepoch', 'localtime') AS INTEGER)",
+                [id, started_at],
             )?;
             let n = tx.query_row(
                 "UPDATE tracks SET play_count = play_count + 1, \

@@ -74,6 +74,7 @@ export const iconMap: Record<string, string> = {
 
 /** Lucide icon name -> inner SVG markup (paths only; 24x24 viewBox). */
 export const lucideIcons: Record<string, string> = {
+  "music-2": '<circle cx="8" cy="18" r="4"/><path d="M12 18V2l7 4"/>',
   "arrow-big-up": "<path d=\"M9 19a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-6a1 1 0 0 1 1-1h3.293a.707.707 0 0 0 .5-1.207l-7.086-7.086a1 1 0 0 0-1.414 0l-7.086 7.086a.707.707 0 0 0 .5 1.207H8a1 1 0 0 1 1 1z\" />",
   "arrow-down-left": "<path d=\"M17 7 7 17\" /> <path d=\"M17 17H7V7\" />",
   "arrow-down-to-line": "<path d=\"M12 17V3\" /> <path d=\"m6 11 6 6 6-6\" /> <path d=\"M19 21H5\" />",
