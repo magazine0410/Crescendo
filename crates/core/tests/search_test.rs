@@ -365,14 +365,23 @@ fn highlight_tints_each_term_separately() {
     );
     assert_eq!(
         spans("東方 artist=zun"),
-        vec![("東方", QueryKind::Plain), ("artist=zun", QueryKind::Syntax)]
+        vec![
+            ("東方", QueryKind::Plain),
+            ("artist=zun", QueryKind::Syntax)
+        ]
     );
     // Every span stays inside the query and in order.
     for q in ["plays>", "artist=", "/loose/", "!", "\"", "a b c", "#("] {
         let mut last = 0;
         for s in search::highlight(q) {
-            assert!(s.start >= last && s.start < s.end && s.end <= q.len(), "{q}");
-            assert!(q.is_char_boundary(s.start) && q.is_char_boundary(s.end), "{q}");
+            assert!(
+                s.start >= last && s.start < s.end && s.end <= q.len(),
+                "{q}"
+            );
+            assert!(
+                q.is_char_boundary(s.start) && q.is_char_boundary(s.end),
+                "{q}"
+            );
             last = s.end;
         }
     }
