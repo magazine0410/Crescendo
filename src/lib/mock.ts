@@ -9,6 +9,7 @@ import type {
   BrowseValuesResult,
   CollectionInfo,
   PlaylistInfo,
+  PlayContext,
   PluginInfo,
   PluginMenuControl,
   PluginMutationResult,
@@ -1026,12 +1027,28 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "scan_cancel":
       return undefined as T;
     case "player_play_context": {
-      const ctx = args.ctx as { type?: string; projection_revision?: number };
+      const ctx = args.ctx as PlayContext;
       if (
         (ctx.type === "library_view" || ctx.type === "value_tracks") &&
         ctx.projection_revision !== projectionRevision
       ) {
         throw { kind: "stale_projection", current_revision: projectionRevision };
+      }
+      if (args.startTrackId != null) {
+        const id = args.startTrackId as number;
+        let present: boolean;
+        if (ctx.type === "album") {
+          present = tracks.some((track) => track.id === id && track.album_id === ctx.id);
+        } else if (ctx.type === "library_view" || ctx.type === "value_tracks") {
+          present = tracks.some((track) => track.id === id && trackListMatch(track, ctx));
+        } else {
+          const ids = "ids" in ctx ? ctx.ids : [ctx.id];
+          const track = tracks.find((track) => track.id === id);
+          present = ids.some((pid) => playlistTracks.get(pid)?.includes(id)) &&
+            !!track && (!("query" in ctx) || [track.title, track.artist, track.album, track.albumartist, track.genre]
+              .filter(Boolean).join("\u001f").toLowerCase().includes(ctx.query.trim().toLowerCase()));
+        }
+        if (!present) throw { kind: "operation", message: "the selected track is no longer in this view" };
       }
       return undefined as T;
     }

@@ -4,6 +4,24 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Resolve a clicked row against the concrete context being sent to playback.
+/// A history write can reorder/filter the database between rendering and the
+/// click. Keep duplicate playlist occurrences when the original index still
+/// matches, otherwise find the same track or refuse a now-absent selection.
+pub fn context_start_index(
+    ids: &[i64],
+    index: usize,
+    track_id: Option<i64>,
+) -> anyhow::Result<usize> {
+    let Some(id) = track_id else { return Ok(index) };
+    if ids.get(index) == Some(&id) {
+        return Ok(index);
+    }
+    ids.iter()
+        .position(|&candidate| candidate == id)
+        .ok_or_else(|| anyhow::anyhow!("the selected track is no longer in this view"))
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RepeatMode {
@@ -65,7 +83,9 @@ impl PlayQueue {
         }
         self.shuffle = on;
         // Keep the current track; rebuild the walk order around it.
-        let current_ctx_idx = self.context_index();
+        // An ad-hoc track hides context_index(), but pos still remembers the
+        // interrupted context track. Preserve that position for resumption.
+        let current_ctx_idx = self.pos.map(|p| self.order[p]);
         self.rebuild_order(current_ctx_idx);
         self.pos = current_ctx_idx.and_then(|idx| self.order.iter().position(|&i| i == idx));
     }
@@ -247,6 +267,19 @@ mod tests {
         assert_eq!(q.advance(), Some(99));
         assert_eq!(q.peek_advance(), Some(20));
         assert_eq!(q.current(), Some(99));
+    }
+
+    #[test]
+    fn shuffle_during_adhoc_preserves_context_resume_position() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![10, 20, 30, 40], 1);
+        q.queue_add(&[99, 100]);
+        assert_eq!(q.advance(), Some(99));
+        q.set_shuffle(true);
+        assert_eq!(q.current(), Some(99));
+        q.set_shuffle(false);
+        assert_eq!(q.advance(), Some(100));
+        assert_eq!(q.advance(), Some(30));
     }
 
     #[test]

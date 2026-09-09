@@ -130,9 +130,36 @@ fn cached_or_fetch(
     api_key: &str,
     params: &[(&str, &str)],
 ) -> Result<Option<Value>> {
+    cached_response(db, cache_key, || fetch(api_key, params))
+}
+
+fn cached_response(
+    db: &Db,
+    cache_key: &str,
+    fetch: impl FnOnce() -> Result<Option<Value>>,
+) -> Result<Option<Value>> {
     if let Some(raw) = db.lastfm_cache_get(cache_key, CACHE_TTL_SECS)? {
-        return Ok(serde_json::from_str(&raw).ok());
+        if let Ok(json) = serde_json::from_str::<Value>(&raw) {
+            // Older versions cached every API failure as null. Those entries
+            // cannot distinguish outages from missing artists, so retry them.
+            if json.is_object() && json.get("error").is_none() {
+                return Ok(Some(json));
+            }
+        }
     }
+    let Some(json) = fetch()? else {
+        return Ok(None);
+    };
+    // API errors include invalid keys and transient failures even on HTTP 200.
+    // Only successful metadata belongs in the month-long cache.
+    if !json.is_object() || json.get("error").is_some() {
+        return Ok(None);
+    }
+    db.lastfm_cache_put(cache_key, &serde_json::to_string(&json)?)?;
+    Ok(Some(json))
+}
+
+fn fetch(api_key: &str, params: &[(&str, &str)]) -> Result<Option<Value>> {
     let mut req = ureq::get(API_ROOT)
         .query("api_key", api_key)
         .query("format", "json")
@@ -145,7 +172,7 @@ fn cached_or_fetch(
     let mut resp = match req.call() {
         Ok(r) => r,
         Err(ureq::Error::StatusCode(code)) => {
-            log::warn!("last.fm returned HTTP {code} for {cache_key}");
+            log::warn!("last.fm returned HTTP {code}");
             return Ok(None);
         }
         Err(e) => {
@@ -154,12 +181,6 @@ fn cached_or_fetch(
         }
     };
     let json: Value = resp.body_mut().read_json()?;
-    if json.get("error").is_some() {
-        // Cache "no result" too, so unknown artists don't re-query for a month.
-        db.lastfm_cache_put(cache_key, "null")?;
-        return Ok(None);
-    }
-    db.lastfm_cache_put(cache_key, &serde_json::to_string(&json)?)?;
     Ok(Some(json))
 }
 
@@ -199,8 +220,31 @@ fn strip_lastfm_link(s: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{names_of, strip_lastfm_link};
+    use super::{cached_response, names_of, strip_lastfm_link, CACHE_TTL_SECS};
+    use crate::db::Db;
     use serde_json::json;
+
+    #[test]
+    fn errors_are_retried_and_legacy_negative_cache_does_not_hide_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("cache.db")).unwrap();
+        for code in [6, 10, 11, 16, 26, 29] {
+            let key = format!("artist-{code}");
+            let result = cached_response(&db, &key, || Ok(Some(json!({"error": code})))).unwrap();
+            assert!(result.is_none());
+            assert!(db.lastfm_cache_get(&key, CACHE_TTL_SECS).unwrap().is_none());
+        }
+        db.lastfm_cache_put("artist", "null").unwrap();
+        let success = json!({"artist": {"name": "Recovered"}});
+        assert_eq!(
+            cached_response(&db, "artist", || Ok(Some(success.clone()))).unwrap(),
+            Some(success.clone())
+        );
+        assert_eq!(
+            cached_response(&db, "artist", || panic!("positive cache missed")).unwrap(),
+            Some(success)
+        );
+    }
 
     #[test]
     fn names_accept_lastfm_arrays_and_singletons() {

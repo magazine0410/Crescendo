@@ -278,13 +278,8 @@ pub fn fetch(
     // A fresh agent per call: an empty cookie jar, none of Crescendo's own
     // HTTP configuration, and the guarded resolver, so the connector can only
     // reach addresses this module cleared.
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(REQUEST_TIMEOUT))
-        .max_redirects(0)
-        .max_redirects_will_error(false)
-        .build();
     let agent = ureq::Agent::with_parts(
-        config,
+        request_config(),
         ureq::unversioned::transport::DefaultConnector::default(),
         GuardedResolver,
     );
@@ -318,7 +313,7 @@ pub fn fetch(
                 .build()
                 .send(body.unwrap_or_default())
         };
-        let mut response = response.map_err(|error| {
+        let response = response.map_err(|error| {
             // The guarded resolver reports a private or unresolvable answer as
             // HostNotFound. Both are refusals of the destination, not network
             // trouble, and they are deliberately not told apart: "this name
@@ -365,25 +360,103 @@ pub fn fetch(
             continue;
         }
 
-        let mut text = String::new();
-        response
-            .body_mut()
-            .as_reader()
-            .take(MAX_RESPONSE_BYTES as u64 + 1)
-            .read_to_string(&mut text)
-            .map_err(|error| anyhow!("could not read the response: {error}"))?;
-        if text.len() > MAX_RESPONSE_BYTES {
-            bail!("the response exceeded the 1 MiB limit");
-        }
-        return Ok(PluginResponse { status, body: text });
+        return read_response(response);
     }
     bail!("too many redirects")
+}
+
+fn request_config() -> ureq::config::Config {
+    ureq::Agent::config_builder()
+        // A CONNECT proxy resolves the target itself, bypassing our guarded
+        // resolver. Plugin traffic must never inherit an environment proxy.
+        .proxy(None)
+        .http_status_as_error(false)
+        .timeout_global(Some(REQUEST_TIMEOUT))
+        .max_redirects(0)
+        .max_redirects_will_error(false)
+        .build()
+}
+
+fn read_response(mut response: ureq::http::Response<ureq::Body>) -> Result<PluginResponse> {
+    let status = response.status().as_u16();
+    let mut text = String::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take(MAX_RESPONSE_BYTES as u64 + 1)
+        .read_to_string(&mut text)
+        .map_err(|error| anyhow!("could not read the response: {error}"))?;
+    if text.len() > MAX_RESPONSE_BYTES {
+        bail!("the response exceeded the 1 MiB limit");
+    }
+    Ok(PluginResponse { status, body: text })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn plugin_config_ignores_environment_proxies() {
+        // Change the environment only in a child, never under parallel tests.
+        const MARKER: &str = "CRESCENDO_TEST_PROXY_CHILD";
+        if std::env::var_os(MARKER).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "plugins::net::tests::plugin_config_ignores_environment_proxies",
+                ])
+                .env(MARKER, "1")
+                .env("ALL_PROXY", "http://proxy.example.invalid:8080")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        assert!(ureq::Agent::config_builder().build().proxy().is_some());
+        assert!(request_config().proxy().is_none());
+    }
+
+    #[test]
+    fn http_errors_return_status_and_bounded_body() {
+        use std::io::Write;
+        for status in [401, 404, 429, 500] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).unwrap();
+                write!(socket, "HTTP/1.1 {status} Error\r\nContent-Length: 14\r\nConnection: close\r\n\r\n{{\"error\":true}}").unwrap();
+            });
+            // Exercise the production config and response decoder over a local
+            // fixture; the production URL/resolver policy remains HTTPS-only.
+            let response = ureq::Agent::new_with_config(request_config())
+                .get(format!("http://{addr}/"))
+                .call()
+                .unwrap();
+            let result = read_response(response).unwrap();
+            assert_eq!(result.status, status);
+            assert_eq!(result.body, "{\"error\":true}");
+            server.join().unwrap();
+        }
+        let response = ureq::http::Response::builder()
+            .status(500)
+            .body(ureq::Body::builder().data("x".repeat(MAX_RESPONSE_BYTES + 1)))
+            .unwrap();
+        assert!(read_response(response)
+            .unwrap_err()
+            .to_string()
+            .contains("1 MiB"));
+    }
 
     #[test]
     fn only_plain_https_urls_are_accepted() {

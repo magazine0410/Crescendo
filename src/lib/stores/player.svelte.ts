@@ -53,7 +53,8 @@ class PlayerStore {
     if (durationMs > 0) this.durationMs = durationMs;
   }
 
-  async playContext(ctx: PlayContext, startIndex: number) {
+  async playContext(ctx: PlayContext, startIndex: number, startTrackId?: number) {
+    await call("player_play_context", { ctx, startIndex, startTrackId });
     if (!isTauri) {
       this.track = mockNowPlaying;
       this.durationMs = mockNowPlaying.duration_ms;
@@ -61,7 +62,6 @@ class PlayerStore {
       this.status = "playing";
       return;
     }
-    await call("player_play_context", { ctx, startIndex });
   }
 
   /** Jump within the current context (double-click on an already-active view). */

@@ -6,7 +6,7 @@
 use crescendo_core::db::Db;
 use crescendo_core::lastfm::scrobble::{now, Scrobbler};
 use crescendo_core::listening::ListeningProgress;
-use crescendo_core::model::Track;
+use crescendo_core::model::{Track, MAX_SEEK_MS};
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
@@ -20,6 +20,12 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 const MAX_PROJECTM_PCM_BYTES: usize = 128 * 1024;
+
+fn seek_clock_time(ms: u64) -> Option<gstreamer::ClockTime> {
+    ms.checked_mul(1_000_000)
+        .filter(|&ns| ns <= i64::MAX as u64)
+        .map(gstreamer::ClockTime::from_nseconds)
+}
 
 fn enqueue_projectm_pcm(chunks: &mut VecDeque<Vec<u8>>, bytes: &[u8]) {
     // Keep complete stereo S16 frames and, defensively, cap even a single
@@ -164,6 +170,9 @@ pub struct PlayerHandle {
 
 impl PlayerHandle {
     pub fn send(&self, cmd: Cmd) -> Result<(), String> {
+        if matches!(cmd, Cmd::Seek(ms) if ms > MAX_SEEK_MS) {
+            return Err("seek position is out of range".into());
+        }
         self.tx.send(cmd).map_err(|_| {
             self.failure
                 .lock()
@@ -542,12 +551,44 @@ fn run_player(
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_for_transition, enqueue_projectm_pcm, Cmd, HandoffCoordinator, PlayerHandle,
-        PlayerState, Status, MAX_PROJECTM_PCM_BYTES,
+        advance_for_transition, enqueue_projectm_pcm, seek_clock_time, Cmd, HandoffCoordinator,
+        PlayerHandle, PlayerState, Status, MAX_PROJECTM_PCM_BYTES, MAX_SEEK_MS,
     };
     use crescendo_core::playqueue::{PlayQueue, RepeatMode};
     use std::collections::VecDeque;
     use std::sync::{mpsc::channel, Arc, Mutex};
+
+    #[test]
+    fn invalid_seeks_never_reach_the_player_and_conversion_cannot_panic() {
+        let (tx, rx) = channel();
+        let handle = PlayerHandle {
+            tx,
+            shared: Arc::new(Mutex::new(PlayerState {
+                status: Status::Stopped,
+                track: None,
+                context_index: None,
+                context_len: 0,
+                shuffle: false,
+                repeat: RepeatMode::Off,
+                volume: 0.8,
+                muted: false,
+                stop_after_current: false,
+            })),
+            failure: Arc::new(Mutex::new(None)),
+            queue_shared: Arc::new(Mutex::new(Vec::new())),
+            projectm_pcm: Arc::new(Mutex::new(VecDeque::new())),
+        };
+        for ms in [MAX_SEEK_MS + 1, u64::MAX] {
+            assert!(handle.send(Cmd::Seek(ms)).is_err());
+            assert!(rx.try_recv().is_err());
+            assert!(seek_clock_time(ms).is_none());
+        }
+        for ms in [0, 180_000, MAX_SEEK_MS] {
+            handle.send(Cmd::Seek(ms)).unwrap();
+            assert!(matches!(rx.try_recv(), Ok(Cmd::Seek(actual)) if actual == ms));
+            assert_eq!(seek_clock_time(ms).unwrap().mseconds(), ms);
+        }
+    }
 
     #[test]
     fn disconnected_player_commands_return_an_error() {
@@ -721,12 +762,16 @@ impl Engine {
                 }
             }
             Cmd::Seek(ms) => {
+                let Some(position) = seek_clock_time(ms) else {
+                    log::warn!("ignoring out-of-range seek position");
+                    return;
+                };
                 if let Some(session) = &mut self.listening {
                     session.progress.reset_position();
                 }
                 let _ = self.playbin.seek_simple(
                     gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
-                    gstreamer::ClockTime::from_mseconds(ms),
+                    position,
                 );
                 self.emit_position();
             }

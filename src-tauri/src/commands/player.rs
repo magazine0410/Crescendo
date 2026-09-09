@@ -50,6 +50,7 @@ pub async fn player_play_context(
     state: State<'_, AppState>,
     ctx: PlayContext,
     start_index: usize,
+    start_track_id: Option<i64>,
 ) -> Result<(), ProjectionCommandError> {
     let expected_revision = match &ctx {
         PlayContext::LibraryView {
@@ -76,6 +77,12 @@ pub async fn player_play_context(
         .map_err(|error| ProjectionCommandError::Operation {
             message: error.to_string(),
         })?;
+    let start_index =
+        crescendo_core::playqueue::context_start_index(&ids, start_index, start_track_id).map_err(
+            |error| ProjectionCommandError::Operation {
+                message: error.to_string(),
+            },
+        )?;
     state
         .player
         .send(Cmd::PlayResolvedContext { ids, start_index })

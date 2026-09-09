@@ -430,3 +430,30 @@ fn tag_aliases_resolve_to_full_tags() {
     same("sr>44100", "samplerate>44100");
     same("#(y >= 2010)", "#(year >= 2010)");
 }
+
+#[test]
+fn excessive_search_nesting_and_size_are_rejected_without_overflow() {
+    use crescendo_core::search::{self, QueryKind};
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            for query in [
+                "!".repeat(3000) + "a",
+                "&(".repeat(1000) + "日本語" + &")".repeat(1000),
+                "artist=".to_owned() + &"|(".repeat(1000) + "日本語" + &")".repeat(1000),
+                "語".repeat(6000),
+            ] {
+                assert!(search::compile(&query).is_err());
+                assert_eq!(search::classify(&query), QueryKind::Invalid);
+                assert!(search::highlight(&query)
+                    .iter()
+                    .any(|s| s.kind == QueryKind::Invalid));
+            }
+            let normal = "!".repeat(16) + "artist=日本語";
+            assert!(search::compile(&normal).is_ok());
+            assert_eq!(search::classify(&normal), QueryKind::Syntax);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

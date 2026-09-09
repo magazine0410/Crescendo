@@ -386,6 +386,10 @@ impl StoreData {
         if self.require(PluginPermission::PlayerControl).is_err() {
             return Err(crescendo::host::player::PlayerError::Denied);
         }
+        if matches!(command, BridgePlayerCommand::Seek { position_ms } if position_ms > crate::model::MAX_SEEK_MS)
+        {
+            return Err(crescendo::host::player::PlayerError::InvalidRequest);
+        }
         let bridge = self
             .player
             .get()
@@ -1365,6 +1369,55 @@ pub(crate) fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guest_seek_is_checked_before_bridge_dispatch() {
+        use crate::plugins::{BridgePlayerState, PlayerBridge};
+        use crescendo::host::player::{Host, PlayerError};
+        struct RecordingBridge(Mutex<Vec<u64>>);
+        impl PlayerBridge for RecordingBridge {
+            fn state(&self) -> BridgePlayerState {
+                BridgePlayerState::default()
+            }
+            fn control(&self, command: BridgePlayerCommand) -> Result<(), String> {
+                if let BridgePlayerCommand::Seek { position_ms } = command {
+                    self.0.lock().unwrap().push(position_ms);
+                }
+                Ok(())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest: PluginManifest = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../plugins/dev.crescendo.wasm-demo/manifest.json"
+        )))
+        .unwrap();
+        manifest.permissions = vec!["player.control".into()];
+        let spec = WasmPluginSpec {
+            id: manifest.id.clone(),
+            module_path: dir.path().join("unused.wasm"),
+            manifest: Arc::new(manifest),
+        };
+        let slot = Arc::new(PlayerBridgeSlot::new());
+        let bridge = Arc::new(RecordingBridge(Mutex::new(Vec::new())));
+        slot.install(bridge.clone());
+        let mut data = StoreData::new(
+            &spec,
+            Arc::new(Db::open(&dir.path().join("test.db")).unwrap()),
+            Arc::new(RuntimeStates::default()),
+            slot,
+            Arc::new(HostNotifierSlot::new()),
+        )
+        .unwrap();
+        for ms in [crate::model::MAX_SEEK_MS + 1, u64::MAX] {
+            assert!(matches!(data.seek(ms), Err(PlayerError::InvalidRequest)));
+        }
+        assert!(bridge.0.lock().unwrap().is_empty());
+        data.seek(180_000).unwrap();
+        assert_eq!(*bridge.0.lock().unwrap(), vec![180_000]);
+        data.permissions.clear();
+        assert!(matches!(data.seek(u64::MAX), Err(PlayerError::Denied)));
+    }
 
     #[test]
     fn guest_text_is_cut_on_a_character_boundary_not_mid_codepoint() {

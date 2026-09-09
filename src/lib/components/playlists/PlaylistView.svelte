@@ -74,7 +74,7 @@
     return out;
   });
 
-  const multi = $derived(playlists.selectedIds.length > 1);
+  const multi = $derived(playlists.renderedIds.length > 1);
 
   // Playlist views remain client-side, but wait for typing to settle before an
   // O(n) row rebuild. Clearing the query is immediate.
@@ -162,7 +162,7 @@
 
   /** Resolve exactly what is visible: while filtered, the backend rebuilds
       the matches and the clicked row is addressed by its visible ordinal. */
-  function playlistContext(ids = playlists.selectedIds): PlayContext | null {
+  function playlistContext(ids = playlists.renderedIds): PlayContext | null {
     if (ids.length === 0) return null;
     const query = filterQuery;
     return query
@@ -174,21 +174,24 @@
         : { type: "playlists", ids };
   }
 
-  async function playAt(row: TrackRow) {
-    const ids = playlists.selectedIds;
-    const context = playlistContext(ids);
+  async function playAt(row: TrackRow, context = playlistContext()) {
     if (!context) return;
-    const query = filterQuery;
-    await player.playContext(
-      context,
-      query ? row.visibleIndex : row.index,
-    );
+    try {
+      await player.playContext(
+        context,
+        context.type.startsWith("filtered_") ? row.visibleIndex : row.index,
+        row.track.id,
+      );
+    } catch {
+      playlists.selectionError = "Playlist changed; try again";
+    }
   }
 
   function trackMenu(e: MouseEvent, r: TrackRow) {
     const albumId = r.track.album_id;
+    const context = playlistContext();
     openContextMenu(e, [
-      { label: "Play", action: () => playAt(r) },
+      { label: "Play", action: () => playAt(r, context) },
       { label: "Add to queue", action: () => queue.add([r.track.id]) },
       {
         label: "View album",
@@ -224,14 +227,14 @@
     (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
   }
 
-  const info = $derived(playlists.selected());
+  const info = $derived(playlists.list.find((p) => p.id === playlists.renderedId));
 </script>
 
 <section
   class="view"
-  class:droptarget={playlists.selectedId != null &&
-    playlists.dropTargetId === playlists.selectedId}
-  data-drop-playlist={playlists.selectedId}
+  class:droptarget={playlists.renderedId != null &&
+    playlists.dropTargetId === playlists.renderedId}
+  data-drop-playlist={playlists.renderedId}
 >
   <header
     class="viewheader"
@@ -244,7 +247,7 @@
   >
     <span class="title">
       {#if multi}
-        Playlists : {playlists.selectedIds.length} selected
+        Playlists : {playlists.renderedIds.length} selected
       {:else}
         Playlist : {info?.name ?? "—"}
       {/if}
@@ -252,9 +255,12 @@
     </span>
     <span class="items">{filtered.length} items</span>
   </header>
+  {#if playlists.selectionError}
+    <div role="alert">{playlists.selectionError}</div>
+  {/if}
   {#if rows.length === 0}
     <div class="empty">
-      {playlists.selectedIds.length === 0
+      {playlists.renderedIds.length === 0
         ? "Select or create a playlist"
         : multi
           ? "These playlists are empty"

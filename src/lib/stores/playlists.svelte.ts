@@ -78,6 +78,13 @@ class PlaylistsStore {
   /** Tracks of each selected playlist, one group per playlist, in the same
       order as `selectedIds`. */
   groups = $state<PlaylistTracks[]>([]);
+  /** Action contexts and drop targets must describe the rows on screen while
+      a different sidebar selection is loading. */
+  renderedIds = $derived(this.groups.map((group) => group.playlist_id));
+  get renderedId(): number | null {
+    return this.renderedIds.length === 1 ? this.renderedIds[0] : null;
+  }
+  selectionError = $state<string | null>(null);
   lastImport = $state<M3uImportResult | null>(null);
   /** Playlist the file-manager drag is currently over (highlighted). */
   dropTargetId = $state<number | null>(null);
@@ -250,17 +257,24 @@ class PlaylistsStore {
     const order = this.visible.map((p) => p.id);
     const selectedIds = [...ids].sort((x, y) => order.indexOf(x) - order.indexOf(y));
     this.selectedIds = selectedIds;
+    this.selectionError = null;
     if (selectedIds.length === 0) {
       this.groups = [];
       this.markRendered([]);
       return;
     }
-    const groups = await call<PlaylistTracks[]>("playlist_tracks_multi", {
-      ids: selectedIds,
-    });
-    if (request !== this.selectionReqId) return;
-    this.groups = groups;
-    this.markRendered(selectedIds);
+    try {
+      const groups = await call<PlaylistTracks[]>("playlist_tracks_multi", {
+        ids: selectedIds,
+      });
+      if (request !== this.selectionReqId) return;
+      this.groups = groups;
+      this.markRendered(selectedIds);
+    } catch (error) {
+      if (request !== this.selectionReqId) return;
+      this.selectedIds = [...this.renderedIds];
+      this.selectionError = `Could not load playlist: ${String(error)}`;
+    }
   }
 
   /** Hand the viewport over to a freshly rendered selection, in one step with

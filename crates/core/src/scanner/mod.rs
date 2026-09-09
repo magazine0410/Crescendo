@@ -15,6 +15,17 @@ pub const AUDIO_EXTS: &[&str] = &["flac", "mp3", "wav", "opus", "ogg", "m4a", "a
 const BATCH_SIZE: usize = 1000;
 const PROGRESS_EVERY: u64 = 500;
 
+struct KnownFile {
+    mtime: i64,
+    size: i64,
+    missing: bool,
+}
+
+struct WalkResult {
+    leftover: HashMap<String, KnownFile>,
+    error: Option<String>,
+}
+
 /// true if the extension is one the scanner indexes. Case-insensitive.
 pub fn is_audio_file(path: &Path) -> bool {
     path.extension()
@@ -173,20 +184,27 @@ pub fn scan(
 
     let conn = db.side_connection()?;
 
-    // Known files: path -> (mtime, size). Entries still present when the walk
-    // finishes are missing from disk.
-    let mut known: HashMap<String, (i64, i64)> = HashMap::new();
+    // Only this root's paths can be declared missing by this walk. Playlist
+    // imports and other roots are not evidence of a missing file here.
+    let scan_root = std::path::absolute(&opts.root)?;
+    let mut known = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT path, mtime, size FROM tracks")?;
+        let mut stmt = conn.prepare("SELECT path, mtime, size, missing FROM tracks")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?),
+                KnownFile {
+                    mtime: r.get(1)?,
+                    size: r.get(2)?,
+                    missing: r.get(3)?,
+                },
             ))
         })?;
         for row in rows {
             let (path, ms) = row?;
-            known.insert(path, ms);
+            if std::path::absolute(&path)?.starts_with(&scan_root) {
+                known.insert(path, ms);
+            }
         }
     }
 
@@ -203,7 +221,7 @@ pub fn scan(
     let (job_tx, job_rx) = bounded::<FileJob>(1024);
     let (write_tx, write_rx) = bounded::<WriteJob>(1024);
 
-    let leftover = std::thread::scope(|scope| -> Result<HashMap<String, (i64, i64)>> {
+    let walk_result = std::thread::scope(|scope| -> Result<WalkResult> {
         // Walker
         let walker = scope.spawn({
             let root = opts.root.clone();
@@ -233,6 +251,15 @@ pub fn scan(
 
         Ok(walker.join().expect("walker thread panicked"))
     })?;
+
+    if let Some(error) = walk_result.error {
+        // Successfully read files may already have been upserted in batches.
+        // Keep their album membership consistent, but never infer absence from
+        // a partial traversal (including a single failed metadata read).
+        albums::rebuild(&conn)?;
+        anyhow::bail!("scan incomplete; missing-file cleanup skipped: {error}");
+    }
+    let leftover = walk_result.leftover;
 
     // A root that is present but empty gets the same treatment as a missing
     // one: an empty mount point is what a failed mount looks like.
@@ -269,21 +296,30 @@ pub fn scan(
 fn walk(
     root: PathBuf,
     full: bool,
-    mut known: HashMap<String, (i64, i64)>,
+    mut known: HashMap<String, KnownFile>,
     job_tx: Sender<FileJob>,
     counters: Counters,
     progress: &(dyn Fn(ScanProgress) + Sync),
     cancel: &AtomicBool,
-) -> HashMap<String, (i64, i64)> {
+) -> WalkResult {
     let mut last_emit = 0u64;
-    for entry in walkdir::WalkDir::new(&root)
-        .follow_links(false)
-        .into_iter()
-        .flatten()
-    {
+    let mut error = None;
+    let mut record_error = |detail: String| {
+        counters.errors.fetch_add(1, Ordering::Relaxed);
+        log::warn!("scan traversal failed: {detail}");
+        error.get_or_insert(detail);
+    };
+    for entry in walkdir::WalkDir::new(&root).follow_links(false) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                record_error(error.to_string());
+                continue;
+            }
+        };
         if !entry.file_type().is_file() {
             continue;
         }
@@ -295,7 +331,13 @@ fn walk(
             log::warn!("skipping non-UTF-8 path: {}", path.display());
             continue;
         };
-        let Ok(md) = entry.metadata() else { continue };
+        let md = match entry.metadata() {
+            Ok(md) => md,
+            Err(error) => {
+                record_error(error.to_string());
+                continue;
+            }
+        };
         let mtime = md
             .modified()
             .ok()
@@ -306,8 +348,8 @@ fn walk(
 
         let prior = known.remove(path_str);
         if !full {
-            if let Some((known_mtime, known_size)) = prior {
-                if known_mtime == mtime && known_size == size {
+            if let Some(ref prior) = prior {
+                if !prior.missing && prior.mtime == mtime && prior.size == size {
                     // Unchanged: stat-only pass. These files never reach the
                     // writer, so emit progress here or an incremental scan
                     // would sit at 0% until it finishes.
@@ -337,7 +379,10 @@ fn walk(
             break;
         }
     }
-    known
+    WalkResult {
+        leftover: known,
+        error,
+    }
 }
 
 fn write_loop(

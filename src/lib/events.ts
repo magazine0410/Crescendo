@@ -49,7 +49,8 @@ export async function initEvents() {
     library.scanning = false;
   });
   await listen<{ id: number; plays: number }>("play:recorded", (e) => {
-    library.bumpPlayCount(e.payload.id, e.payload.plays);
+    void library.bumpPlayCount(e.payload.id, e.payload.plays)
+      .catch((error) => console.error("play-history refresh failed:", error));
     playlists.bumpPlayCount(e.payload.id, e.payload.plays);
   });
   await listen("library:changed", () => library.refresh());

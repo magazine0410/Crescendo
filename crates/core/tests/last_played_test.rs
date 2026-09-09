@@ -318,3 +318,45 @@ fn a_new_play_moves_a_track_to_today() {
         0
     );
 }
+
+#[test]
+fn clicked_track_is_preserved_when_history_reorders_or_filters_the_context() {
+    use crescendo_core::model::{BrowseMode, PlayContext, SortKey, TrackSort};
+    let dir = tempfile::tempdir().unwrap();
+    let db = crescendo_core::db::Db::open(&dir.path().join("history.db")).unwrap();
+    db.with(|conn| {
+        conn.execute("INSERT INTO tracks(path, dir, filename, mtime, size, format, duration_ms) VALUES ('/music/a', '/music', 'a', 0, 0, 'FLAC', 1000), ('/music/b', '/music', 'b', 0, 0, 'FLAC', 1000)", [])?;
+        Ok(())
+    }).unwrap();
+    let sort = Some(TrackSort {
+        key: SortKey::LastPlayed,
+        secondary: None,
+        descending: true,
+        secondary_descending: None,
+    });
+    let displayed = db
+        .tracks_range_exact(None, BrowseMode::Artist, &[], sort, 0, 200)
+        .unwrap();
+    db.record_play_at(displayed[1].id, 1_700_000_000).unwrap();
+    let context = PlayContext::LibraryView {
+        query: None,
+        sort,
+        projection_revision: 0,
+    };
+    let resolved = db.resolve_context_exact(&context).unwrap();
+    use crescendo_core::playqueue::context_start_index;
+    assert_ne!(resolved[0], displayed[0].id);
+    let start = context_start_index(&resolved, 0, Some(displayed[0].id)).unwrap();
+    assert_eq!(resolved[start], displayed[0].id);
+    let never_played = PlayContext::LibraryView {
+        query: Some("plays=0".into()),
+        sort,
+        projection_revision: 0,
+    };
+    let remaining = db.resolve_context_exact(&never_played).unwrap();
+    assert_eq!(remaining, vec![displayed[0].id]);
+    assert!(context_start_index(&remaining, 1, Some(displayed[1].id)).is_err());
+    // Keep a clicked duplicate occurrence when its index still matches.
+    assert_eq!(context_start_index(&[10, 20, 10], 2, Some(10)).unwrap(), 2);
+    assert_eq!(context_start_index(&[10, 20], 0, None).unwrap(), 0);
+}

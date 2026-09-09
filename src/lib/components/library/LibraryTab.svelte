@@ -15,7 +15,7 @@
 
   $effect(() => {
     const q = ui.searchQuery;
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     const t = setTimeout(() => {
       // Clearing an active search while a track plays in the Track-list view:
       // scroll to the now-playing song's spot in the full library instead of
@@ -78,11 +78,11 @@
 
 <div class="tab">
   <ScanProgress />
-  {#if library.projectionChanging || library.notice}
+  {#if library.interactionBlocked || library.notice}
     <button
       class="projection-status"
       class:error={!!library.notice}
-      disabled={library.projectionChanging}
+      disabled={library.interactionBlocked}
       title={library.notice ? "Dismiss" : undefined}
       onclick={() => (library.notice = null)}
     >

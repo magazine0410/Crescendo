@@ -167,10 +167,16 @@ class LibraryStore {
   private albumTracksReqId = 0;
   private staleRecovery: Promise<void> | null = null;
   private projectionTransition: Promise<void> = Promise.resolve();
+  private historyRefresh: Promise<void> | null = null;
+  private historyRefreshPending = false;
 
   /** One revision backs every projection-dependent object currently rendered. */
   projectionRevision = $state(0);
   projectionChanging = $state(false);
+  historyChanging = $state(false);
+  get interactionBlocked(): boolean {
+    return this.projectionChanging || this.historyChanging;
+  }
   /** One dismissible banner line for the library tab: a stale-projection
       retry that could not be revalidated, or a plugin menu action that
       failed. Cleared when a projection change starts. */
@@ -592,11 +598,38 @@ class LibraryStore {
     }
   }
 
-  /** Patch a track's play counter in the loaded views so the "Plays: N" line
-      updates live when the player credits a play. */
-  bumpPlayCount(id: number, plays: number) {
+  /** Patch the play counter, then rebuild views whose membership or order
+      can change when the player credits a play. */
+  async bumpPlayCount(id: number, plays: number) {
     for (const t of this.albumTracks) if (t.id === id) t.play_count = plays;
     for (const t of this.tracks) if (t && t.id === id) t.play_count = plays;
+    // Any search may depend on play-count syntax (including aliases). Re-run
+    // it rather than maintaining a second search parser in the frontend.
+    if (
+      !this.query && !this.isPlayCountMode && !this.isLastPlayedMode &&
+      this.sort?.key !== "lastplayed" && this.sort?.secondary !== "lastplayed"
+    ) return;
+    this.historyRefreshPending = true;
+    if (this.historyRefresh) return this.historyRefresh;
+    this.historyChanging = true;
+    this.invalidateProjectionRequests();
+    this.clearSelection();
+    this.historyRefresh = (async () => {
+      while (this.historyRefreshPending) {
+        this.historyRefreshPending = false;
+        await this.projectionTransition;
+        await this.loadValues();
+        await Promise.all([
+          this.loadAlbums(),
+          this.reloadTrackView(prefs.values.track_separators),
+          this.selectedAlbum ? this.selectAlbum(this.selectedAlbum) : Promise.resolve(),
+        ]);
+      }
+    })().finally(() => {
+      this.historyChanging = false;
+      this.historyRefresh = null;
+    });
+    return this.historyRefresh;
   }
 
   /** Flat row count of the Track-list view (tracks, plus separators when on). */
@@ -772,17 +805,18 @@ class LibraryStore {
       that aren't in cache yet — so acting on a Shift-range that reaches past the
       visible window still yields every track. */
   async collectSelectedTracks(limit = Number.POSITIVE_INFINITY): Promise<Track[]> {
+    if (this.interactionBlocked) return [];
+    const request = this.trackReqId;
     const idx = [...this.selection].sort((a, b) => a - b).slice(0, limit);
     if (idx.length === 0) return [];
-    if (Number.isFinite(limit)) {
-      // A Ctrl-selection can be sparse across the whole library. Loading only
-      // its pages avoids turning a 2,000-file drag into one enormous contiguous
-      // range fetch between the first and last selected rows.
-      const pages = new Set(idx.map((i) => Math.floor(i / TRACK_PAGE)));
-      await Promise.all([...pages].map((page) => this.loadTrackPage(page)));
-    } else {
-      await this.ensureTrackRangeLoaded(idx[0], idx[idx.length - 1]);
+    const pages = [...new Set(idx.map((i) => Math.floor(i / TRACK_PAGE)))];
+    // Sparse selections need only their own pages, including context menus.
+    // Bound concurrent IPC for large Shift selections as well.
+    for (let i = 0; i < pages.length; i += 4) {
+      if (request !== this.trackReqId || this.interactionBlocked) return [];
+      await Promise.all(pages.slice(i, i + 4).map((page) => this.loadTrackPage(page)));
     }
+    if (request !== this.trackReqId || this.interactionBlocked) return [];
     return idx.map((i) => this.tracks[i]).filter((t): t is Track => t != null);
   }
 

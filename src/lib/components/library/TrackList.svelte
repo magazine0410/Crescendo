@@ -29,11 +29,12 @@
     library.query;
     library.sort;
     library.stats;
-    // Projection transitions reconstruct this view explicitly before they
+    const withGroups = prefs.values.track_separators;
+    // Projection and history transitions reconstruct this view before they
     // re-enable interaction. Read the transition flag without subscribing to
     // it so the false edge does not immediately trigger a duplicate reload.
-    if (!untrack(() => library.projectionChanging)) {
-      library.reloadTrackView(prefs.values.track_separators);
+    if (!untrack(() => library.interactionBlocked)) {
+      library.reloadTrackView(withGroups);
     }
   });
 
@@ -100,23 +101,26 @@
   }
 
   async function playAt(trackIndex: number) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     const trackId = library.tracks[trackIndex]?.id;
     if (trackId == null) {
       library.notice = "Library view changed; try again";
       return;
     }
     try {
-      await player.playContext(playContext(), trackIndex);
+      await player.playContext(playContext(), trackIndex, trackId);
     } catch (reason) {
-      if (!(await library.recoverStaleProjection(reason))) throw reason;
+      if (!(await library.recoverStaleProjection(reason))) {
+        library.notice = "Library view changed; try again";
+        return;
+      }
       const newIndex = await library.indexOfTrack(trackId);
       if (newIndex == null) {
         library.notice = "Library view changed; try again";
         return;
       }
       try {
-        await player.playContext(playContext(), newIndex);
+        await player.playContext(playContext(), newIndex, trackId);
       } catch {
         library.notice = "Library view changed; try again";
       }
@@ -124,7 +128,7 @@
   }
 
   function onRowClick(e: MouseEvent, trackIndex: number) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     library.selectTrack(trackIndex, {
       ctrl: e.ctrlKey || e.metaKey,
       shift: e.shiftKey,
@@ -140,7 +144,7 @@
   async function trackMenu(e: MouseEvent, trackIndex: number, clickedTrack: Track) {
     e.preventDefault();
     e.stopPropagation();
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     // Right-clicking a row outside the current selection selects just that row.
     if (!library.isSelected(trackIndex)) library.selectTrack(trackIndex, {});
 
@@ -184,7 +188,7 @@
       <select
         class="sortsel"
         title="Sort by"
-        disabled={library.projectionChanging}
+        disabled={library.interactionBlocked}
         value={library.sort?.key ?? ""}
         onchange={(e) => library.setSortKey((e.currentTarget.value || null) as SortKey | null)}
       >
@@ -195,7 +199,7 @@
       </select>
       <button
         class="dirbtn"
-        disabled={library.projectionChanging || !library.sort}
+        disabled={library.interactionBlocked || !library.sort}
         title={library.sort?.descending ? "Descending" : "Ascending"}
         onclick={() => library.toggleSortDirection()}
       >
@@ -204,7 +208,7 @@
       <select
         class="sortsel"
         title="Then by"
-        disabled={library.projectionChanging || !library.sort}
+        disabled={library.interactionBlocked || !library.sort}
         value={library.sort?.secondary ?? ""}
         onchange={(e) =>
           library.setSortSecondary((e.currentTarget.value || null) as SortKey | null)}
@@ -219,7 +223,7 @@
       <button
         class="dirbtn"
         class:following={library.sort?.secondary_descending == null}
-        disabled={library.projectionChanging || !library.sort?.secondary}
+        disabled={library.interactionBlocked || !library.sort?.secondary}
         title={library.sort?.secondary_descending == null
           ? "Following the primary direction — click to set separately"
           : library.sortSecondaryDescending
@@ -266,12 +270,12 @@
         class="trow"
         use:fileDrag={{
           source: () => trackDragSource(cell.trackIndex, t),
-          disabled: () => library.projectionChanging,
+          disabled: () => library.interactionBlocked,
         }}
         class:alt
         class:selected={library.isSelected(cell.trackIndex)}
         class:playing={player.track?.id === t.id}
-        disabled={library.projectionChanging}
+        disabled={library.interactionBlocked}
         onclick={(e) => onRowClick(e, cell.trackIndex)}
         ondblclick={() => playAt(cell.trackIndex)}
         oncontextmenu={(e) => trackMenu(e, cell.trackIndex, t)}
@@ -308,9 +312,9 @@
             cell.albumId == null
               ? null
               : { type: "context", ctx: { type: "album", id: cell.albumId } },
-          disabled: () => library.projectionChanging,
+          disabled: () => library.interactionBlocked,
         }}
-        disabled={library.projectionChanging}
+        disabled={library.interactionBlocked}
         title={cell.sep.album ?? "?"}
         onclick={() => cell.albumId != null && library.openAlbumById(cell.albumId)}
       >

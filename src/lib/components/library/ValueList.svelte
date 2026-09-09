@@ -66,7 +66,7 @@
   }
 
   async function playValue(value: string) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     try {
       await player.playContext(valueContext(value), 0);
     } catch (reason) {
@@ -79,7 +79,7 @@
   }
 
   async function queueValue(value: string) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     try {
       await queue.addContext(valueContext(value));
     } catch (reason) {
@@ -101,7 +101,7 @@
   }
 
   function onRowContext(e: MouseEvent, value: string) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     openContextMenu(e, [
       { label: "Play", action: () => playValue(value) },
       { label: "Add to queue", action: () => queueValue(value) },
@@ -119,10 +119,10 @@
       class="row all"
       use:fileDrag={{
         source: allDragSource,
-        disabled: () => library.projectionChanging,
+        disabled: () => library.interactionBlocked,
       }}
       class:selected={library.selectedValues.length === 0}
-      disabled={library.projectionChanging}
+      disabled={library.interactionBlocked}
       onclick={() => library.selectValue(null)}
     >
       <span class="name">All ({library.values.length}
@@ -141,10 +141,10 @@
       class="row"
       use:fileDrag={{
         source: () => valueDragSource(item.value),
-        disabled: () => library.projectionChanging,
+        disabled: () => library.interactionBlocked,
       }}
       class:selected={library.selectedValues.includes(item.value)}
-      disabled={library.projectionChanging}
+      disabled={library.interactionBlocked}
       ondblclick={() => playValue(item.value)}
       oncontextmenu={(e) => onRowContext(e, item.value)}
       onclick={(e) => onRowClick(e, item.value)}

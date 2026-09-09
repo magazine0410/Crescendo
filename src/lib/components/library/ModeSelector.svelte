@@ -108,7 +108,7 @@
       // A toggle shows its setting as a tick; a command action has no state
       // to show, so it renders as a plain item.
       checked: control.checked ?? undefined,
-      disabled: library.projectionChanging,
+      disabled: library.interactionBlocked,
       action: () =>
         control.action === "run_command"
           ? runCommandControl(control)
@@ -127,7 +127,7 @@
   }
 
   function tabMenu(e: MouseEvent, id: BrowseMode) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     if (id === "custom") openContextMenu(e, customMenuItems());
   }
 
@@ -139,7 +139,7 @@
       controls and filter actions have no other surface at this width; they are
       appended below the tab list, under the CUSTOM entry they belong to. */
   function moreMenu(e: MouseEvent) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     const items: MenuItem[] = hiddenModes.map((m) => ({
       label: labelFor(m),
       checked: library.mode === m.id,
@@ -164,7 +164,7 @@
     <button
       class="mode"
       class:active={library.mode === m.id}
-      disabled={library.projectionChanging}
+      disabled={library.interactionBlocked}
       onclick={() => library.setMode(m.id)}
       oncontextmenu={(e) => tabMenu(e, m.id)}
     >
@@ -175,7 +175,7 @@
   {#if hiddenModes.length}
     <button
       class="more"
-      disabled={library.projectionChanging}
+      disabled={library.interactionBlocked}
       class:active={hiddenActive}
       title="More filters"
       aria-label="More filters"

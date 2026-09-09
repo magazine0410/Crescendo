@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+/// Playback seeks use signed nanoseconds in the engine. Keep this bound in
+/// core so every host boundary can reject invalid positions before dispatch.
+pub const MAX_SEEK_MS: u64 = i64::MAX as u64 / 1_000_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: i64,

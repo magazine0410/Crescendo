@@ -1,10 +1,20 @@
 use super::sql::{canonical_tag, is_numeric_tag};
 use super::{CmpOp, Matcher, Node, NumOperand, ParseError};
 
+const MAX_QUERY_BYTES: usize = 16 * 1024;
+const MAX_DEPTH: usize = 64;
+
 pub fn parse(input: &str) -> Result<Node, ParseError> {
+    if input.len() > MAX_QUERY_BYTES {
+        return Err(ParseError {
+            message: format!("query exceeds {MAX_QUERY_BYTES} bytes"),
+            offset: 0,
+        });
+    }
     let mut p = Parser {
         chars: input.char_indices().collect(),
         pos: 0,
+        depth: 0,
     };
     let mut terms = Vec::new();
     loop {
@@ -36,9 +46,17 @@ pub struct Segment {
 /// query, while a stray character stops at the next space), and the walk
 /// continues after it, so one bad term never discolours the good ones.
 pub fn segments(input: &str) -> Vec<Segment> {
+    if input.len() > MAX_QUERY_BYTES {
+        return vec![Segment {
+            start: 0,
+            end: input.len(),
+            node: None,
+        }];
+    }
     let mut p = Parser {
         chars: input.char_indices().collect(),
         pos: 0,
+        depth: 0,
     };
     let mut out = Vec::new();
     loop {
@@ -80,6 +98,7 @@ pub fn segments(input: &str) -> Vec<Segment> {
 struct Parser {
     chars: Vec<(usize, char)>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
@@ -131,6 +150,23 @@ impl Parser {
     }
 
     fn term(&mut self) -> Result<Node, ParseError> {
+        self.nested(Self::term_inner)
+    }
+
+    fn nested<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        if self.depth >= MAX_DEPTH {
+            return self.err(format!("query nesting exceeds {MAX_DEPTH} levels"));
+        }
+        self.depth += 1;
+        let result = parse(self);
+        self.depth -= 1;
+        result
+    }
+
+    fn term_inner(&mut self) -> Result<Node, ParseError> {
         self.skip_ws();
         match self.peek() {
             None => self.err("unexpected end of query"),
@@ -245,6 +281,10 @@ impl Parser {
 
     /// Right-hand side of a tag match.
     fn value(&mut self) -> Result<Matcher, ParseError> {
+        self.nested(Self::value_inner)
+    }
+
+    fn value_inner(&mut self) -> Result<Matcher, ParseError> {
         self.skip_ws();
         match self.peek() {
             Some('"') => {

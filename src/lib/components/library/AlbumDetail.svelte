@@ -28,7 +28,7 @@
   }
 
   function trackMenu(e: MouseEvent, track: Track) {
-    if (library.projectionChanging) return;
+    if (library.interactionBlocked) return;
     openContextMenu(e, [
       { label: "Add to queue", action: () => queue.add([track.id]) },
       openTrackInFileManagerItem(track),
@@ -46,7 +46,7 @@
     <header
       use:fileDrag={{
         source: () => ({ type: "context", ctx: { type: "album", id: album.id } }),
-        disabled: () => library.projectionChanging,
+        disabled: () => library.interactionBlocked,
       }}
     >
       <img class="cover" src={artUrl("album", album.id, "thumb")} alt="" onerror={onImgError} />
@@ -60,12 +60,12 @@
         <div class="actions">
           <button
             class="play"
-            disabled={library.projectionChanging}
+            disabled={library.interactionBlocked}
             onclick={() => player.playContext({ type: "album", id: album.id }, 0)}
           >Play</button>
           <button
             class="queue-btn"
-            disabled={library.projectionChanging}
+            disabled={library.interactionBlocked}
             onclick={() => queue.add(library.albumTracks.map((t) => t.id))}
           >Add to queue</button>
         </div>
@@ -79,11 +79,11 @@
           class="trow"
           use:fileDrag={{
             source: () => ({ type: "track_ids", ids: [t.id] }),
-            disabled: () => library.projectionChanging,
+            disabled: () => library.interactionBlocked,
           }}
-          disabled={library.projectionChanging}
+          disabled={library.interactionBlocked}
           class:playing={player.track?.id === t.id}
-          ondblclick={() => player.playContext({ type: "album", id: album.id }, i)}
+          ondblclick={() => player.playContext({ type: "album", id: album.id }, i, t.id)}
           oncontextmenu={(e) => trackMenu(e, t)}
         >
           <span class="no">{t.track_no ?? i + 1}</span>
