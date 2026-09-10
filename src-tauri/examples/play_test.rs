@@ -3,36 +3,41 @@
 //! advances. Also exercises a gapless about-to-finish handoff when two or
 //! more files are given.
 //!
-//! cargo run -p crescendo --example play_test -- <file> [file...]
+//! cargo run -p crescendo --example play_test -- [--silent] <file> [file...]
+//! --silent uses a clocked fake output instead of the audio device.
+
+#[path = "../src/player/audio_filter.rs"]
+mod audio_filter;
 
 use gstreamer::prelude::*;
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
     gstreamer::init()?;
-    let files: Vec<String> = std::env::args().skip(1).collect();
-    anyhow::ensure!(!files.is_empty(), "usage: play_test <audio-file>...");
+    let mut files: Vec<String> = std::env::args().skip(1).collect();
+    let silent = files.first().is_some_and(|arg| arg == "--silent");
+    if silent {
+        files.remove(0);
+    }
+    anyhow::ensure!(
+        !files.is_empty(),
+        "usage: play_test [--silent] <audio-file>..."
+    );
 
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
     playbin.set_property("volume", 0.02f64); // barely audible test volume
+    if silent {
+        let sink = gstreamer::ElementFactory::make("fakesink")
+            .property("sync", true)
+            .build()?;
+        playbin.set_property("audio-sink", &sink);
+    }
 
     // Keep this playback smoke test wired through the production visualizer
     // filter shape. In particular, a closed projectM gate must not prevent
     // playbin from prerolling while projectM is inactive, and non-buffer
     // events must still pass through it so flush seeks clear the side queue.
-    let audio_filter = gstreamer::parse::bin_from_description(
-        "tee name=visualizer_tee \
-         visualizer_tee. ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 \
-           ! spectrum bands=512 interval=33000000 threshold=-80 \
-             post-messages=false multi-channel=false \
-         visualizer_tee. ! identity name=projectm_gate \
-           ! queue name=projectm_queue leaky=downstream max-size-buffers=0 \
-             max-size-bytes=0 max-size-time=3000000000 \
-           ! audioconvert ! audioresample \
-           ! audio/x-raw,format=S16LE,layout=interleaved,rate=44100,channels=2 \
-           ! appsink name=projectm_pcm sync=true async=false max-buffers=2 drop=true",
-        true,
-    )?;
+    let audio_filter = audio_filter::build()?;
     let projectm_gate = audio_filter
         .by_name("projectm_gate")
         .ok_or_else(|| anyhow::anyhow!("projectM gate element is missing"))?;

@@ -3,6 +3,8 @@
 //! tick are emitted as Tauri events. Gapless playback comes from setting the
 //! next uri inside `about-to-finish`.
 
+mod audio_filter;
+
 use crescendo_core::db::Db;
 use crescendo_core::lastfm::scrobble::{now, Scrobbler};
 use crescendo_core::listening::ListeningProgress;
@@ -321,7 +323,7 @@ struct ListenSession {
 
 struct Engine {
     playbin: gstreamer::Element,
-    /// `spectrum` element spliced into playbin's audio path as its audio-filter;
+    /// `spectrum` element on a separate analysis branch of the audio-filter;
     /// posts per-band magnitudes on the bus when `post-messages` is on.
     spectrum: gstreamer::Element,
     /// The appsink callback reads this without touching the player thread.
@@ -363,32 +365,7 @@ fn run_player(
 ) -> anyhow::Result<()> {
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
 
-    // One audio-filter bin serves both visualizers. The audible branch is a
-    // passthrough spectrum element and therefore preserves the decoded format.
-    // A leaky side branch converts/resamples only a copy for projectM, so its
-    // 44.1 kHz S16 input requirement never reduces playback fidelity. Its
-    // queue is bounded by three seconds of timestamps (about 517 KiB of stereo
-    // S16) and drops visualizer data if it ever fills, so this branch can never
-    // stall the audible one. The appsink must remain clock-synchronized:
-    // without `sync=true`, it consumes playbin's decode-ahead PCM roughly
-    // 1.5 seconds before the audio sink actually plays the same samples. It
-    // must also use `async=false`: the gate starts closed, so an asynchronous
-    // appsink would wait forever for a preroll buffer and hold playbin in Ready.
-    // The gate is a buffer-only pad probe rather than a valve: flush, segment,
-    // and EOS events must continue downstream so seeks clear the leaky queue.
-    let audio_filter = gstreamer::parse::bin_from_description(
-        "tee name=visualizer_tee \
-         visualizer_tee. ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 \
-           ! spectrum name=spectrum bands=512 interval=33000000 threshold=-80 \
-             post-messages=false multi-channel=false \
-         visualizer_tee. ! identity name=projectm_gate \
-           ! queue leaky=downstream max-size-buffers=0 \
-             max-size-bytes=0 max-size-time=3000000000 \
-           ! audioconvert ! audioresample \
-           ! audio/x-raw,format=S16LE,layout=interleaved,rate=44100,channels=2 \
-           ! appsink name=projectm_pcm sync=true async=false max-buffers=2 drop=true",
-        true,
-    )?;
+    let audio_filter = audio_filter::build()?;
     let spectrum = audio_filter
         .by_name("spectrum")
         .ok_or_else(|| anyhow::anyhow!("visualizer spectrum element is missing"))?;
@@ -401,6 +378,8 @@ fn run_player(
         .downcast::<AppSink>()
         .map_err(|_| anyhow::anyhow!("projectM PCM element is not an appsink"))?;
     let projectm_enabled = Arc::new(AtomicBool::new(false));
+    // Drop only buffers: flush, segment and EOS must still reach the side
+    // branch so inactive projectM cannot hold up seeks or track transitions.
     projectm_gate
         .static_pad("src")
         .ok_or_else(|| anyhow::anyhow!("projectM gate source pad is missing"))?
