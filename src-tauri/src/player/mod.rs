@@ -64,6 +64,7 @@ pub enum Cmd {
     Seek(u64),
     SetVolume(f64),
     SetMuted(bool),
+    SetReplayGain(bool),
     SetShuffle(bool),
     CycleRepeat,
     SetStopAfterCurrent(bool),
@@ -323,6 +324,7 @@ struct ListenSession {
 
 struct Engine {
     playbin: gstreamer::Element,
+    replaygain_enabled: Arc<AtomicBool>,
     /// `spectrum` element on a separate analysis branch of the audio-filter;
     /// posts per-band magnitudes on the bus when `post-messages` is on.
     spectrum: gstreamer::Element,
@@ -365,7 +367,8 @@ fn run_player(
 ) -> anyhow::Result<()> {
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
 
-    let audio_filter = audio_filter::build()?;
+    let replaygain_enabled = Arc::new(AtomicBool::new(db.replaygain_enabled()));
+    let audio_filter = audio_filter::build(replaygain_enabled.clone())?;
     let spectrum = audio_filter
         .by_name("spectrum")
         .ok_or_else(|| anyhow::anyhow!("visualizer spectrum element is missing"))?;
@@ -475,6 +478,7 @@ fn run_player(
 
     let mut engine = Engine {
         playbin,
+        replaygain_enabled,
         spectrum,
         projectm_enabled,
         projectm_pcm,
@@ -753,6 +757,9 @@ impl Engine {
                     position,
                 );
                 self.emit_position();
+            }
+            Cmd::SetReplayGain(enabled) => {
+                self.replaygain_enabled.store(enabled, Ordering::Relaxed);
             }
             Cmd::SetVolume(v) => {
                 self.volume = v.clamp(0.0, 1.0);

@@ -7,6 +7,7 @@ mod audio_filter;
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app::{AppSink, AppSinkCallbacks, AppSrc};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 struct StopOnDrop(gst::Element);
@@ -116,7 +117,8 @@ fn flac_samples_and_rates_survive_both_visualizers() -> anyhow::Result<()> {
                 let _stop = StopOnDrop(playbin.clone());
                 playbin.set_property("uri", gst::glib::filename_to_uri(&file.0, None)?.as_str());
                 playbin.set_property("volume", 1.0f64);
-                let filter = audio_filter::build()?;
+                let filter =
+                    audio_filter::build(Arc::new(std::sync::atomic::AtomicBool::new(false)))?;
                 filter
                     .by_name("spectrum")
                     .unwrap()
@@ -199,6 +201,12 @@ fn flac_samples_and_rates_survive_both_visualizers() -> anyhow::Result<()> {
                     let format = caps.get::<&str>("format")?;
                     let map = sample.buffer().unwrap().map_readable()?;
                     match format {
+                        "F64LE" => actual.extend(map.as_slice().chunks_exact(8).map(|b| {
+                            let scaled = f64::from_le_bytes(b.try_into().unwrap())
+                                * (1u64 << (bits - 1)) as f64;
+                            assert_eq!(scaled.fract(), 0.0, "source sample lost precision");
+                            scaled as i32
+                        })),
                         "S16LE" if bits == 16 => actual.extend(
                             map.as_slice()
                                 .chunks_exact(2)
@@ -231,5 +239,200 @@ fn flac_samples_and_rates_survive_both_visualizers() -> anyhow::Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn tag_replaygain(
+    file: &TestFile,
+    values: &[(lofty::prelude::ItemKey, &str)],
+) -> anyhow::Result<()> {
+    use lofty::prelude::*;
+    let mut tag = lofty::tag::Tag::new(lofty::tag::TagType::VorbisComments);
+    for (key, value) in values {
+        tag.insert_text(key.clone(), value.to_string());
+    }
+    tag.save_to_path(&file.0, lofty::config::WriteOptions::default())?;
+    Ok(())
+}
+
+/// Capture the complete audible stream, including playbin3's real gapless
+/// handoffs. No hardware audio output and no forced output sample format.
+fn replaygain_output(
+    files: &[&TestFile],
+    enabled: Arc<AtomicBool>,
+    user_volume: f64,
+    setup: impl FnOnce(&gst::Bin),
+) -> anyhow::Result<Vec<f64>> {
+    let playbin = gst::ElementFactory::make("playbin3").build()?;
+    let _stop = StopOnDrop(playbin.clone());
+    let filter = audio_filter::build(enabled)?;
+    setup(&filter);
+    filter
+        .by_name("projectm_gate")
+        .unwrap()
+        .static_pad("src")
+        .unwrap()
+        .add_probe(
+            gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST,
+            |_, _| gst::PadProbeReturn::Drop,
+        );
+    playbin.set_property("audio-filter", &filter);
+    playbin.set_property("volume", user_volume);
+    playbin.set_property(
+        "uri",
+        gst::glib::filename_to_uri(&files[0].0, None)?.as_str(),
+    );
+    let pending = Mutex::new(
+        files[1..]
+            .iter()
+            .map(|f| gst::glib::filename_to_uri(&f.0, None).map(|u| u.to_string()))
+            .collect::<Result<std::collections::VecDeque<_>, _>>()?,
+    );
+    playbin.connect("about-to-finish", false, move |values| {
+        if let Some(uri) = pending.lock().unwrap().pop_front() {
+            values[0]
+                .get::<gst::Element>()
+                .unwrap()
+                .set_property("uri", uri);
+        }
+        None
+    });
+    let output = gst::ElementFactory::make("appsink")
+        .property("sync", false)
+        .build()?
+        .downcast::<AppSink>()
+        .unwrap();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    output.set_callbacks(
+        AppSinkCallbacks::builder()
+            .new_sample({
+                let captured = captured.clone();
+                move |sink| {
+                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    let caps = sample.caps().unwrap().structure(0).unwrap();
+                    assert_eq!(caps.get::<&str>("format").unwrap(), "F64LE");
+                    assert_eq!(caps.get::<i32>("rate").unwrap(), 48000);
+                    assert_eq!(caps.get::<i32>("channels").unwrap(), 2);
+                    let map = sample.buffer().unwrap().map_readable().unwrap();
+                    captured.lock().unwrap().extend(
+                        map.as_slice()
+                            .chunks_exact(8)
+                            .map(|b| f64::from_le_bytes(b.try_into().unwrap())),
+                    );
+                    Ok(gst::FlowSuccess::Ok)
+                }
+            })
+            .build(),
+    );
+    playbin.set_property("audio-sink", &output);
+    playbin.set_state(gst::State::Playing)?;
+    wait_for_eos(&playbin)?;
+    playbin.set_state(gst::State::Null)?;
+    let result = captured.lock().unwrap().clone();
+    Ok(result)
+}
+
+fn assert_samples(actual: &[f64], expected: &[f64]) {
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "dropped or duplicated samples"
+    );
+    for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (actual - expected).abs() < 1e-10,
+            "sample {i}: got {actual}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn replaygain_tags_apply_per_track_across_gapless_handoffs() -> anyhow::Result<()> {
+    use lofty::prelude::ItemKey::*;
+    gst::init()?;
+    let (track, samples) = encode_flac(24, 48000)?;
+    tag_replaygain(
+        &track,
+        &[
+            (ReplayGainTrackGain, "-6.020599913279624 dB"),
+            (ReplayGainAlbumGain, "-12.041199826559248 dB"),
+        ],
+    )?;
+    let (album, _) = encode_flac(24, 48000)?;
+    tag_replaygain(&album, &[(ReplayGainAlbumGain, "-12.041199826559248 dB")])?;
+    let (untagged, _) = encode_flac(24, 48000)?;
+    let (peak, _) = encode_flac(24, 48000)?;
+    tag_replaygain(
+        &peak,
+        &[
+            (ReplayGainTrackGain, "6.020599913279624 dB"),
+            (ReplayGainTrackPeak, "0.8"),
+        ],
+    )?;
+    let files = [&track, &album, &untagged, &peak, &untagged, &track];
+    for (enabled, user_volume) in [(true, 1.0), (false, 1.0), (true, 0.125), (true, 0.0)] {
+        let actual = replaygain_output(
+            &files,
+            Arc::new(AtomicBool::new(enabled)),
+            user_volume,
+            |_| {},
+        )?;
+        let expected: Vec<f64> = [0.5, 0.25, 1.0, 1.25, 1.0, 0.5]
+            .into_iter()
+            .flat_map(|gain| {
+                samples.iter().map(move |s| {
+                    *s as f64 / (1 << 23) as f64 * if enabled { gain } else { 1.0 } * user_volume
+                })
+            })
+            .collect();
+        assert_samples(&actual, &expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn replaygain_can_toggle_off_and_on_mid_track() -> anyhow::Result<()> {
+    gst::init()?;
+    let (file, samples) = encode_flac(24, 48000)?;
+    tag_replaygain(
+        &file,
+        &[(
+            lofty::prelude::ItemKey::ReplayGainTrackGain,
+            "-6.020599913279624 dB",
+        )],
+    )?;
+    let enabled = Arc::new(AtomicBool::new(false));
+    let expected = Arc::new(Mutex::new(Vec::new()));
+    let actual = replaygain_output(&[&file], enabled.clone(), 1.0, {
+        let expected = expected.clone();
+        move |filter| {
+            let next_enabled = AtomicBool::new(false);
+            filter
+                .by_name("audio_passthrough")
+                .unwrap()
+                .static_pad("src")
+                .unwrap()
+                .add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+                    // Toggle before each decoded block enters the gain stage.
+                    // Metadata is read even while off, so re-enabling works
+                    // without reloading the file or waiting for another tag.
+                    let on = next_enabled.fetch_xor(true, Ordering::Relaxed);
+                    enabled.store(on, Ordering::Relaxed);
+                    let buffer = info.buffer().unwrap();
+                    let map = buffer.map_readable().unwrap();
+                    expected
+                        .lock()
+                        .unwrap()
+                        .extend(map.as_slice().chunks_exact(4).map(|b| {
+                            i32::from_le_bytes(b.try_into().unwrap()) as f64 / (1 << 23) as f64
+                                * if on { 0.5 } else { 1.0 }
+                        }));
+                    gst::PadProbeReturn::Ok
+                });
+        }
+    })?;
+    let expected = expected.lock().unwrap();
+    assert_eq!(expected.len(), samples.len());
+    assert_samples(&actual, &expected);
     Ok(())
 }

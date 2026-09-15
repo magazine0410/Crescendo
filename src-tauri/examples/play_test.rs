@@ -37,7 +37,9 @@ fn main() -> anyhow::Result<()> {
     // filter shape. In particular, a closed projectM gate must not prevent
     // playbin from prerolling while projectM is inactive, and non-buffer
     // events must still pass through it so flush seeks clear the side queue.
-    let audio_filter = audio_filter::build()?;
+    let audio_filter = audio_filter::build(std::sync::Arc::new(
+        std::sync::atomic::AtomicBool::new(false),
+    ))?;
     let projectm_gate = audio_filter
         .by_name("projectm_gate")
         .ok_or_else(|| anyhow::anyhow!("projectM gate element is missing"))?;

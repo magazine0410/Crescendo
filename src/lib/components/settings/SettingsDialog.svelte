@@ -35,6 +35,8 @@
 
   let keyTest = $state<"idle" | "testing" | "ok" | "bad">("idle");
   let autostart = $state(false);
+  let replayGainSaving = $state(false);
+  let replayGainError = $state("");
   let activeSection = $state<SettingsSection>("general");
 
   /** Ordering follows this pref in SQL (see queries.rs), so the pref has to be
@@ -71,6 +73,20 @@
       await call("autostart_set", { enabled });
     } catch {
       autostart = !enabled; // revert on failure
+    }
+  }
+
+  async function setReplayGain(enabled: boolean) {
+    replayGainSaving = true;
+    replayGainError = "";
+    const previous = prefs.values.replaygain_enabled;
+    try {
+      await prefs.set("replaygain_enabled", enabled);
+    } catch (error) {
+      prefs.values.replaygain_enabled = previous;
+      replayGainError = String(error);
+    } finally {
+      replayGainSaving = false;
     }
   }
 
@@ -176,6 +192,22 @@
           <option value="playlists">Playlists</option>
         </select>
         <p class="hint">Which tab opens when Crescendo starts.</p>
+
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={prefs.values.replaygain_enabled}
+            disabled={replayGainSaving}
+            onchange={(e) => setReplayGain(e.currentTarget.checked)}
+          />
+          Enable ReplayGain volume adjustment
+        </label>
+        <p class="hint">
+          Uses track gain to even out song loudness, with album gain as a fallback.
+          Peak tags prevent clipping. Songs without ReplayGain tags keep their
+          original level. Changes apply during playback.
+        </p>
+        {#if replayGainError}<p class="hint" role="alert">{replayGainError}</p>{/if}
       </div>
 
       {:else if activeSection === "library"}

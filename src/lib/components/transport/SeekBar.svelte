@@ -2,10 +2,13 @@
   import { player } from "$lib/stores/player.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { waveform } from "$lib/api";
+  import { formatTime } from "$lib/format";
 
   let trackEl: HTMLDivElement | null = $state(null);
   let dragging = $state(false);
   let dragMs = $state(0);
+  let hoverRatio = $state<number | null>(null);
+  let tooltipWidth = $state(0);
 
   const shownMs = $derived(dragging ? dragMs : player.positionMs);
   const ratio = $derived(
@@ -85,6 +88,7 @@
   function msFromEvent(e: PointerEvent): number {
     if (!trackEl) return 0;
     const r = trackEl.getBoundingClientRect();
+    if (r.width <= 0) return 0;
     const x = Math.min(r.right, Math.max(r.left, e.clientX)) - r.left;
     return (x / r.width) * player.durationMs;
   }
@@ -92,16 +96,28 @@
   function onPointerDown(e: PointerEvent) {
     if (!enabled) return;
     dragging = true;
-    dragMs = msFromEvent(e);
+    onPointerMove(e);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
   function onPointerMove(e: PointerEvent) {
-    if (dragging) dragMs = msFromEvent(e);
+    const ms = msFromEvent(e);
+    if (dragging) dragMs = ms;
+    const r = trackEl?.getBoundingClientRect();
+    // Captured drag events can arrive outside the bar; only preview on hover.
+    hoverRatio = enabled && r &&
+      e.clientX >= r.left && e.clientX <= r.right &&
+      e.clientY >= r.top && e.clientY <= r.bottom
+      ? ms / player.durationMs
+      : null;
   }
   function onPointerUp(e: PointerEvent) {
     if (!dragging) return;
     dragging = false;
     player.seek(msFromEvent(e));
+  }
+  function onPointerCancel() {
+    dragging = false;
+    hoverRatio = null;
   }
 </script>
 
@@ -116,8 +132,11 @@
   tabindex="-1"
   bind:this={trackEl}
   onpointerdown={onPointerDown}
+  onpointerenter={onPointerMove}
   onpointermove={onPointerMove}
+  onpointerleave={() => hoverRatio = null}
   onpointerup={onPointerUp}
+  onpointercancel={onPointerCancel}
 >
   {#if prefs.values.show_waveform && enabled}
     <canvas class="wave" bind:this={canvasEl}></canvas>
@@ -127,6 +146,15 @@
   </div>
   {#if enabled}
     <div class="handle" style:left={`${ratio * 100}%`}></div>
+  {/if}
+  {#if enabled && hoverRatio !== null}
+    <div class="hover-marker" style:left={`${hoverRatio * 100}%`} aria-hidden="true"></div>
+    <div
+      class="hover-time"
+      bind:offsetWidth={tooltipWidth}
+      style:left={`clamp(${tooltipWidth / 2}px, ${hoverRatio * 100}%, calc(100% - ${tooltipWidth / 2}px))`}
+      aria-hidden="true"
+    >{formatTime(hoverRatio * player.durationMs)}</div>
   {/if}
 </div>
 
@@ -171,6 +199,32 @@
   }
   .seek.enabled:hover .line {
     height: 3px;
+  }
+  .hover-marker {
+    position: absolute;
+    top: 50%;
+    z-index: 3;
+    width: 1px;
+    height: 11px;
+    background: var(--txt-full);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .hover-time {
+    position: absolute;
+    bottom: calc(50% + 9px);
+    z-index: 3;
+    padding: 2px 5px;
+    border: 1px solid var(--popup-border);
+    border-radius: 3px;
+    background: var(--bg-popup);
+    color: var(--txt-full);
+    font-size: 11px;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    transform: translateX(-50%);
+    pointer-events: none;
   }
   .seek:not(.enabled) {
     opacity: 0.4;

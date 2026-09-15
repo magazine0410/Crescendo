@@ -32,6 +32,7 @@ export interface Prefs {
   track_detail_format_2: string;
   scan_threads: number;
   show_waveform: boolean;
+  replaygain_enabled: boolean;
   library_view: "album_wall" | "track_list";
   /** Which tab opens on launch. */
   default_tab: "library" | "playlists";
@@ -73,6 +74,7 @@ const DEFAULTS: Prefs = {
   track_detail_format_2: "",
   scan_threads: 4,
   show_waveform: false,
+  replaygain_enabled: false,
   library_view: "album_wall",
   default_tab: "playlists",
   track_separators: false,
@@ -123,6 +125,7 @@ class PrefsStore {
     }
     if (raw.scan_threads) v.scan_threads = parseInt(raw.scan_threads, 10) || 4;
     if (raw.show_waveform) v.show_waveform = raw.show_waveform === "true";
+    if (raw.replaygain_enabled) v.replaygain_enabled = raw.replaygain_enabled === "true";
     if (raw.library_view === "track_list" || raw.library_view === "album_wall")
       v.library_view = raw.library_view;
     if (raw.default_tab === "library" || raw.default_tab === "playlists")

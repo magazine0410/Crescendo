@@ -54,6 +54,14 @@ pub async fn prefs_set(
     if key == "visualizer_import_path" {
         return Err("that preference is managed by the projectM folder chooser".into());
     }
+    if key == "replaygain_enabled" && value != "true" && value != "false" {
+        return Err("ReplayGain must be enabled or disabled".into());
+    }
+    let previous_replaygain = if key == "replaygain_enabled" {
+        state.db.prefs_get(&key).map_err(|e| e.to_string())?
+    } else {
+        None
+    };
     if key == "prefer_romanized" {
         let before = state
             .plugins
@@ -73,6 +81,21 @@ pub async fn prefs_set(
         .db
         .prefs_set(&key, &value)
         .map_err(|e| e.to_string())?;
+    if key == "replaygain_enabled" {
+        if let Err(error) = state
+            .player
+            .send(crate::player::Cmd::SetReplayGain(value == "true"))
+        {
+            // Keep the saved preference consistent with the UI's rollback
+            // if the player thread has stopped and cannot accept the change.
+            match previous_replaygain {
+                Some(previous) => state.db.prefs_set(&key, &previous),
+                None => state.db.prefs_delete(&key),
+            }
+            .map_err(|e| format!("{error}; restoring the previous setting failed: {e}"))?;
+            return Err(error);
+        }
+    }
     let revision = state
         .plugins
         .projection(None)

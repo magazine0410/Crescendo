@@ -60,6 +60,15 @@ impl Db {
         })
     }
 
+    /// ReplayGain is opt-in. Missing or malformed values keep unity gain.
+    pub fn replaygain_enabled(&self) -> bool {
+        self.prefs_get("replaygain_enabled")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true")
+    }
+
     pub fn prefs_delete(&self, key: &str) -> Result<()> {
         self.with(|conn| {
             conn.execute("DELETE FROM prefs WHERE key = ?1", [key])?;
