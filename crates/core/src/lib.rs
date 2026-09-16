@@ -1,5 +1,6 @@
 pub mod art;
 pub mod db;
+pub mod forte;
 pub mod import;
 pub mod lastfm;
 pub mod listening;

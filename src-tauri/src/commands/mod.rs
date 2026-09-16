@@ -1,4 +1,5 @@
 pub mod file_drag;
+pub mod forte;
 pub mod library;
 pub mod misc;
 pub mod player;

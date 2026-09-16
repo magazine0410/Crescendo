@@ -2,7 +2,7 @@
   import { queue } from "$lib/stores/queue.svelte";
   import { formatTime, displayTitle, displayArtist } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
-  import { openTrackInFileManagerItem } from "$lib/menu";
+  import { openTrackInFileManagerItem, tagEditItem } from "$lib/menu";
   import { fileDrag } from "$lib/fileDrag";
 </script>
 
@@ -22,7 +22,7 @@
           class="row"
           role="listitem"
           use:fileDrag={{ source: () => ({ type: "track_ids", ids: [t.id] }) }}
-          oncontextmenu={(e) => openContextMenu(e, [openTrackInFileManagerItem(t)])}
+          oncontextmenu={(e) => openContextMenu(e, [openTrackInFileManagerItem(t), tagEditItem([t])])}
         >
           <span class="no">{i + 1}</span>
           <div class="text">

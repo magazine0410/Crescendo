@@ -9,12 +9,14 @@
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import Icon from "../common/Icon.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
-  import { openTrackInFileManagerItem } from "$lib/menu";
+  import { openTrackInFileManagerItem, tagEditItem } from "$lib/menu";
   import { viewAlbum } from "$lib/navigate";
   import { tick, untrack } from "svelte";
   import { fileDrag, FILE_DRAG_LIMIT } from "$lib/fileDrag";
 
   let list = $state<VirtualList | null>(null);
+  let selectedIds = $state<number[]>([]);
+  let selectionAnchor = $state<number | null>(null);
 
   const HEADER_H = 84;
   // Two-line track rows so the play counter can sit under the title.
@@ -188,6 +190,7 @@
   }
 
   function trackMenu(e: MouseEvent, r: TrackRow) {
+    if (!selectedIds.includes(r.track.id)) selectedIds = [r.track.id];
     const albumId = r.track.album_id;
     const context = playlistContext();
     openContextMenu(e, [
@@ -199,6 +202,7 @@
         action: albumId == null ? undefined : () => viewAlbum(albumId),
       },
       openTrackInFileManagerItem(r.track),
+      tagEditItem(filtered.filter(entry => selectedIds.includes(entry.track.id)).map(entry => entry.track)),
       { separator: true, label: "" },
       {
         // Removal takes the row's position inside its own playlist, which is
@@ -225,6 +229,16 @@
 
   function onImgError(e: Event) {
     (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+  }
+
+  function selectTrack(event: MouseEvent, track: Track) {
+    if (event.shiftKey && selectionAnchor != null) {
+      const start = filtered.findIndex(entry => entry.track.id === selectionAnchor), end = filtered.findIndex(entry => entry.track.id === track.id);
+      selectedIds = start < 0 ? [track.id] : filtered.slice(Math.min(start, end), Math.max(start, end) + 1).map(entry => entry.track.id);
+    } else if (event.ctrlKey || event.metaKey) {
+      selectedIds = selectedIds.includes(track.id) ? selectedIds.filter(id => id !== track.id) : [...selectedIds, track.id];
+      selectionAnchor = track.id;
+    } else { selectedIds = [track.id]; selectionAnchor = track.id; }
   }
 
   const info = $derived(playlists.list.find((p) => p.id === playlists.renderedId));
@@ -332,6 +346,8 @@
       class:alt={r.visibleIndex % 2 === 1}
       class:playing={player.track?.id === r.track.id}
       class:missing={r.track.missing}
+      class:selected={selectedIds.includes(r.track.id)}
+      onclick={(event) => selectTrack(event, r.track)}
       ondblclick={() => playAt(r)}
       oncontextmenu={(e) => trackMenu(e, r)}
     >
@@ -503,6 +519,7 @@
   .trow.playing {
     color: var(--accent);
   }
+  .trow.selected { background: var(--selection); }
   .no {
     width: 26px;
     text-align: right;

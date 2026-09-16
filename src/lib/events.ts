@@ -54,6 +54,7 @@ export async function initEvents() {
     playlists.bumpPlayCount(e.payload.id, e.payload.plays);
   });
   await listen("library:changed", () => library.refresh());
+  await listen<string>("forte:error", event => { library.notice = event.payload; });
   await listen("queue:changed", () => queue.refresh());
   await listen<number>("playlist:changed", () => playlists.refresh());
 

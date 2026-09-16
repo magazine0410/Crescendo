@@ -11,6 +11,7 @@
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { jumpToNowPlaying, viewAlbum } from "$lib/navigate";
   import { fileDrag } from "$lib/fileDrag";
+  import { tagEditItem } from "$lib/menu";
 
   const titleLine = $derived(formatTitle(prefs.values.titlebar_format, player.track));
   const titleLine2 = $derived(formatTitle(prefs.values.titlebar_format_2, player.track));
@@ -40,6 +41,7 @@
   function titleMenu(e: MouseEvent) {
     if (!player.track) return;
     openContextMenu(e, [
+      tagEditItem([player.track]),
       {
         label: "View album",
         disabled: nowPlayingAlbumId == null,

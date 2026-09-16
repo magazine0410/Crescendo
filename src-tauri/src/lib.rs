@@ -26,6 +26,13 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("crescendo-art", art_protocol::handle)
         .setup(|app| {
             let db = Arc::new(Db::open(&state::db_path())?);
+            // Reconcile edits made while closed before a startup scan can
+            // mistake a renamed file for a new track.
+            if let Err(error) =
+                crescendo_core::forte::refresh_pending(&db, &state::data_dir().join("forte-inbox"))
+            {
+                log::warn!("Forte library refresh deferred: {error:#}");
+            }
             if let Ok(stats) = db.library_stats() {
                 log::info!(
                     "library opened: {} tracks, {} albums",
@@ -150,11 +157,13 @@ pub fn run() {
                 scanning: Arc::new(AtomicBool::new(false)),
                 scan_cancel: Arc::new(AtomicBool::new(false)),
             });
+            commands::forte::start_listener(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::library::scan_start,
             commands::library::scan_cancel,
+            commands::forte::tag_edit_open,
             commands::library::library_stats,
             commands::library::browse_values,
             commands::library::browse_albums,

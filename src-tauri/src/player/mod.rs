@@ -65,6 +65,8 @@ pub enum Cmd {
     SetVolume(f64),
     SetMuted(bool),
     SetReplayGain(bool),
+    /// Publish current database metadata after Forte saves without interrupting audio.
+    RefreshMetadata,
     SetShuffle(bool),
     CycleRepeat,
     SetStopAfterCurrent(bool),
@@ -680,6 +682,7 @@ impl Engine {
     fn handle_cmd(&mut self, cmd: Cmd) {
         self.sample_listening();
         match cmd {
+            Cmd::RefreshMetadata => self.publish_state(),
             Cmd::PlayResolvedContext { ids, start_index } => {
                 if ids.is_empty() {
                     log::warn!("play_context resolved to an empty track list");

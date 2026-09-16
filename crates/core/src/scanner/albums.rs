@@ -9,9 +9,17 @@ const KEY_EXPR: &str =
 /// Rebuild the albums table from tracks in one aggregate pass. Upserting on
 /// `key` preserves album ids (thumbnail cache and cover_source stay valid).
 pub fn rebuild(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    rebuild_in_transaction(&tx)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Reuse a caller's transaction when track edits and album membership must
+/// become visible together.
+pub(crate) fn rebuild_in_transaction(conn: &Connection) -> Result<()> {
     conn.execute_batch(&format!(
         r#"
-        BEGIN;
         INSERT INTO albums(key, album, albumartist, albumartist_sort, year, genre,
                            track_count, total_duration_ms, dir)
         SELECT {KEY_EXPR} AS key,
@@ -43,7 +51,6 @@ pub fn rebuild(conn: &Connection) -> Result<()> {
                 ulower(COALESCE(tracks.albumartist, tracks.artist, '')) || char(31) ||
                 ulower(COALESCE(tracks.album, '')))
         WHERE missing = 0;
-        COMMIT;
         "#
     ))?;
     Ok(())

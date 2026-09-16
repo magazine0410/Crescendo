@@ -1026,6 +1026,8 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "scan_start":
     case "scan_cancel":
       return undefined as T;
+    case "tag_edit_open":
+      throw new Error("Open Crescendo's desktop app to launch Forte.");
     case "player_play_context": {
       const ctx = args.ctx as PlayContext;
       if (

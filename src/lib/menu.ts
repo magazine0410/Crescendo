@@ -1,7 +1,21 @@
 import { playlists } from "./stores/playlists.svelte";
-import { isTauri, type Track } from "./api";
+import { call, isTauri, type Track } from "./api";
+import { library } from "./stores/library.svelte";
 import type { MenuItem } from "./components/common/ContextMenu.svelte";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+
+/** Launch the Forte GUI with the complete current selection. */
+export function tagEditItem(tracks: Track[]): MenuItem {
+  const ids = tracks.filter(track => !track.missing).map(track => track.id);
+  return {
+    label: "Tag edit",
+    disabled: ids.length === 0,
+    action: async () => {
+      try { await call("tag_edit_open", { ids }); }
+      catch (error) { library.notice = String(error); }
+    },
+  };
+}
 
 /** Reveal a library file in the system file manager. Browser preview is a no-op. */
 export async function openInFileManager(path: string): Promise<void> {

@@ -9,7 +9,7 @@
   import Icon from "../common/Icon.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
-  import { addToPlaylistItem, openTrackInFileManagerItem } from "$lib/menu";
+  import { addToPlaylistItem, openTrackInFileManagerItem, tagEditItem } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import { tick, untrack } from "svelte";
 
@@ -173,6 +173,7 @@
         action: sameAlbum ? () => library.openAlbumById(albumId) : undefined,
       },
       openTrackInFileManagerItem(clickedTrack),
+      tagEditItem(sel),
       { separator: true, label: "" },
       addToPlaylistItem((pid) => playlists.addTracks(pid, ids), { memberOf }),
     ];

@@ -16,6 +16,7 @@ use std::{env, fs, path::Path};
 const COMMANDS: &[&str] = &[
     "scan_start",
     "scan_cancel",
+    "tag_edit_open",
     "library_stats",
     "browse_values",
     "browse_albums",

@@ -8,10 +8,23 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
-  import { addToPlaylistItem, openTrackInFileManagerItem } from "$lib/menu";
+  import { addToPlaylistItem, openTrackInFileManagerItem, tagEditItem } from "$lib/menu";
   import { fileDrag } from "$lib/fileDrag";
 
   const album = $derived(library.selectedAlbum);
+  let selectedIds = $state<number[]>([]);
+  let selectionAnchor = $state<number | null>(null);
+  function selectTrack(event: MouseEvent, track: Track) {
+    if (library.interactionBlocked) return;
+    const tracks = library.albumTracks;
+    if (event.shiftKey && selectionAnchor != null) {
+      const start = tracks.findIndex(t => t.id === selectionAnchor), end = tracks.findIndex(t => t.id === track.id);
+      selectedIds = start < 0 ? [track.id] : tracks.slice(Math.min(start, end), Math.max(start, end) + 1).map(t => t.id);
+    } else if (event.ctrlKey || event.metaKey) {
+      selectedIds = selectedIds.includes(track.id) ? selectedIds.filter(id => id !== track.id) : [...selectedIds, track.id];
+      selectionAnchor = track.id;
+    } else { selectedIds = [track.id]; selectionAnchor = track.id; }
+  }
   const returnsToAnotherTab = $derived(
     ui.albumReturnTab != null && ui.albumReturnTab !== "library",
   );
@@ -29,9 +42,11 @@
 
   function trackMenu(e: MouseEvent, track: Track) {
     if (library.interactionBlocked) return;
+    if (!selectedIds.includes(track.id)) selectedIds = [track.id];
     openContextMenu(e, [
       { label: "Add to queue", action: () => queue.add([track.id]) },
       openTrackInFileManagerItem(track),
+      tagEditItem(library.albumTracks.filter(t => selectedIds.includes(t.id))),
       { separator: true, label: "" },
       addToPlaylistItem((pid) => playlists.addTracks(pid, [track.id])),
     ]);
@@ -83,6 +98,8 @@
           }}
           disabled={library.interactionBlocked}
           class:playing={player.track?.id === t.id}
+          class:selected={selectedIds.includes(t.id)}
+          onclick={(event) => selectTrack(event, t)}
           ondblclick={() => player.playContext({ type: "album", id: album.id }, i, t.id)}
           oncontextmenu={(e) => trackMenu(e, t)}
         >
@@ -185,6 +202,7 @@
   .trow.playing {
     color: var(--accent);
   }
+  .trow.selected { background: var(--selection); }
   .no {
     width: 26px;
     color: var(--txt-faded);
