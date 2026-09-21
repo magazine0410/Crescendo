@@ -205,3 +205,33 @@ fn track_groups_follow_sorted_order() {
     let shape: Vec<(Option<i64>, i64)> = groups.iter().map(|g| (g.album_id, g.count)).collect();
     assert_eq!(shape, vec![(Some(1), 1), (Some(2), 1), (Some(1), 1)]);
 }
+
+#[test]
+fn pages_keep_playback_order_across_offsets_filters_and_directions() {
+    let (_d, db) = test_db();
+    for s in [
+        None,
+        sort(SortKey::Title, None, false),
+        sort(SortKey::Duration, Some(SortKey::Year), true),
+    ] {
+        for values in [vec![], vec!["Artist A".to_string()]] {
+            let ctx = PlayContext::ValueTracks {
+                mode: BrowseMode::Artist,
+                values: values.clone(),
+                query: None,
+                projection_revision: 0,
+                sort: s,
+            };
+            let ids = db.resolve_context_exact(&ctx).unwrap();
+            for offset in 0..=ids.len() {
+                let page = db
+                    .tracks_range_exact(None, BrowseMode::Artist, &values, s, offset as i64, 2)
+                    .unwrap();
+                assert_eq!(
+                    page.iter().map(|t| t.id).collect::<Vec<_>>(),
+                    ids[offset..ids.len().min(offset + 2)]
+                );
+            }
+        }
+    }
+}

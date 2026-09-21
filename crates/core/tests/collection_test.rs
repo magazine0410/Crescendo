@@ -183,7 +183,9 @@ fn an_older_database_migrates() {
                playlist_id INTEGER NOT NULL, position INTEGER NOT NULL,
                track_id INTEGER NOT NULL, PRIMARY KEY (playlist_id, position));
              CREATE TABLE tracks (
-               id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, duration_ms INTEGER NOT NULL);
+               id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, duration_ms INTEGER NOT NULL,
+               albumartist TEXT, year INTEGER, album TEXT, disc_no INTEGER,
+               track_no INTEGER, missing INTEGER NOT NULL DEFAULT 0);
              INSERT INTO playlists(id, name, position) VALUES (1, 'Old', 0);
              PRAGMA user_version = 3;",
         )

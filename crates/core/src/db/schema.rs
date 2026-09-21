@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -338,6 +338,16 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
              CREATE INDEX IF NOT EXISTS idx_lastfm_outbox_pending ON lastfm_outbox(state, id);",
         )?;
     }
+    if version < 12 {
+        // Match the default library order so arbitrary scrollbar jumps do not
+        // sort the entire library again for every visible page.
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_library_order ON tracks(
+               albumartist COLLATE NOCASE, year, album COLLATE NOCASE,
+               disc_no, track_no, path
+             ) WHERE missing = 0;",
+        )?;
+    }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;
     Ok(())
@@ -348,9 +358,20 @@ mod tests {
     use super::{migrate, SCHEMA_VERSION};
     use rusqlite::Connection;
 
+    // Older migration fixtures omit unrelated track metadata, but must include
+    // the columns indexed by the library-order migration.
+    fn legacy_tracks(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE tracks(id INTEGER PRIMARY KEY, albumartist TEXT, year INTEGER,
+             album TEXT, disc_no INTEGER, track_no INTEGER, path TEXT, missing INTEGER);",
+        )
+        .unwrap();
+    }
+
     #[test]
     fn version_nine_database_gains_grant_and_storage_tables() {
         let mut conn = Connection::open_in_memory().unwrap();
+        legacy_tracks(&conn);
         conn.execute_batch(
             "CREATE TABLE prefs(key TEXT PRIMARY KEY, value TEXT NOT NULL);
               CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -383,6 +404,7 @@ mod tests {
     #[test]
     fn version_seven_database_gains_plugin_tables() {
         let mut conn = Connection::open_in_memory().unwrap();
+        legacy_tracks(&conn);
         conn.execute_batch(
             "CREATE TABLE prefs(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -411,6 +433,7 @@ mod tests {
     #[test]
     fn existing_collapse_users_get_one_time_grouping_migration_but_fresh_databases_do_not() {
         let mut old = Connection::open_in_memory().unwrap();
+        legacy_tracks(&old);
         old.execute_batch(
             "CREATE TABLE prefs(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -440,6 +463,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn version_eleven_gains_an_index_that_supplies_library_order() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        legacy_tracks(&conn);
+        conn.execute_batch("PRAGMA user_version = 11;").unwrap();
+        migrate(&mut conn).unwrap();
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT id FROM tracks WHERE missing = 0 \
+             ORDER BY {} LIMIT 200 OFFSET 150000",
+            crate::db::queries::LIBRARY_SORT,
+        );
+        let plan = conn
+            .prepare(&sql)
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n");
+        assert!(plan.contains("idx_tracks_library_order"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+        migrate(&mut conn).unwrap();
     }
 
     #[test]

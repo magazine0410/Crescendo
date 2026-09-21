@@ -161,6 +161,8 @@ class LibraryStore {
   /** Non-null when album separators are on: the flat row layout over `tracks`. */
   trackModel = $state<RowModel | null>(null);
   private pagePromises = new Map<number, Promise<void>>();
+  private pendingTrackRange: [number, number] | null = null;
+  private loadingVisibleTracks = false;
   private trackReqId = 0;
   private valuesReqId = 0;
   private albumsReqId = 0;
@@ -512,6 +514,7 @@ class LibraryStore {
     this.albumsReqId++;
     this.albumTracksReqId++;
     this.trackReqId++;
+    this.pendingTrackRange = null;
     this.pagePromises.clear();
   }
 
@@ -707,15 +710,20 @@ class LibraryStore {
     return lo;
   }
 
-  /** Track-index span covering a flat row range (whole groups at the edges). */
+  /** Only the tracks in the visible rows, even within a very large album run. */
   private trackRangeForRows(firstRow: number, lastRow: number): [number, number] {
     const m = this.trackModel;
     if (!m) return [firstRow, lastRow];
-    const g1 = this.groupIndexAtRow(Math.max(0, firstRow));
-    const g2 = this.groupIndexAtRow(Math.min(lastRow, m.totalRows - 1));
-    const tFirst = m.trackStart[g1];
-    const tLast = m.trackStart[g2 + 1] - 1;
-    return [tFirst, Math.max(tFirst, tLast)];
+    if (m.totalRows === 0 || lastRow < firstRow) return [0, -1];
+    firstRow = Math.max(0, firstRow);
+    lastRow = Math.min(lastRow, m.totalRows - 1);
+    const g1 = this.groupIndexAtRow(firstRow);
+    const g2 = this.groupIndexAtRow(lastRow);
+    const tFirst = m.trackStart[g1] + Math.max(
+      0, firstRow - m.rowStart[g1] - (m.hasSep[g1] ? 1 : 0),
+    );
+    const tLast = m.trackStart[g2] + lastRow - m.rowStart[g2] - (m.hasSep[g2] ? 1 : 0);
+    return [tFirst, tLast];
   }
 
   /** Recount + reset the Track-list view for the current (mode, value, query).
@@ -723,6 +731,7 @@ class LibraryStore {
       the mounted view re-fetches its visible range. */
   async reloadTrackView(withGroups: boolean) {
     const reqId = ++this.trackReqId;
+    this.pendingTrackRange = null;
     let count: number;
     try {
       count = await call<number>("track_count", {
@@ -835,7 +844,30 @@ class LibraryStore {
   /** Ensure every page covering track indices [first, last] is fetched
       (fire-and-forget; used by scrolling). */
   ensureTrackRange(first: number, last: number) {
-    void this.ensureTrackRangeLoaded(first, last);
+    this.pendingTrackRange = [first, last];
+    if (!this.loadingVisibleTracks) void this.loadVisibleTracks();
+  }
+
+  /** Keep only the newest viewport while a page is in flight. Scrollbar drags
+      must not queue database work for every position the pointer passed. */
+  private async loadVisibleTracks(): Promise<void> {
+    this.loadingVisibleTracks = true;
+    try {
+      while (this.pendingTrackRange) {
+        const [first, last] = this.pendingTrackRange;
+        this.pendingTrackRange = null;
+        const reqId = this.trackReqId;
+        if (this.trackCount === 0 || last < first) continue;
+        const firstPage = Math.max(0, Math.floor(first / TRACK_PAGE));
+        const lastPage = Math.floor(Math.min(last, this.trackCount - 1) / TRACK_PAGE);
+        for (let page = firstPage; page <= lastPage; page++) {
+          await this.loadTrackPage(page);
+          if (this.pendingTrackRange || reqId !== this.trackReqId) break;
+        }
+      }
+    } finally {
+      this.loadingVisibleTracks = false;
+    }
   }
 
   /** Awaitable variant: resolves once every page covering [first, last] has
@@ -872,6 +904,7 @@ class LibraryStore {
         limit: TRACK_PAGE,
       });
     } catch (e) {
+      if (reqId !== this.trackReqId) return;
       this.pagePromises.delete(page); // let a later pass retry
       if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
       console.debug("tracks_range failed:", e);

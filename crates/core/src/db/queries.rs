@@ -696,9 +696,14 @@ impl Db {
         push_values_clause(&mut where_sql, &mut params, plan, values);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
+            // Page over IDs first: custom sorts otherwise carry every metadata
+            // column through a potentially library-sized temporary sort. Fetch
+            // full records only for this page, then restore its stable order.
             let sql = format!(
-                "SELECT {TRACK_COLS} FROM tracks WHERE {where_sql} \
-                 ORDER BY {order} LIMIT ?{} OFFSET ?{}",
+                "SELECT {TRACK_COLS} FROM tracks WHERE id IN (\
+                   SELECT id FROM tracks WHERE {where_sql} \
+                   ORDER BY {order} LIMIT ?{} OFFSET ?{}\
+                 ) ORDER BY {order}",
                 params.len() + 1,
                 params.len() + 2
             );

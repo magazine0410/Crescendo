@@ -225,3 +225,61 @@ test("row playback sends the clicked track identity over IPC", async () => {
   await player.playContext(ctx, 0, 42);
   assert.deepEqual(calls, [["player_play_context", { ctx, startIndex: 0, startTrackId: 42 }]]);
 });
+
+test("scrollbar jumps skip obsolete pages and load the latest viewport next", async () => {
+  const requests = [];
+  const library = await store("library", (_command, args) => {
+    const reply = deferred();
+    requests.push({ offset: args.offset, reply });
+    return reply.promise;
+  });
+  library.trackCount = 160000;
+  library.tracks = new Array(160000);
+  library.ensureTrackRange(190, 220); // spans two pages
+  library.ensureTrackRange(50000, 50040);
+  library.ensureTrackRange(100000, 100040);
+  library.ensureTrackRange(150000, 150040);
+  assert.deepEqual(requests.map(r => r.offset), [0]);
+  requests[0].reply.resolve([{ id: 1 }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests.map(r => r.offset), [0, 150000]);
+  requests[1].reply.resolve([{ id: 150001 }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(library.tracks[150000].id, 150001);
+  library.ensureTrackRange(150000, 150040);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 2, "revisiting a loaded page uses the cache");
+});
+
+test("album separators fetch only visible pages within huge groups", async () => {
+  const offsets = [];
+  const library = await store("library", async (command, args) => {
+    if (command === "track_count") return 160000;
+    if (command === "track_groups") return [{ album_id: 1, count: 160000 }];
+    assert.equal(command, "tracks_range");
+    offsets.push(args.offset);
+    return [];
+  });
+  await library.reloadTrackView(true);
+  library.ensureRowRange(150001, 150040);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(offsets, [150000]);
+});
+
+test("old page failures cannot evict a new view's cached page", async () => {
+  const old = deferred();
+  let requests = 0;
+  const library = await store("library", async command => {
+    if (command === "track_count") return 200;
+    return ++requests === 1 ? old.promise : [{ id: 42 }];
+  });
+  library.trackCount = 200;
+  const pending = library.ensureTrackRangeLoaded(0, 10);
+  await library.reloadTrackView(false);
+  await library.ensureTrackRangeLoaded(0, 10);
+  old.reject(new Error("obsolete request"));
+  await pending;
+  await library.ensureTrackRangeLoaded(0, 10);
+  assert.equal(requests, 2);
+  assert.equal(library.tracks[0].id, 42);
+});
