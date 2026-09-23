@@ -34,7 +34,6 @@ crates/core/   # crescendo-core: db, scanner, search, playlists, m3u, art, lastf
 src-tauri/     # tauri shell: player engine, commands, art protocol
 src/           # SvelteKit frontend (runs against a mock backend in plain vite dev)
 reference/     # the original Eole foobar2000 theme (visual source of truth)
-static/eole/   # PNG sprites copied from the theme
 static/fonts/  # Selawik (SIL OFL) — metric-compatible Segoe UI substitute
 ```
 

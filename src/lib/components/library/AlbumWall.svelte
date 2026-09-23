@@ -5,6 +5,7 @@
   import { playlists } from "$lib/stores/playlists.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, call, type Album, type Track } from "$lib/api";
+  import { COVER_MISSING } from "$lib/icons";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem, openInFileManager } from "$lib/menu";
   import VirtualGrid from "$lib/virtual/VirtualGrid.svelte";
@@ -57,7 +58,7 @@
   }
 
   function onImgError(e: Event) {
-    (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+    (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
 </script>
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { isTauri, call, artUrl } from "$lib/api";
+  import { COVER_MISSING, COVER_NONE } from "$lib/icons";
   import { player } from "$lib/stores/player.svelte";
   import Icon from "$lib/components/common/Icon.svelte";
 
@@ -8,7 +9,7 @@
     if (!t) return null;
     if (isTauri && t.album_id != null) return artUrl("album", t.album_id, "thumb");
     if (isTauri) return artUrl("track", t.id, "thumb");
-    return "/eole/no_cover.png";
+    return COVER_NONE;
   });
 
   function openBig() {
@@ -17,7 +18,7 @@
   }
 
   function onError(e: Event) {
-    (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+    (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
 </script>
 

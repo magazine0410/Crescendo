@@ -6,6 +6,7 @@
  * `mock.ts` so every view stays workable.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { COVER_NONE } from "./icons";
 
 export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -451,7 +452,7 @@ export function artUrl(
   id: number,
   size: "thumb" | "full" = "thumb",
 ): string {
-  if (!isTauri) return "/eole/no_cover.png";
+  if (!isTauri) return COVER_NONE;
   return `crescendo-art://localhost/${kind}/${id}?size=${size}`;
 }
 

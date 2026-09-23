@@ -2,6 +2,7 @@
   import { player } from "$lib/stores/player.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { call, artUrl, isTauri, type Album, type ArtistInfo, type AlbumInfo, type LyricsResult } from "$lib/api";
+  import { COVER_MISSING } from "$lib/icons";
   import { formatTime, displayOriginalTitle, displayAlbumartist, latinTitleSort } from "$lib/format";
   import { fileDrag } from "$lib/fileDrag";
 
@@ -132,7 +133,7 @@
   const originalTitle = $derived(track ? displayOriginalTitle(track) : "");
 
   function onImgError(e: Event) {
-    (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+    (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
 
   function measureGrouping(node: HTMLElement, _grouping: string) {

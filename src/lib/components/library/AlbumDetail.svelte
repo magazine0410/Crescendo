@@ -4,6 +4,7 @@
   import { queue } from "$lib/stores/queue.svelte";
   import { playlists } from "$lib/stores/playlists.svelte";
   import { artUrl, type Track } from "$lib/api";
+  import { COVER_MISSING } from "$lib/icons";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { formatTime, formatLongDuration, formatTitle, displayName, displayTitle, displayArtist, playsText } from "$lib/format";
@@ -37,7 +38,7 @@
   }
 
   function onImgError(e: Event) {
-    (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+    (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
 
   function trackMenu(e: MouseEvent, track: Track) {

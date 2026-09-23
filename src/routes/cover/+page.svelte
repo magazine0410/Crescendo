@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { artUrl, isTauri } from "$lib/api";
+  import { COVER_MISSING } from "$lib/icons";
 
   const albumId = $derived(page.url.searchParams.get("album"));
   const trackId = $derived(page.url.searchParams.get("track"));
@@ -8,7 +9,7 @@
   const src = $derived.by(() => {
     if (albumId != null) return artUrl("album", Number(albumId), "full");
     if (trackId != null) return artUrl("track", Number(trackId), "full");
-    return "/eole/no_cover.png";
+    return COVER_MISSING;
   });
 
   async function onKeydown(e: KeyboardEvent) {
@@ -19,7 +20,7 @@
   }
 
   function onImgError(e: Event) {
-    (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+    (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
 </script>
 

@@ -4,6 +4,7 @@
   import { queue } from "$lib/stores/queue.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, type PlayContext, type Track } from "$lib/api";
+  import { COVER_MISSING, COVER_NONE } from "$lib/icons";
   import { prefs } from "$lib/stores/prefs.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayName, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
@@ -228,7 +229,7 @@
   });
 
   function onImgError(e: Event) {
-    (e.currentTarget as HTMLImageElement).src = "/eole/no_cover.png";
+    (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
 
   function selectTrack(event: MouseEvent, track: Track) {
@@ -326,7 +327,7 @@
           if (r.albumId != null) viewAlbum(r.albumId);
         }}
       >
-        <img class="acover" src={r.albumId != null ? artUrl("album", r.albumId) : "/eole/no_cover.png"} alt="" loading="lazy" onerror={onImgError} />
+        <img class="acover" src={r.albumId != null ? artUrl("album", r.albumId) : COVER_NONE} alt="" loading="lazy" onerror={onImgError} />
         <div class="ainfo">
           <div class="aline1">{r.album ?? "?"}</div>
           <div class="aline2">{displayName(r.artist, r.artistSort) ?? "?"}</div>
