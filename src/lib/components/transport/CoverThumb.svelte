@@ -25,7 +25,7 @@
   {#if src}
     <img {src} alt="Cover art" onerror={onError} />
   {:else}
-    <span class="empty"><Icon name="palette" size={40} /></span>
+    <span class="empty"><Icon name="image" size={40} /></span>
   {/if}
 </button>
 
