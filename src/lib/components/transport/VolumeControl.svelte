@@ -21,10 +21,10 @@
     player.setVolume(player.volume + step);
   }
 
-  function openVolume(e: MouseEvent) {
+  function toggleMute(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    open = true;
+    player.toggleMute();
   }
 
   function volFromEvent(e: PointerEvent): number {
@@ -57,10 +57,10 @@
   <SpriteButton
     {icon}
     size={26}
-    title={`${player.muted ? "Unmute" : "Mute"} (right-click for volume)`}
-    onclick={() => player.toggleMute()}
+    title={`Volume (right-click to ${player.muted ? "unmute" : "mute"})`}
+    onclick={() => (open = !open)}
     onwheel={onWheel}
-    oncontextmenu={openVolume}
+    oncontextmenu={toggleMute}
   />
   {#if open}
     <div class="popover" onwheel={onWheel}>
