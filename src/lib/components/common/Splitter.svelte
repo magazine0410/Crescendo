@@ -140,13 +140,19 @@
   .splitter.collapsed .drag-highlight {
     pointer-events: none;
   }
+  /* The toggle rests withdrawn as a thin sliver against the divider and
+     widens to full size on hover or keyboard focus. Its translate is a
+     percentage of its own width, so the edge attached to the divider stays
+     put while the width changes. */
   .toggle {
     position: absolute;
     top: 50%;
     left: 50%;
     z-index: 2;
-    width: 16px;
+    width: 5px;
     height: 32px;
+    overflow: hidden;
+    transition: width 120ms cubic-bezier(0.2, 0, 0, 1);
     transform: translate(-100%, -50%);
     display: flex;
     align-items: center;
@@ -157,8 +163,15 @@
     border-radius: 3px 0 0 3px;
     box-shadow: 0 0 5px rgba(0, 0, 0, 0.25);
   }
+  .toggle :global(svg) {
+    flex: none;
+    opacity: 0;
+    transition: opacity 120ms;
+  }
   .splitter.horizontal.animate .toggle {
-    transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+    transition:
+      transform 180ms cubic-bezier(0.2, 0, 0, 1),
+      width 120ms cubic-bezier(0.2, 0, 0, 1);
   }
   /* Expanded controls live inside their panel with the inward-facing edge
      attached to the divider. Once collapsed, move the control across the
@@ -177,11 +190,18 @@
   }
   .toggle:hover,
   .toggle:focus-visible {
+    width: 16px;
     color: var(--txt-full);
     background: var(--hover-row);
   }
+  .toggle:hover :global(svg),
+  .toggle:focus-visible :global(svg) {
+    opacity: 1;
+  }
 
   @media (prefers-reduced-motion: reduce) {
+    .toggle,
+    .toggle :global(svg),
     .splitter.horizontal.animate .toggle {
       transition-duration: 0s;
     }
