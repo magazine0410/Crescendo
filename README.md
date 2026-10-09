@@ -4,6 +4,8 @@ A desktop music player for Linux that replicates the look of the [foobar2000
 **Eole** theme](https://github.com/Ottodix/Eole-foobar-theme) in dark mode. 
 Built with Tauri 2, Svelte 5, and GStreamer.
 
+![Crescendo](docs/screenshots/library-track-list.png)
+
 ## Features
 
 - sleek dark user interface
