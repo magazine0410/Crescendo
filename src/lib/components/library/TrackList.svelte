@@ -163,6 +163,7 @@
     }
 
     const items: MenuItem[] = [
+      { label: "Play", action: () => playAt(trackIndex) },
       {
         label: ids.length > 1 ? `Add ${ids.length} tracks to queue` : "Add to queue",
         action: () => queue.add(ids),

@@ -41,10 +41,14 @@
     (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
 
-  function trackMenu(e: MouseEvent, track: Track) {
+  function trackMenu(e: MouseEvent, track: Track, index: number) {
     if (library.interactionBlocked) return;
     if (!selectedIds.includes(track.id)) selectedIds = [track.id];
     openContextMenu(e, [
+      {
+        label: "Play",
+        action: () => player.playContext({ type: "album", id: album!.id }, index, track.id),
+      },
       { label: "Add to queue", action: () => queue.add([track.id]) },
       openTrackInFileManagerItem(track),
       tagEditItem(library.albumTracks.filter(t => selectedIds.includes(t.id))),
@@ -102,7 +106,7 @@
           class:selected={selectedIds.includes(t.id)}
           onclick={(event) => selectTrack(event, t)}
           ondblclick={() => player.playContext({ type: "album", id: album.id }, i, t.id)}
-          oncontextmenu={(e) => trackMenu(e, t)}
+          oncontextmenu={(e) => trackMenu(e, t, i)}
         >
           <span class="no">{t.track_no ?? i + 1}</span>
           <div class="tmain">
