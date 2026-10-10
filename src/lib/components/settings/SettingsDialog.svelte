@@ -269,6 +269,31 @@
           value={prefs.values.scan_threads}
           onchange={(e) => prefs.set("scan_threads", parseInt(e.currentTarget.value, 10) || 4)}
         />
+
+        <label for="libview">Library view</label>
+        <select
+          id="libview"
+          value={prefs.values.library_view}
+          onchange={(e) =>
+            prefs.set("library_view", e.currentTarget.value as "album_wall" | "track_list")}
+        >
+          <option value="album_wall">Album wall</option>
+          <option value="track_list">Track list</option>
+        </select>
+        <p class="hint">
+          Album wall shows a grid of album covers; Track list shows every track as a
+          flat, scrollable list. Both respect the left panel and search.
+        </p>
+
+        <label class="check" class:disabled={prefs.values.library_view !== "track_list"}>
+          <input
+            type="checkbox"
+            checked={prefs.values.track_separators}
+            disabled={prefs.values.library_view !== "track_list"}
+            onchange={(e) => prefs.set("track_separators", e.currentTarget.checked)}
+          />
+          Show clickable album separators in the track list
+        </label>
       </div>
 
       {:else if activeSection === "playlists"}
@@ -300,31 +325,6 @@
         role="tabpanel"
         aria-labelledby="settings-tab-display"
       >
-        <label for="libview">Library view</label>
-        <select
-          id="libview"
-          value={prefs.values.library_view}
-          onchange={(e) =>
-            prefs.set("library_view", e.currentTarget.value as "album_wall" | "track_list")}
-        >
-          <option value="album_wall">Album wall</option>
-          <option value="track_list">Track list</option>
-        </select>
-        <p class="hint">
-          Album wall shows a grid of album covers; Track list shows every track as a
-          flat, scrollable list. Both respect the left panel and search.
-        </p>
-
-        <label class="check" class:disabled={prefs.values.library_view !== "track_list"}>
-          <input
-            type="checkbox"
-            checked={prefs.values.track_separators}
-            disabled={prefs.values.library_view !== "track_list"}
-            onchange={(e) => prefs.set("track_separators", e.currentTarget.checked)}
-          />
-          Show clickable album separators in the track list
-        </label>
-
         <label class="check">
           <input
             type="checkbox"
