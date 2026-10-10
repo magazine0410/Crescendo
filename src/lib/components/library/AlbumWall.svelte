@@ -159,5 +159,8 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* italic glyphs slant past their advance width; without this the last
+       character's tail is clipped by overflow:hidden even when it fits. */
+    padding-right: 0.25em;
   }
 </style>
