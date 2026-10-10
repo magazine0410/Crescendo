@@ -86,7 +86,7 @@
     </div>
   </header>
 
-  <p class="summary">A fast, Eole-inspired music player for large local libraries.</p>
+  <p class="summary">A fast music player for large local libraries.</p>
 
   <section class="updates" aria-live="polite">
     <h2>Updates</h2>

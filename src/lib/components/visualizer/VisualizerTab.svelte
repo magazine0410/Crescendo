@@ -317,7 +317,7 @@
     activeAssets = [];
     activeAssetGrant = "";
     await setMode("bars");
-    error = `projectM could not start; switched to Bars (Eole). ${message}`;
+    error = `projectM could not start; switched to Bars. ${message}`;
   }
 
   /** A single preset failing keeps the renderer and its previous visual. */
@@ -376,7 +376,7 @@
         disabled={busy}
         onchange={selectVisualizer}
       >
-        <option value="bars">Bars (Eole)</option>
+        <option value="bars">Bars</option>
         <option value="en-d">MilkDrop: En D</option>
         {#if prefs.values.visualizer_mode === "projectm_preset"}
           <option value="current-preset">MilkDrop: Selected preset</option>
