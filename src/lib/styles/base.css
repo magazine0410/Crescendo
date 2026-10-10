@@ -13,7 +13,7 @@ body {
 body {
   background: var(--bg-main);
   color: var(--txt);
-  font-family: "Selawik", "Segoe UI", "Open Sans", sans-serif;
+  font-family: var(--font-family);
   font-size: var(--font-base);
   user-select: none;
   cursor: default;
@@ -39,6 +39,13 @@ button {
 
 .file-drag-plugin-enabled .file-draggable.file-drag-active:not(:disabled) {
   cursor: grabbing;
+}
+
+/* Form controls default to the system font; follow the UI font (and a custom
+   one from Settings > Appearance) while keeping each control's own size. */
+select,
+textarea {
+  font-family: inherit;
 }
 
 input {

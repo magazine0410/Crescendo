@@ -17,6 +17,7 @@
   import SearchHelp from "$lib/components/SearchHelp.svelte";
   import GroupingPluginMigration from "$lib/components/settings/GroupingPluginMigration.svelte";
   import FileDragNotice from "$lib/components/common/FileDragNotice.svelte";
+  import { applyAppearance } from "$lib/appearance";
 
   let settingsOpen = $state(false);
   let visualizerMounted = $state(false);
@@ -27,6 +28,7 @@
 
   onMount(async () => {
     await prefs.load();
+    applyAppearance(prefs.values);
     await plugins.refresh();
     ui.activeTab = prefs.values.default_tab;
     const layout = await prefs.getLayout();

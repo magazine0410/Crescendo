@@ -7,6 +7,8 @@
   import LastfmSettings from "./LastfmSettings.svelte";
   import SongHistory from "./SongHistory.svelte";
   import PluginsSettings from "./PluginsSettings.svelte";
+  import ColorPicker from "../common/ColorPicker.svelte";
+  import { applyAppearance, DEFAULT_FONT, THEME_COLORS, type ThemeColor } from "$lib/appearance";
 
   interface Props {
     open: boolean;
@@ -88,6 +90,29 @@
     } finally {
       replayGainSaving = false;
     }
+  }
+
+  /** Applied right away rather than from an effect, so components that read a
+      token while redrawing (the seek bar's waveform) see the new value. A color
+      equal to its Eole default is stored blank, i.e. "not customized". */
+  function setFont(value: string) {
+    prefs.set("font_family", value.trim());
+    applyAppearance(prefs.values);
+  }
+
+  function setThemeColor(color: ThemeColor, hex: string) {
+    prefs.set(color.pref, hex.toLowerCase() === color.default ? "" : hex);
+    applyAppearance(prefs.values);
+  }
+
+  const appearanceCustomized = $derived(
+    !!prefs.values.font_family || THEME_COLORS.some((c) => !!prefs.values[c.pref]),
+  );
+
+  function resetAppearance() {
+    if (prefs.values.font_family) prefs.set("font_family", "");
+    for (const c of THEME_COLORS) if (prefs.values[c.pref]) prefs.set(c.pref, "");
+    applyAppearance(prefs.values);
   }
 
   async function browseLibrary() {
@@ -208,6 +233,49 @@
           original level. Changes apply during playback.
         </p>
         {#if replayGainError}<p class="hint" role="alert">{replayGainError}</p>{/if}
+
+        <section class="appearance" aria-labelledby="appearance-heading">
+          <h3 id="appearance-heading">Appearance</h3>
+
+          <label for="uifont">Font</label>
+          <input
+            id="uifont"
+            type="text"
+            spellcheck="false"
+            placeholder={DEFAULT_FONT}
+            value={prefs.values.font_family}
+            onchange={(e) => setFont(e.currentTarget.value)}
+          />
+          <p class="hint">
+            The name of an installed font, such as Noto Sans. Leave blank to use
+            {DEFAULT_FONT}. Characters the font lacks, such as Japanese text, use the
+            default fonts instead.
+          </p>
+
+          <span class="label" id="colors-label">Colors</span>
+          <div class="colors" role="group" aria-labelledby="colors-label">
+            {#each THEME_COLORS as color (color.pref)}
+              <div class="color">
+                <ColorPicker
+                  value={prefs.values[color.pref] || color.default}
+                  resetTo={color.default}
+                  title={color.label}
+                  onchange={(hex) => setThemeColor(color, hex)}
+                />
+                <span>{color.label}</span>
+              </div>
+            {/each}
+          </div>
+          <p class="hint">
+            Click a swatch to change its color. Secondary text covers track artists
+            and lyrics; faded text covers labels, durations and inactive tabs. Dividers
+            and row highlights stay translucent white, so dark backgrounds work best.
+          </p>
+
+          <button class="btn" disabled={!appearanceCustomized} onclick={resetAppearance}>
+            Reset appearance to defaults
+          </button>
+        </section>
       </div>
 
       {:else if activeSection === "library"}
@@ -552,7 +620,8 @@
   .settings-panel {
     padding: 18px;
   }
-  label {
+  label,
+  .label {
     display: block;
     color: var(--txt-faded);
     margin-bottom: 4px;
@@ -585,6 +654,9 @@
     background: var(--bg-main);
     color: var(--txt);
   }
+  input::placeholder {
+    color: var(--txt-faded);
+  }
   input.short {
     width: 80px;
   }
@@ -610,6 +682,30 @@
   }
   label.check.disabled input {
     cursor: default;
+  }
+  .appearance {
+    margin-top: 4px;
+    padding-top: 16px;
+    border-top: 1px solid var(--hairline);
+  }
+  .appearance h3 {
+    color: var(--txt-full);
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .colors {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 16px;
+    margin: 4px 0 10px;
+  }
+  .color {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--txt);
+    font-size: 12px;
   }
   .pathrow {
     display: flex;

@@ -71,6 +71,7 @@
     ctx.clearRect(0, 0, el.width, el.height);
     if (data.length === 0) return;
     ctx.scale(dpr, dpr);
+    void prefs.values.color_txt_full; // redraw when Settings > Appearance changes the token
     const full = getComputedStyle(el).getPropertyValue("--txt-full").trim() || "#ffffff";
     ctx.fillStyle = full;
     const mid = h / 2;

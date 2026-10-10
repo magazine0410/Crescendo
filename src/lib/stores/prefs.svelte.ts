@@ -1,4 +1,5 @@
 import { isTauri, call, type PreferenceMutationResult } from "../api";
+import { THEME_COLORS } from "../appearance";
 
 /** Sidebar order of the playlist list. "manual" = the stored order. */
 export type PlaylistSort = "manual" | "name" | "count";
@@ -60,6 +61,19 @@ export interface Prefs {
       as it starts (right-click the shuffle button to set it). Off = the views
       stay where they were put. */
   auto_jump_now_playing: boolean;
+  /** Settings > Appearance font, e.g. `Noto Sans` (a comma list is allowed).
+      Blank = the Eole stack; a custom font goes in front of it (appearance.ts). */
+  font_family: string;
+  /** Settings > Appearance color overrides, `#rrggbb`. Blank = the Eole value
+      in tokens.css; see THEME_COLORS in appearance.ts. */
+  color_bg_main: string;
+  color_bg_panel: string;
+  color_txt: string;
+  color_txt_full: string;
+  color_txt_semifaded: string;
+  color_txt_faded: string;
+  color_accent: string;
+  color_selection: string;
 }
 
 const DEFAULTS: Prefs = {
@@ -87,6 +101,15 @@ const DEFAULTS: Prefs = {
   playlist_sort_locked: false,
   collections_placement: "above",
   auto_jump_now_playing: false,
+  font_family: "",
+  color_bg_main: "",
+  color_bg_panel: "",
+  color_txt: "",
+  color_txt_full: "",
+  color_txt_semifaded: "",
+  color_txt_faded: "",
+  color_accent: "",
+  color_selection: "",
 };
 
 /** `%title_display%` -> `%title%` for the three retired _display tags. */
@@ -163,6 +186,10 @@ class PrefsStore {
       v.collections_placement = placement;
     if (raw.auto_jump_now_playing)
       v.auto_jump_now_playing = raw.auto_jump_now_playing === "true";
+    if (raw.font_family) v.font_family = raw.font_family;
+    for (const { pref } of THEME_COLORS) {
+      if (/^#[0-9a-f]{6}$/i.test(raw[pref] ?? "")) v[pref] = raw[pref];
+    }
     this.values = v;
     this.loaded = true;
   }

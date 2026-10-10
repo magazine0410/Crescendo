@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { clamp, hexToHsv, hsvToHex, type Hsv } from "$lib/color";
 
   interface Props {
@@ -27,6 +28,7 @@
     onopenchange?.(v);
   }
   let popEl: HTMLDivElement | null = $state(null);
+  let popoverEl: HTMLDivElement | null = $state(null);
   let svEl: HTMLDivElement | null = $state(null);
   let hueEl: HTMLDivElement | null = $state(null);
 
@@ -51,6 +53,35 @@
   function toggle() {
     if (!open) seedFrom(value);
     setOpen(!open);
+    if (open) tick().then(place);
+  }
+
+  // The popover opens below the swatch, right-aligned to it. Inside a scroll
+  // area (the settings dialog) that can be cut off, so it flips upward or to
+  // the swatch's left edge when the nearest clipping ancestor lacks the room.
+  let above = $state(false);
+  let alignLeft = $state(false);
+  function isVisibleOverflow(el: HTMLElement): boolean {
+    const style = getComputedStyle(el);
+    return style.overflowX === "visible" && style.overflowY === "visible";
+  }
+  function place() {
+    if (!popEl || !popoverEl) return;
+    const swatch = popEl.getBoundingClientRect();
+    let top = 0;
+    let bottom = window.innerHeight;
+    let left = 0;
+    let clip = popEl.parentElement;
+    while (clip && isVisibleOverflow(clip)) clip = clip.parentElement;
+    if (clip) {
+      const box = clip.getBoundingClientRect();
+      top = Math.max(top, box.top);
+      bottom = Math.min(bottom, box.bottom);
+      left = Math.max(left, box.left);
+    }
+    const height = popoverEl.offsetHeight + 6;
+    above = swatch.bottom + height > bottom && swatch.top - top > bottom - swatch.bottom;
+    alignLeft = swatch.right - popoverEl.offsetWidth < left;
   }
 
   function emit() {
@@ -136,7 +167,7 @@
   ></button>
 
   {#if open}
-    <div class="popover">
+    <div class="popover" class:above class:left={alignLeft} bind:this={popoverEl}>
       <div
         class="sv"
         role="slider"
@@ -213,6 +244,14 @@
     gap: 10px;
     z-index: 200;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  }
+  .popover.above {
+    top: auto;
+    bottom: calc(100% + 6px);
+  }
+  .popover.left {
+    right: auto;
+    left: 0;
   }
   .sv {
     position: relative;

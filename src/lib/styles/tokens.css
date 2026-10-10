@@ -35,4 +35,6 @@
   --header-h: 36px;   /* shared height of the per-panel column headers so their
                          bottom hairlines line up across the three columns */
   --font-base: 12px;
+  --font-default: "Selawik", "Segoe UI", "Open Sans", sans-serif;
+  --font-family: var(--font-default);  /* Settings > Appearance prepends a custom font */
 }
