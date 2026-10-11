@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use lofty::config::ParseOptions;
 use lofty::file::{FileType, TaggedFile, TaggedFileExt};
 use lofty::flac::FlacFile;
@@ -134,6 +134,18 @@ pub fn read_scrobble_meta(path: &Path) -> Result<TrackMeta> {
 }
 
 fn read_meta_inner(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
+    without_panics(path, || parse_meta(path, filename_fallback))
+}
+
+/// Runs a tag parser, turning a panic into an ordinary error. A crafted or
+/// corrupt file can make lofty panic; it should then fall back like any other
+/// unreadable file instead of aborting the whole scan (or the cover request).
+pub(crate) fn without_panics<T>(path: &Path, parse: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse))
+        .unwrap_or_else(|_| Err(anyhow!("tag parser panicked on {}", path.display())))
+}
+
+fn parse_meta(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
     // Relaxed parsing: skip malformed tag items (broken ID3 timestamps and
     // the like are common in the wild) instead of rejecting the whole file.
     let opts = ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
@@ -299,4 +311,24 @@ pub fn search_blob(meta: &TrackMeta) -> String {
         }
     }
     blob
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_panics;
+    use std::path::Path;
+
+    #[test]
+    fn parser_panic_becomes_an_error() {
+        let result: anyhow::Result<()> =
+            without_panics(Path::new("/music/bad.flac"), || panic!("malformed frame"));
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("panicked"), "{message}");
+        assert!(message.contains("bad.flac"), "{message}");
+    }
+
+    #[test]
+    fn parser_result_passes_through() {
+        assert_eq!(without_panics(Path::new("ok.flac"), || Ok(7)).unwrap(), 7);
+    }
 }

@@ -6,6 +6,7 @@
 //! thumbnail directory keyed by album id.
 
 use crate::db::Db;
+use crate::scanner::tags::without_panics;
 use anyhow::{anyhow, Result};
 use rusqlite::OptionalExtension;
 use std::collections::HashSet;
@@ -414,6 +415,17 @@ fn folder_images(dir: &Path) -> Vec<PathBuf> {
 }
 
 pub fn embedded_art(path: &Path) -> Option<Vec<u8>> {
+    // A file that makes lofty panic is treated as having no embedded cover.
+    match without_panics(path, || Ok(read_embedded_art(path))) {
+        Ok(art) => art,
+        Err(e) => {
+            log::warn!("embedded cover read failed: {e}");
+            None
+        }
+    }
+}
+
+fn read_embedded_art(path: &Path) -> Option<Vec<u8>> {
     let file = lofty::read_from_path(path).ok()?;
     use lofty::file::TaggedFileExt;
     let tag = file.primary_tag().or_else(|| file.first_tag())?;
