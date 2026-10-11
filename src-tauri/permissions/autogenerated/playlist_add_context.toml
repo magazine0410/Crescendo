@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-playlist-add-context"
+description = "Enables the playlist_add_context command without any pre-configured scope."
+commands.allow = ["playlist_add_context"]
+
+[[permission]]
+identifier = "deny-playlist-add-context"
+description = "Denies the playlist_add_context command without any pre-configured scope."
+commands.deny = ["playlist_add_context"]

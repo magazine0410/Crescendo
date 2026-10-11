@@ -56,6 +56,7 @@
     "allow-playlist-tracks-multi",
     "allow-track-playlist-ids",
     "allow-playlist-add-tracks",
+    "allow-playlist-add-context",
     "allow-playlist-remove-tracks",
     "allow-playlist-reorder",
     "allow-playlist-add-paths",

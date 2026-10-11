@@ -62,6 +62,7 @@ const COMMANDS: &[&str] = &[
     "playlist_tracks_multi",
     "track_playlist_ids",
     "playlist_add_tracks",
+    "playlist_add_context",
     "playlist_remove_tracks",
     "playlist_reorder",
     "playlist_add_paths",

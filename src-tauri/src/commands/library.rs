@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use crescendo_core::model::{
-    Album, BrowseMode, BrowseValue, LibraryStats, Track, TrackGroup, TrackSort,
+    Album, BrowseMode, BrowseValue, LibraryStats, PlayContext, Track, TrackGroup, TrackSort,
 };
 use crescendo_core::plugins::StaleProjection;
 use crescendo_core::scanner::{scan, ScanOptions};
@@ -44,6 +44,41 @@ pub(crate) fn projection_error(error: anyhow::Error) -> ProjectionCommandError {
             message: format!("{error:#}"),
         }
     }
+}
+
+/// Resolve a context descriptor to concrete track ids — under the projection
+/// guard, with the same plan and the same SQL the view used — so the queue or
+/// a playlist holds exactly the tracks the context names rather than an
+/// approximation made in the frontend by expanding albums.
+pub(crate) fn resolve_context(
+    state: &AppState,
+    ctx: &PlayContext,
+) -> Result<Vec<i64>, ProjectionCommandError> {
+    let expected_revision = match ctx {
+        PlayContext::LibraryView {
+            projection_revision,
+            ..
+        }
+        | PlayContext::ValueTracks {
+            projection_revision,
+            ..
+        } => Some(*projection_revision),
+        _ => None,
+    };
+    let projection = state
+        .plugins
+        .projection(expected_revision)
+        .map_err(projection_error)?;
+    let plan = match ctx {
+        PlayContext::ValueTracks { mode, .. } => projection.facet_plan(mode),
+        _ => None,
+    };
+    state
+        .db
+        .resolve_context_with_projection(ctx, plan.as_ref(), projection.prefer_romanized())
+        .map_err(|error| ProjectionCommandError::Operation {
+            message: error.to_string(),
+        })
 }
 
 fn operation_error(error: impl std::fmt::Display) -> ProjectionCommandError {

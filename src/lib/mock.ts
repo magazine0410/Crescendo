@@ -463,6 +463,29 @@ function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
   );
 }
 
+/** The track ids a context names, resolved exactly like the view does —
+    matching the selected values and the search — or an album's tracks. */
+function resolveContext(raw: unknown): number[] {
+  const ctx = raw as {
+    type?: string;
+    id?: number;
+    mode?: WireMode;
+    values?: string[];
+    query?: string | null;
+    projection_revision?: number;
+  };
+  if (
+    (ctx.type === "library_view" || ctx.type === "value_tracks") &&
+    ctx.projection_revision !== projectionRevision
+  ) {
+    throw { kind: "stale_projection", current_revision: projectionRevision };
+  }
+  if (ctx.type === "album") return tracks.filter((t) => t.album_id === ctx.id).map((t) => t.id);
+  return tracks
+    .filter((t) => trackListMatch(t, { query: ctx.query, values: ctx.values, mode: ctx.mode }))
+    .map((t) => t.id);
+}
+
 function requireProjection(args: Record<string, unknown>) {
   if (args.projectionRevision !== projectionRevision) {
     throw { kind: "stale_projection", current_revision: projectionRevision };
@@ -1055,26 +1078,14 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return undefined as T;
     }
     case "queue_add_context": {
-      const ctx = args.ctx as {
-        type?: string;
-        mode?: WireMode;
-        values?: string[];
-        query?: string | null;
-        projection_revision?: number;
-      };
-      if (
-        (ctx.type === "library_view" || ctx.type === "value_tracks") &&
-        ctx.projection_revision !== projectionRevision
-      ) {
-        throw { kind: "stale_projection", current_revision: projectionRevision };
-      }
-      // Resolve exactly like the view does — matching the selected values and
-      // the search — rather than expanding whole albums.
-      const matched = tracks.filter((t) =>
-        trackListMatch(t, { query: ctx.query, values: ctx.values, mode: ctx.mode }),
-      );
-      queue.push(...matched.map((t) => t.id));
-      return matched.length as T;
+      const ids = resolveContext(args.ctx);
+      queue.push(...ids);
+      return ids.length as T;
+    }
+    case "playlist_add_context": {
+      const ids = resolveContext(args.ctx);
+      await mockCall("playlist_add_tracks", { id: args.id, trackIds: ids });
+      return ids.length as T;
     }
     case "player_jump_to":
       return undefined as T;

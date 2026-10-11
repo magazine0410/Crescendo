@@ -209,6 +209,7 @@ pub fn run() {
             commands::playlists::playlist_tracks_multi,
             commands::playlists::track_playlist_ids,
             commands::playlists::playlist_add_tracks,
+            commands::playlists::playlist_add_context,
             commands::playlists::playlist_remove_tracks,
             commands::playlists::playlist_reorder,
             commands::playlists::playlist_add_paths,

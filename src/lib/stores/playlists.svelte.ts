@@ -3,6 +3,7 @@ import {
   type CollectionInfo,
   type DropImportResult,
   type M3uImportResult,
+  type PlayContext,
   type PlaylistInfo,
   type PlaylistTracks,
   type Track,
@@ -340,6 +341,7 @@ class PlaylistsStore {
   async create(name: string): Promise<number> {
     const id = await call<number>("playlist_create", { name });
     await this.refresh();
+    await this.placeSorted(id);
     await this.select(id);
     return id;
   }
@@ -347,6 +349,25 @@ class PlaylistsStore {
   async rename(id: number, name: string) {
     await call("playlist_rename", { id, name });
     await this.refresh();
+    await this.placeSorted(id);
+  }
+
+  /** Move one playlist to where the chosen sort puts it — before the first
+      playlist that sorts after it — leaving every other playlist in place.
+      The backend appends new playlists to the stored order, so without this
+      a playlist made (or renamed) under a sort would sit at the bottom until
+      the sort was applied again. Under a manual order nothing moves. */
+  private async placeSorted(id: number) {
+    const key = prefs.values.playlist_sort;
+    if (key === "manual") return;
+    const playlist = this.list.find((p) => p.id === id);
+    if (!playlist) return;
+    const cmp = comparePlaylists(key);
+    const rest = this.list.filter((p) => p.id !== id);
+    let at = rest.findIndex((p) => cmp(playlist, p) < 0);
+    if (at < 0) at = rest.length;
+    rest.splice(at, 0, playlist);
+    if (rest.some((p, i) => p !== this.list[i])) await this.persistOrder(rest);
   }
 
   async remove(id: number) {
@@ -385,6 +406,14 @@ class PlaylistsStore {
 
   async addTracks(id: number, trackIds: number[]) {
     await call("playlist_add_tracks", { id, trackIds });
+    await this.refresh();
+  }
+
+  /** Append every track a context names (an album, or a filter-panel value).
+      The backend resolves it, so a stale projection is rejected the same way
+      it is for playback and the queue. */
+  async addContext(id: number, ctx: PlayContext) {
+    await call<number>("playlist_add_context", { id, ctx });
     await this.refresh();
   }
 

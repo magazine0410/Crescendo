@@ -9,7 +9,12 @@
   import Icon from "../common/Icon.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
-  import { addToPlaylistItem, openTrackInFileManagerItem, tagEditItem } from "$lib/menu";
+  import {
+    addContextToPlaylistItem,
+    addToPlaylistItem,
+    openTrackInFileManagerItem,
+    tagEditItem,
+  } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import { tick, untrack } from "svelte";
 
@@ -180,6 +185,22 @@
     ];
     openContextMenu(e, items);
   }
+
+  /** The album separator's menu: the whole album, as on the album wall. */
+  function separatorMenu(e: MouseEvent, albumId: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (library.interactionBlocked) return;
+    const ctx: PlayContext = { type: "album", id: albumId };
+    const items: MenuItem[] = [
+      { label: "Play", action: () => player.playContext(ctx, 0) },
+      { label: "Add to queue", action: () => queue.addContext(ctx) },
+      { label: "View album", action: () => library.openAlbumById(albumId) },
+      { separator: true, label: "" },
+      addContextToPlaylistItem(ctx),
+    ];
+    openContextMenu(e, items);
+  }
 </script>
 
 <section class="view">
@@ -319,6 +340,7 @@
         disabled={library.interactionBlocked}
         title={cell.sep.album ?? "?"}
         onclick={() => cell.albumId != null && library.openAlbumById(cell.albumId)}
+        oncontextmenu={(e) => cell.albumId != null && separatorMenu(e, cell.albumId)}
       >
         {cell.sep.album ?? "?"}
       </button>

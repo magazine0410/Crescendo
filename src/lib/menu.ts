@@ -1,5 +1,5 @@
 import { playlists } from "./stores/playlists.svelte";
-import { call, isTauri, type Track } from "./api";
+import { call, isTauri, type PlayContext, type Track } from "./api";
 import { library } from "./stores/library.svelte";
 import type { MenuItem } from "./components/common/ContextMenu.svelte";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -62,4 +62,24 @@ export function addToPlaylistItem(
         : { label: p.name, action: () => add(p.id) },
     ),
   };
+}
+
+/**
+ * "Add to playlist" for everything a context names — an album, or a
+ * filter-panel value with the current search applied. The backend resolves
+ * the context, so a view that changed underneath (stale projection) is
+ * recovered the same way it is for playback and the queue.
+ */
+export function addContextToPlaylistItem(ctx: PlayContext): MenuItem {
+  return addToPlaylistItem(async (pid) => {
+    try {
+      await playlists.addContext(pid, ctx);
+    } catch (reason) {
+      if (await library.recoverStaleProjection(reason)) {
+        library.notice = "Library view changed; try again";
+        return;
+      }
+      throw reason;
+    }
+  });
 }

@@ -2,12 +2,11 @@
   import { library } from "$lib/stores/library.svelte";
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
-  import { playlists } from "$lib/stores/playlists.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { artUrl, call, type Album, type Track } from "$lib/api";
   import { COVER_MISSING } from "$lib/icons";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
-  import { addToPlaylistItem, openInFileManager } from "$lib/menu";
+  import { addContextToPlaylistItem, openInFileManager } from "$lib/menu";
   import VirtualGrid from "$lib/virtual/VirtualGrid.svelte";
   import { displayName } from "$lib/format";
   import { fileDrag } from "$lib/fileDrag";
@@ -49,10 +48,7 @@
         },
       },
       { separator: true, label: "" },
-      addToPlaylistItem(async (pid) => {
-        const tracks = await call<Track[]>("album_tracks", { albumId: a.id });
-        await playlists.addTracks(pid, tracks.map((t) => t.id));
-      }),
+      addContextToPlaylistItem({ type: "album", id: a.id }),
     ];
     openContextMenu(e, items);
   }

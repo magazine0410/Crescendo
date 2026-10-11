@@ -1,9 +1,10 @@
+use crate::commands::library::{resolve_context, ProjectionCommandError};
 use crate::state::AppState;
 use crescendo_core::db::collections::CollectionInfo;
 use crescendo_core::db::playlists::{PlaylistInfo, PlaylistTracks};
 use crescendo_core::import::DropImportResult;
 use crescendo_core::m3u::M3uImportResult;
-use crescendo_core::model::Track;
+use crescendo_core::model::{PlayContext, Track};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 
@@ -102,6 +103,27 @@ pub async fn playlist_add_tracks(
         .map_err(|e| e.to_string())?;
     let _ = app.emit("playlist:changed", id);
     Ok(())
+}
+
+/// Append every track a context names (an album, or a filter-panel value) to
+/// a playlist. Resolved here like `queue_add_context`, so the id list never
+/// crosses IPC and a stale projection is rejected. Returns how many tracks the
+/// context resolved to; the playlist itself skips those it already holds.
+#[tauri::command]
+pub async fn playlist_add_context(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    ctx: PlayContext,
+) -> Result<usize, ProjectionCommandError> {
+    let track_ids = resolve_context(&state, &ctx)?;
+    state.db.playlist_add_tracks(id, &track_ids).map_err(|e| {
+        ProjectionCommandError::Operation {
+            message: e.to_string(),
+        }
+    })?;
+    let _ = app.emit("playlist:changed", id);
+    Ok(track_ids.len())
 }
 
 #[tauri::command]

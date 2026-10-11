@@ -5,6 +5,7 @@
   import { type FileDragSource, type PlayContext } from "$lib/api";
   import { fileDrag } from "$lib/fileDrag";
   import { openContextMenu } from "../common/ContextMenu.svelte";
+  import { addContextToPlaylistItem } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import {
     displayName,
@@ -105,6 +106,8 @@
     openContextMenu(e, [
       { label: "Play", action: () => playValue(value) },
       { label: "Add to queue", action: () => queueValue(value) },
+      { separator: true, label: "" },
+      addContextToPlaylistItem(valueContext(value)),
     ]);
   }
 </script>
