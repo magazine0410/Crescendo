@@ -297,24 +297,21 @@ impl Compiler {
                 self.sql.push_str(&format!("regexp(?, {col})"));
                 self.params.push(Value::from(pattern));
             }
-            Matcher::AnyOf(items) => self.matcher_list(col, items, " OR ", "0"),
-            Matcher::AllOf(items) => self.matcher_list(col, items, " AND ", "1"),
-        }
-    }
-
-    fn matcher_list(&mut self, col: &str, items: &[Matcher], joiner: &str, empty: &str) {
-        if items.is_empty() {
-            self.sql.push_str(empty);
-            return;
-        }
-        self.sql.push('(');
-        for (i, item) in items.iter().enumerate() {
-            if i > 0 {
-                self.sql.push_str(joiner);
+            Matcher::AnyOf(items) => {
+                if items.is_empty() {
+                    self.sql.push('0');
+                    return;
+                }
+                self.sql.push('(');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.sql.push_str(" OR ");
+                    }
+                    self.matcher(col, item);
+                }
+                self.sql.push(')');
             }
-            self.matcher(col, item);
         }
-        self.sql.push(')');
     }
 
     fn num_operand(&mut self, op: &NumOperand) {

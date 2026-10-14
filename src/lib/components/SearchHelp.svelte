@@ -87,7 +87,7 @@
         ["&(electro, !ambient)", "AND of several conditions."],
         ["|(mangum, neutral milk)", "OR of several conditions."],
         ["!genre=pop", "NOT — negates any condition."],
-        ["genre=|(jazz, soul)", "Value list: the tag may match any of the values."],
+        ["genre=jazz|soul|\"pop rock\"", "Alternatives: the tag may match any of the values. A | inside quotes is part of the value."],
         ["&(artist=zun, #(length > 4:00))", "Everything nests freely."],
       ],
     },

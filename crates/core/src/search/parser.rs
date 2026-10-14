@@ -279,12 +279,23 @@ impl Parser {
         }
     }
 
-    /// Right-hand side of a tag match.
+    /// Right-hand side of a tag match: one value, or alternatives joined by `|`
+    /// (`genre=jazz|"pop rock"`). A `|` inside quotes or a regex is part of that
+    /// value, and a space ends the list, so `a |(b, c)` stays two terms.
     fn value(&mut self) -> Result<Matcher, ParseError> {
-        self.nested(Self::value_inner)
+        let first = self.single_value()?;
+        if self.peek() != Some('|') {
+            return Ok(first);
+        }
+        let mut items = vec![first];
+        while self.peek() == Some('|') {
+            self.bump();
+            items.push(self.single_value()?);
+        }
+        Ok(Matcher::AnyOf(items))
     }
 
-    fn value_inner(&mut self) -> Result<Matcher, ParseError> {
+    fn single_value(&mut self) -> Result<Matcher, ParseError> {
         self.skip_ws();
         match self.peek() {
             Some('"') => {
@@ -301,17 +312,9 @@ impl Parser {
                     case_sensitive: flags.contains('c'),
                 })
             }
-            Some('|') if self.peek_at(1) == Some('(') => {
-                self.pos += 2;
-                Ok(Matcher::AnyOf(self.value_list()?))
-            }
-            Some('&') if self.peek_at(1) == Some('(') => {
-                self.pos += 2;
-                Ok(Matcher::AllOf(self.value_list()?))
-            }
             Some('!') => self.err("'!' is not valid here; use tag!=value"),
             _ => {
-                let w = self.bareword(&[])?;
+                let w = self.bareword(&['|'])?;
                 if w.is_empty() {
                     self.err("expected a value")
                 } else {
@@ -319,31 +322,6 @@ impl Parser {
                 }
             }
         }
-    }
-
-    fn value_list(&mut self) -> Result<Vec<Matcher>, ParseError> {
-        let mut items = Vec::new();
-        loop {
-            self.skip_ws();
-            if self.peek() == Some(')') {
-                self.bump();
-                break;
-            }
-            items.push(self.value()?);
-            self.skip_ws();
-            match self.peek() {
-                Some(',') => {
-                    self.bump();
-                }
-                Some(')') => {
-                    self.bump();
-                    break;
-                }
-                None => return self.err("unclosed '('"),
-                _ => return self.err("expected ',' or ')'"),
-            }
-        }
-        Ok(items)
     }
 
     /// Word ending at whitespace, ',', ')' or any of `extra_stops`.

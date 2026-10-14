@@ -151,7 +151,48 @@ fn boolean_ops() {
     let (_d, db) = test_db();
     assert_eq!(count(&db, "|(parker, misery)"), 2);
     assert_eq!(count(&db, "&(genre=rock, artist=maroon)"), 1);
-    assert_eq!(count(&db, "genre=|(jazz, soundtrack)"), 2);
+}
+
+#[test]
+fn pipe_separated_values_match_any() {
+    use search::{Matcher, Node};
+    let (_d, db) = test_db();
+    assert_eq!(count(&db, "genre=jazz|soundtrack"), 2);
+    assert_eq!(count(&db, "genre=jazz|soundtrack|doujin"), 3);
+    assert_eq!(count(&db, "genre=jazz|\"pop rock\""), 2);
+    assert_eq!(count(&db, "aa=parker|zun"), 2);
+    assert_eq!(count(&db, "album=東方|nausicaä"), 2);
+    assert_eq!(count(&db, "genre!=jazz|soundtrack"), 2); // neither value
+    assert_eq!(count(&db, "genre=/^jazz$|^doujin$/"), 2); // regex keeps its own |
+                                                          // A space ends the list, so the next term is AND-ed as usual.
+    assert_eq!(count(&db, "genre=jazz|soundtrack parker"), 1);
+    assert_eq!(count(&db, "genre=jazz |(parker, misery)"), 1);
+    // Inside quotes a | is a literal character of the value.
+    assert_eq!(count(&db, "genre=\"jazz|soundtrack\""), 0);
+    assert_eq!(
+        search::parse("title=nice|\"a|b\"").unwrap(),
+        Node::Tag {
+            tag: "title".into(),
+            matcher: Matcher::AnyOf(vec![
+                Matcher::Contains("nice".into()),
+                Matcher::Phrase {
+                    value: "a|b".into(),
+                    case_sensitive: false,
+                },
+            ]),
+            negated: false,
+        }
+    );
+    // The old value-list forms and empty alternatives are rejected.
+    for q in [
+        "genre=|(jazz, soundtrack)",
+        "genre=&(jazz, soundtrack)",
+        "genre=jazz|",
+        "genre=|jazz",
+        "genre=jazz||soul",
+    ] {
+        assert!(search::compile(q).is_err(), "{q}");
+    }
 }
 
 #[test]
@@ -440,7 +481,6 @@ fn excessive_search_nesting_and_size_are_rejected_without_overflow() {
             for query in [
                 "!".repeat(3000) + "a",
                 "&(".repeat(1000) + "日本語" + &")".repeat(1000),
-                "artist=".to_owned() + &"|(".repeat(1000) + "日本語" + &")".repeat(1000),
                 "語".repeat(6000),
             ] {
                 assert!(search::compile(&query).is_err());
