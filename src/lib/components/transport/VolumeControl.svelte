@@ -15,11 +15,25 @@
     return "volume4";
   });
 
+  // Value shown above the cursor while scrolling; hidden ~1 s after the last wheel step.
+  let wheelTip: { x: number; y: number } | null = $state(null);
+  let wheelTipTimer: ReturnType<typeof setTimeout> | undefined;
+
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     const step = e.deltaY < 0 ? 0.05 : -0.05;
     player.setVolume(player.volume + step);
+    // The open popover already shows the number.
+    if (open || !popEl) return;
+    // Relative to .volume: position: fixed would resolve against the bottom bar,
+    // whose backdrop-filter makes it the containing block.
+    const r = popEl.getBoundingClientRect();
+    wheelTip = { x: e.clientX - r.left, y: e.clientY - r.top };
+    clearTimeout(wheelTipTimer);
+    wheelTipTimer = setTimeout(() => (wheelTip = null), 1000);
   }
+
+  $effect(() => () => clearTimeout(wheelTipTimer));
 
   function toggleMute(e: MouseEvent) {
     e.preventDefault();
@@ -88,6 +102,11 @@
       <div class="pct">{Math.round((player.muted ? 0 : player.volume) * 100)}</div>
     </div>
   {/if}
+  {#if wheelTip && !open}
+    <div class="wheel-tip" style:left={`${wheelTip.x}px`} style:top={`${wheelTip.y}px`}>
+      {Math.round((player.muted ? 0 : player.volume) * 100)}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -142,5 +161,17 @@
   .pct {
     color: var(--txt-faded);
     font-size: 10px;
+  }
+  .wheel-tip {
+    position: absolute;
+    transform: translate(-50%, calc(-100% - 12px));
+    background: var(--bg-popup);
+    border: 1px solid var(--popup-border);
+    color: var(--txt-full);
+    font-size: 11px;
+    padding: 2px 6px;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 100;
   }
 </style>
