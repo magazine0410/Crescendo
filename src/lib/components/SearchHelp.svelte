@@ -88,6 +88,7 @@
         ["|(mangum, neutral milk)", "OR of several conditions."],
         ["!genre=pop", "NOT — negates any condition."],
         ["genre=jazz|soul|\"pop rock\"", "Alternatives: the tag may match any of the values. A | inside quotes is part of the value."],
+        ["artist=zun&\"beat mario\"", "The tag must match all of the values. & binds tighter than |, and a & inside quotes (\"Simon & Garfunkel\") is part of the value."],
         ["&(artist=zun, #(length > 4:00))", "Everything nests freely."],
       ],
     },

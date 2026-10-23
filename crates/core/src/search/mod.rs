@@ -8,8 +8,9 @@
 //!   case-sensitive)
 //! - regex: `album=/shadow/`, `/Boa/c` (case-insensitive unless `c`)
 //! - boolean: `&(a, b)`, `|(a, b)`, `!term`
-//! - alternatives: `genre=jazz|soul|"pop rock"` (the tag matches any of the
-//!   values; a `|` inside quotes or a regex is literal)
+//! - value lists: `genre=jazz|soul|"pop rock"` (the tag matches any of the
+//!   values), `artist=zun&"beat mario"` (it matches all of them); `&` binds
+//!   tighter than `|`, and either symbol inside quotes or a regex is literal
 //! - numeric: `#(year >= 1990)`, `#(10 <= track < 100)`, `#(length > 2:00)`,
 //!   or without the `#( )` wrapper: `plays>2`, `year>=1990`
 //! - plays: `plays>2` / `plays=3` / `plays<3` over the per-track play counter.
@@ -55,6 +56,8 @@ pub enum Matcher {
     },
     /// Alternatives written `a|b`: the tag matches any of them.
     AnyOf(Vec<Matcher>),
+    /// Values written `a&b`: the tag matches all of them.
+    AllOf(Vec<Matcher>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

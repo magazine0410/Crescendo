@@ -196,6 +196,48 @@ fn pipe_separated_values_match_any() {
 }
 
 #[test]
+fn ampersand_separated_values_match_all() {
+    use search::{Matcher, Node};
+    let (_d, db) = test_db();
+    assert_eq!(count(&db, "artist=charlie&parker"), 1);
+    assert_eq!(count(&db, "artist=charlie&maroon"), 0);
+    assert_eq!(count(&db, "genre=pop&rock"), 1);
+    assert_eq!(count(&db, "album=東方&風神"), 1);
+    assert_eq!(count(&db, "genre!=pop&rock"), 3); // not both values
+                                                  // & binds tighter than |: (joe & hisaishi) | zun, then zun | (joe & parker).
+    assert_eq!(count(&db, "artist=joe&hisaishi|zun"), 2);
+    assert_eq!(count(&db, "artist=zun|joe&parker"), 1);
+    // Inside quotes or a regex a & is a literal character of the value.
+    assert_eq!(count(&db, "genre=\"pop&rock\""), 0);
+    assert_eq!(count(&db, "genre=/pop&rock/"), 0);
+    assert_eq!(
+        search::parse("artist=\"Simon & Garfunkel\"&live|zun").unwrap(),
+        Node::Tag {
+            tag: "artist".into(),
+            matcher: Matcher::AnyOf(vec![
+                Matcher::AllOf(vec![
+                    Matcher::Phrase {
+                        value: "Simon & Garfunkel".into(),
+                        case_sensitive: false,
+                    },
+                    Matcher::Contains("live".into()),
+                ]),
+                Matcher::Contains("zun".into()),
+            ]),
+            negated: false,
+        }
+    );
+    for q in [
+        "genre=jazz&",
+        "genre=&jazz",
+        "genre=pop&&rock",
+        "genre=pop&|rock",
+    ] {
+        assert!(search::compile(q).is_err(), "{q}");
+    }
+}
+
+#[test]
 fn numeric_and_time() {
     let (_d, db) = test_db();
     assert_eq!(count(&db, "#(year >= 2000)"), 2);

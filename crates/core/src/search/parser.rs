@@ -279,20 +279,35 @@ impl Parser {
         }
     }
 
-    /// Right-hand side of a tag match: one value, or alternatives joined by `|`
-    /// (`genre=jazz|"pop rock"`). A `|` inside quotes or a regex is part of that
-    /// value, and a space ends the list, so `a |(b, c)` stays two terms.
+    /// Right-hand side of a tag match: one value, or values joined by `|` (any
+    /// of them) and `&` (all of them), with `&` binding tighter, so
+    /// `a|b&c` is `a` or both `b` and `c`. A `|` or `&` inside quotes or a
+    /// regex is part of that value, and a space ends the list, so
+    /// `a |(b, c)` stays two terms.
     fn value(&mut self) -> Result<Matcher, ParseError> {
-        let first = self.single_value()?;
+        let first = self.all_of_values()?;
         if self.peek() != Some('|') {
             return Ok(first);
         }
         let mut items = vec![first];
         while self.peek() == Some('|') {
             self.bump();
-            items.push(self.single_value()?);
+            items.push(self.all_of_values()?);
         }
         Ok(Matcher::AnyOf(items))
+    }
+
+    fn all_of_values(&mut self) -> Result<Matcher, ParseError> {
+        let first = self.single_value()?;
+        if self.peek() != Some('&') {
+            return Ok(first);
+        }
+        let mut items = vec![first];
+        while self.peek() == Some('&') {
+            self.bump();
+            items.push(self.single_value()?);
+        }
+        Ok(Matcher::AllOf(items))
     }
 
     fn single_value(&mut self) -> Result<Matcher, ParseError> {
@@ -314,7 +329,7 @@ impl Parser {
             }
             Some('!') => self.err("'!' is not valid here; use tag!=value"),
             _ => {
-                let w = self.bareword(&['|'])?;
+                let w = self.bareword(&['|', '&'])?;
                 if w.is_empty() {
                     self.err("expected a value")
                 } else {
