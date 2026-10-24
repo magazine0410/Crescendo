@@ -3,6 +3,7 @@
 //! this returns None (no key, offline, or no result).
 
 use crate::db::Db;
+pub mod credits;
 pub mod scrobble;
 use anyhow::Result;
 use serde::Serialize;
@@ -66,31 +67,9 @@ pub fn artist_info(db: &Db, api_key: &str, artist: &str) -> Result<Option<Artist
 }
 
 pub fn album_info(db: &Db, api_key: &str, artist: &str, album: &str) -> Result<Option<AlbumInfo>> {
-    if api_key.is_empty() || artist.is_empty() || album.is_empty() {
+    let Some(a) = album_json(db, api_key, artist, album)? else {
         return Ok(None);
-    }
-    let cache_key = format!(
-        "album\u{1f}{}\u{1f}{}",
-        artist.to_lowercase(),
-        album.to_lowercase()
-    );
-    let json = match cached_or_fetch(
-        db,
-        &cache_key,
-        api_key,
-        &[
-            ("method", "album.getinfo"),
-            ("artist", artist),
-            ("album", album),
-        ],
-    )? {
-        Some(j) => j,
-        None => return Ok(None),
     };
-    let a = &json["album"];
-    if a.is_null() {
-        return Ok(None);
-    }
     Ok(Some(AlbumInfo {
         name: str_of(&a["name"]).unwrap_or_else(|| album.to_string()),
         artist: str_of(&a["artist"]).unwrap_or_else(|| artist.to_string()),
@@ -101,6 +80,32 @@ pub fn album_info(db: &Db, api_key: &str, artist: &str, album: &str) -> Result<O
         tags: names_of(&a["tags"]["tag"]),
         url: str_of(&a["url"]),
     }))
+}
+
+/// The `album` object of an album.getInfo response, or None when Last.fm has
+/// no such album under that artist.
+fn album_json(db: &Db, api_key: &str, artist: &str, album: &str) -> Result<Option<Value>> {
+    if api_key.is_empty() || artist.is_empty() || album.is_empty() {
+        return Ok(None);
+    }
+    let cache_key = format!(
+        "album\u{1f}{}\u{1f}{}",
+        artist.to_lowercase(),
+        album.to_lowercase()
+    );
+    let json = cached_or_fetch(
+        db,
+        &cache_key,
+        api_key,
+        &[
+            ("method", "album.getinfo"),
+            ("artist", artist),
+            ("album", album),
+        ],
+    )?;
+    Ok(json
+        .and_then(|mut j| j.get_mut("album").map(Value::take))
+        .filter(|a| !a.is_null()))
 }
 
 /// Quick key check for the settings dialog "Test key" button.

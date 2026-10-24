@@ -234,6 +234,7 @@ pub fn run() {
             commands::misc::waveform_get,
             commands::misc::lastfm_artist_info,
             commands::misc::lastfm_album_info,
+            commands::misc::lastfm_credits,
             commands::misc::lastfm_test_key,
             commands::lastfm::lastfm_status,
             commands::lastfm::lastfm_connect,

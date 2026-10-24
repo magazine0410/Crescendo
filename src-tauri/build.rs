@@ -87,6 +87,7 @@ const COMMANDS: &[&str] = &[
     "waveform_get",
     "lastfm_artist_info",
     "lastfm_album_info",
+    "lastfm_credits",
     "lastfm_test_key",
     "lastfm_status",
     "lastfm_connect",

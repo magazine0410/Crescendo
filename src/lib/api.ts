@@ -283,6 +283,17 @@ export interface ArtistInfo {
   url: string | null;
 }
 
+/** A Last.fm bio for a name in a track's artist or vocalist tag. */
+export interface Credit {
+  role: "artist" | "vocalist";
+  /** The name the bio was found under: a whole tag value, one name split from
+      it, or the original spelling of a romanized name. */
+  name: string;
+  /** Its romanization from a sort tag or the vocalist tag, when known. */
+  sort: string | null;
+  info: ArtistInfo;
+}
+
 export interface AlbumInfo {
   name: string;
   artist: string;

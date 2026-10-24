@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lastfm-credits"
+description = "Enables the lastfm_credits command without any pre-configured scope."
+commands.allow = ["lastfm_credits"]
+
+[[permission]]
+identifier = "deny-lastfm-credits"
+description = "Denies the lastfm_credits command without any pre-configured scope."
+commands.deny = ["lastfm_credits"]

@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crescendo_core::lastfm::credits::{Credit, CreditTags};
 use crescendo_core::lastfm::{AlbumInfo, ArtistInfo};
 use crescendo_core::lyrics::LyricsResult;
 use std::collections::HashMap;
@@ -254,6 +255,35 @@ pub async fn lastfm_album_info(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Bios for the names in a track's artist and vocalist tags that the album
+/// artist section does not already show.
+#[tauri::command]
+pub async fn lastfm_credits(
+    state: State<'_, AppState>,
+    albumartist: Option<String>,
+    albumartistsort: Option<String>,
+    artist: Option<String>,
+    artistsort: Option<String>,
+    vocalist: Option<String>,
+    album: Option<String>,
+) -> Result<Vec<Credit>, String> {
+    let key = api_key(&state);
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tags = CreditTags {
+            albumartist: albumartist.as_deref(),
+            albumartistsort: albumartistsort.as_deref(),
+            artist: artist.as_deref(),
+            artistsort: artistsort.as_deref(),
+            vocalist: vocalist.as_deref(),
+            album: album.as_deref(),
+        };
+        crescendo_core::lastfm::credits::credits(&db, &key, tags)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Static lyrics for the Now Playing panel: sidecar `.lrc`/`.txt`, embedded

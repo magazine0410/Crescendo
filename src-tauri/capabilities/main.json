@@ -80,6 +80,7 @@
     "allow-waveform-get",
     "allow-lastfm-artist-info",
     "allow-lastfm-album-info",
+    "allow-lastfm-credits",
     "allow-lastfm-test-key",
     "allow-lastfm-status",
     "allow-lastfm-connect",

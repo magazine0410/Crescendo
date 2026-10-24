@@ -1000,6 +1000,30 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "lastfm_artist_info":
     case "lastfm_album_info":
       return null as T;
+    case "lastfm_credits": {
+      // A sample vocalist bio whenever the vocalist is not the album artist,
+      // so the credit sections are visible in `npm run dev`.
+      const { albumartist, vocalist } = args as { albumartist: string | null; vocalist: string | null };
+      if (!vocalist || vocalist === albumartist) return [] as T;
+      const bio = `${vocalist} is a singer known for doujin vocal arrangements. This mock bio stands in for the Last.fm one.`;
+      return [
+        {
+          role: "vocalist",
+          name: vocalist,
+          sort: null,
+          info: {
+            name: vocalist,
+            bio_summary: bio,
+            bio_full: bio,
+            listeners: 12_345,
+            playcount: 678_901,
+            tags: [],
+            similar: [],
+            url: null,
+          },
+        },
+      ] as T;
+    }
     case "lastfm_status":
       return { username: null, enabled: false, pending: 0, error: null, authorizing: false } as T;
     case "lastfm_connect":

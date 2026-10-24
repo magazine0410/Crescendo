@@ -60,6 +60,23 @@ impl Db {
     }
 }
 
+/// Kana, CJK ideographs (+ ext. A and compatibility), halfwidth katakana and
+/// Hangul: the frontend's CJK_RE, which decides when a sort tag stands in for
+/// a name.
+pub(crate) fn has_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            '\u{3040}'..='\u{30ff}'
+                | '\u{3400}'..='\u{4dbf}'
+                | '\u{4e00}'..='\u{9fff}'
+                | '\u{f900}'..='\u{faff}'
+                | '\u{ff66}'..='\u{ff9f}'
+                | '\u{ac00}'..='\u{d7af}'
+        )
+    })
+}
+
 /// Unicode-aware helpers SQLite lacks: `ulower(text)` supplies deterministic
 /// Unicode lowercasing for persisted identity keys, `ucontains(haystack,
 /// needle)` does a lowercased substring test, `has_cjk(text)` mirrors the
@@ -115,19 +132,7 @@ fn register_udfs(conn: &Connection) -> Result<()> {
                 .get_raw(0)
                 .as_str_or_null()
                 .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
-            Ok(value.is_some_and(|s| {
-                s.chars().any(|c| {
-                    matches!(
-                        c,
-                        '\u{3040}'..='\u{30ff}'
-                            | '\u{3400}'..='\u{4dbf}'
-                            | '\u{4e00}'..='\u{9fff}'
-                            | '\u{f900}'..='\u{faff}'
-                            | '\u{ff66}'..='\u{ff9f}'
-                            | '\u{ac00}'..='\u{d7af}'
-                    )
-                })
-            }))
+            Ok(value.is_some_and(has_cjk))
         },
     )?;
 
