@@ -25,7 +25,11 @@ pub(crate) fn rebuild_in_transaction(conn: &Connection) -> Result<()> {
         SELECT {KEY_EXPR} AS key,
                MAX(album),
                MAX(COALESCE(albumartist, artist)),
-               MAX(COALESCE(albumartistsort, artistsort)),
+               -- The sort tag of whichever name the album is shown under:
+               -- an albumartist with no sort tag must not borrow the
+               -- track artist's.
+               MAX(CASE WHEN albumartist IS NOT NULL THEN albumartistsort
+                        ELSE artistsort END),
                MAX(year),
                MAX(genre),
                COUNT(*),
@@ -45,6 +49,13 @@ pub(crate) fn rebuild_in_transaction(conn: &Connection) -> Result<()> {
 
         DELETE FROM albums WHERE key NOT IN
             (SELECT DISTINCT {KEY_EXPR} FROM tracks WHERE missing = 0);
+
+        -- Missing tracks keep their album only while it exists: a deleted
+        -- album's id can be given to a new album later, and playlists would
+        -- then show the missing tracks under that album's cover.
+        UPDATE tracks SET album_id = NULL
+        WHERE missing = 1 AND album_id IS NOT NULL
+          AND album_id NOT IN (SELECT id FROM albums);
 
         UPDATE tracks SET album_id =
             (SELECT a.id FROM albums a WHERE a.key =
@@ -94,6 +105,32 @@ mod tests {
             rebuild(conn)?;
             let second_id: i64 = conn.query_row("SELECT id FROM albums", [], |r| r.get(0))?;
             assert_eq!(second_id, first_id);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn album_artist_sort_comes_from_the_album_artist_and_missing_albums_are_released() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Db::open(&tmp.path().join("albums.db")).unwrap();
+        db.with(|conn| {
+            conn.execute(
+                "INSERT INTO tracks(id, path, dir, filename, mtime, size, format, artist, \
+                 artistsort, albumartist, album) VALUES (1, '/m/1.flac', '/m', '1.flac', 0, 1, \
+                 'FLAC', '上海アリス幻樂団', 'ZUN', '東方', 'Album')",
+                [],
+            )?;
+            rebuild(conn)?;
+            let sort: Option<String> =
+                conn.query_row("SELECT albumartist_sort FROM albums", [], |r| r.get(0))?;
+            assert_eq!(sort, None, "the album artist has no sort tag of its own");
+
+            conn.execute("UPDATE tracks SET missing = 1", [])?;
+            rebuild(conn)?;
+            let album_id: Option<i64> =
+                conn.query_row("SELECT album_id FROM tracks", [], |r| r.get(0))?;
+            assert_eq!(album_id, None, "a deleted album's id may be reused");
             Ok(())
         })
         .unwrap();

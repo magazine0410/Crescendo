@@ -343,15 +343,15 @@ fn push_values_clause(
     }
     match plan {
         Some(plan) => {
-            let mut placeholders = Vec::with_capacity(values.len());
-            for v in values {
-                params.push(Value::from(v.clone()));
-                placeholders.push(format!("?{}", params.len()));
-            }
+            // One JSON array parameter rather than one per value: a range
+            // selection across a long artist or tag list can exceed SQLite's
+            // limit of 32766 bound parameters.
+            let list = serde_json::to_string(values).expect("strings serialize");
+            params.push(Value::from(list));
             *where_sql = format!(
-                "{where_sql} AND {} IN ({})",
+                "{where_sql} AND {} IN (SELECT value FROM json_each(?{}))",
                 plan.selection_expr,
-                placeholders.join(", ")
+                params.len()
             );
         }
         // Custom tag that resolves to no real column: select nothing.
@@ -862,7 +862,8 @@ impl Db {
                 "WITH ordered AS ( \
                    SELECT album_id, album, \
                           COALESCE(albumartist, artist) AS artist, \
-                          COALESCE(albumartistsort, artistsort) AS artist_sort, year, \
+                          CASE WHEN albumartist IS NOT NULL THEN albumartistsort \
+                               ELSE artistsort END AS artist_sort, year, \
                           ROW_NUMBER() OVER (ORDER BY {order}) AS rn \
                    FROM tracks WHERE {where_sql} \
                  ), islands AS ( \

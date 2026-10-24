@@ -279,7 +279,10 @@ impl Compiler {
             } => {
                 if *case_sensitive {
                     // instr() is a binary (case-sensitive) substring search.
-                    self.sql.push_str(&format!("instr({col}, ?) > 0"));
+                    // It is NULL for a NULL field, which a negation would keep
+                    // as NULL and drop; ucontains() and regexp() say false.
+                    self.sql
+                        .push_str(&format!("instr(COALESCE({col}, ''), ?) > 0"));
                 } else {
                     self.sql.push_str(&format!("ucontains({col}, ?)"));
                 }

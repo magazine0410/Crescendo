@@ -565,3 +565,16 @@ fn excessive_search_nesting_and_size_are_rejected_without_overflow() {
         .join()
         .unwrap();
 }
+
+/// A shift-click range across a long facet list used to bind one SQL
+/// parameter per value and fail past SQLite's limit of 32766.
+#[test]
+fn a_facet_selection_larger_than_the_parameter_limit_still_counts() {
+    let (_d, db) = test_db();
+    let mut values: Vec<String> = (0..40_000).map(|i| format!("Nobody {i}")).collect();
+    values.push("Charlie Parker".into());
+    let n = db
+        .track_count_exact(None, crescendo_core::model::BrowseMode::Artist, &values)
+        .unwrap();
+    assert_eq!(n, 1);
+}

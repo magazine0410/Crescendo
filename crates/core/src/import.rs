@@ -70,14 +70,18 @@ pub fn add_paths_to_playlist(
         }
     }
 
-    db.playlist_add_tracks(playlist_id, &to_add)?;
-    result.added = to_add.len();
+    // Checked again: reading the tags can take long enough for the playlist
+    // to be deleted meanwhile, and an unchecked insert would leave rows for a
+    // playlist id the next new playlist can be given.
+    let added = db.playlist_add_tracks_checked(playlist_id, &to_add);
 
     // New rows change album membership, so the album table (and with it the
-    // thumbnail keys) has to catch up.
+    // thumbnail keys) has to catch up, whether or not the playlist survived.
     if result.imported > 0 {
         db.with(|conn| scanner::albums::rebuild(conn))?;
     }
+    added?;
+    result.added = to_add.len();
     Ok(result)
 }
 

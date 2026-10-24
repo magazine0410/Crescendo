@@ -442,8 +442,10 @@ class PlaylistsStore {
     }
   }
 
-  async removeTracks(id: number, positions: number[]) {
-    await call("playlist_remove_tracks", { id, positions });
+  /** `[position, trackId]` per row, as shown; the backend skips a row that
+      has moved since, instead of removing whatever took its place. */
+  async removeTracks(id: number, items: [number, number][]) {
+    await call("playlist_remove_tracks", { id, items });
     await this.refresh();
   }
 

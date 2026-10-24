@@ -131,11 +131,11 @@ pub async fn playlist_remove_tracks(
     app: AppHandle,
     state: State<'_, AppState>,
     id: i64,
-    positions: Vec<i64>,
+    items: Vec<(i64, i64)>,
 ) -> Result<(), String> {
     state
         .db
-        .playlist_remove_tracks(id, &positions)
+        .playlist_remove_tracks(id, &items)
         .map_err(|e| e.to_string())?;
     let _ = app.emit("playlist:changed", id);
     Ok(())

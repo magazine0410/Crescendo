@@ -221,7 +221,7 @@
         // Removal takes the row's position inside its own playlist, which is
         // not its index in the combined view.
         label: "Remove from playlist",
-        action: () => playlists.removeTracks(r.playlistId, [r.position]),
+        action: () => playlists.removeTracks(r.playlistId, [[r.position, r.track.id]]),
       },
     ]);
   }

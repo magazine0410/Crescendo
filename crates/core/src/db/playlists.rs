@@ -263,15 +263,20 @@ impl Db {
         })
     }
 
-    pub fn playlist_remove_tracks(&self, id: i64, positions: &[i64]) -> Result<()> {
+    /// Remove rows as a view showed them, `(position, track_id)`. A row whose
+    /// track no longer sits at that position is left alone: a second removal
+    /// clicked before the first one's refresh would otherwise delete the
+    /// row that moved up into the gap.
+    pub fn playlist_remove_tracks(&self, id: i64, items: &[(i64, i64)]) -> Result<()> {
         self.with(|conn| {
             let tx = conn.transaction()?;
             {
                 let mut del = tx.prepare(
-                    "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND position = ?2",
+                    "DELETE FROM playlist_tracks \
+                     WHERE playlist_id = ?1 AND position = ?2 AND track_id = ?3",
                 )?;
-                for pos in positions {
-                    del.execute(rusqlite::params![id, pos])?;
+                for (position, track_id) in items {
+                    del.execute(rusqlite::params![id, position, track_id])?;
                 }
             }
             renumber(&tx, id)?;

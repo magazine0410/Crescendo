@@ -121,7 +121,10 @@ pub async fn scan_start(
         .ok()
         .flatten()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(4);
+        .unwrap_or(4)
+        // The setting's own range. A typed 100000 made thread spawning panic
+        // and left the scan latched on.
+        .clamp(1, 16);
     let scanning_guard = ScanningGuard(scanning);
 
     std::thread::Builder::new()

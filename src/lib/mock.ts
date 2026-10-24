@@ -811,8 +811,13 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return { added: 0, duplicates: 0, imported: 0, failed: [] } as T;
     case "playlist_remove_tracks": {
       const id = args.id as number;
-      const gone = new Set(args.positions as number[]);
-      const ids = (playlistTracks.get(id) ?? []).filter((_, i) => !gone.has(i));
+      const current = playlistTracks.get(id) ?? [];
+      const gone = new Set(
+        (args.items as [number, number][])
+          .filter(([position, trackId]) => current[position] === trackId)
+          .map(([position]) => position),
+      );
+      const ids = current.filter((_, i) => !gone.has(i));
       playlistTracks.set(id, ids);
       const p = playlists.find((p) => p.id === id);
       if (p) {

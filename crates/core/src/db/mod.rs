@@ -144,7 +144,9 @@ fn register_udfs(conn: &Connection) -> Result<()> {
     )?;
 
     // Cache compiled regexes per connection: queries run the same pattern
-    // against every row.
+    // against every row. Search-as-you-type compiles a new pattern per edit
+    // for the life of the process, so the cache is emptied once it holds a
+    // few dozen; one query only ever uses a handful.
     type RegexCache = std::sync::Mutex<std::collections::HashMap<String, Arc<regex::Regex>>>;
     let cache: Arc<RegexCache> = Arc::new(Default::default());
     conn.create_scalar_function(
@@ -171,6 +173,9 @@ fn register_udfs(conn: &Connection) -> Result<()> {
                         regex::Regex::new(pattern)
                             .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?,
                     );
+                    if cache.len() >= 32 {
+                        cache.clear();
+                    }
                     cache.insert(pattern.to_string(), re.clone());
                     re
                 }

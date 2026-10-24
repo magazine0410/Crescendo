@@ -336,3 +336,22 @@ fn a_checked_add_that_fails_validation_inserts_nothing() {
     assert!(db.playlist_add_tracks_checked(9_999, &[1]).is_err());
     assert_eq!(ids(&db, pid), vec![1, 2]);
 }
+
+/// Two quick removals: the second still names the row as it was drawn. The
+/// track that moved up into that position must stay.
+#[test]
+fn removal_skips_a_row_that_has_moved() {
+    let (_d, db) = test_db();
+    let p = db.playlist_create("P").unwrap();
+    db.playlist_add_tracks(p, &[1, 2, 3]).unwrap();
+    db.playlist_remove_tracks(p, &[(0, 1)]).unwrap();
+    // Drawn before the first removal: position 1 held track 2, now track 3.
+    db.playlist_remove_tracks(p, &[(1, 2)]).unwrap();
+    let ids: Vec<i64> = db
+        .playlist_tracks(p)
+        .unwrap()
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(ids, vec![2, 3]);
+}
