@@ -11,10 +11,13 @@ use tokio::sync::Semaphore;
 /// Bound concurrent thumbnail generation (image decode is CPU-heavy and the
 /// source reads hit the library HDD).
 static GEN_PERMITS: Semaphore = Semaphore::const_new(4);
-/// Bound both active and waiting requests. A virtualized wall normally stays
-/// far below this; a compromised or runaway webview cannot park one task per
-/// requested album indefinitely.
-static ADMISSION_PERMITS: Semaphore = Semaphore::const_new(36);
+/// Bound both active and waiting requests, so a compromised or runaway webview
+/// cannot park one task per album in the library. A refused request shows the
+/// missing-cover tile until its row is rendered again, so this must cover
+/// everything one screen asks for at once: a maximized wall on a 4K display
+/// shows about 300 tiles, and lazy loading also fetches the rows just past
+/// the edge. A waiting request costs a few KB; decoding is bounded below.
+static ADMISSION_PERMITS: Semaphore = Semaphore::const_new(1024);
 
 fn respond_empty(responder: UriSchemeResponder, status: StatusCode) {
     let response = Response::builder()
