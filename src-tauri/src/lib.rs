@@ -145,7 +145,9 @@ pub fn run() {
 
             // Restore persisted volume before the first play.
             if let Ok(Some(v)) = db.prefs_get("volume") {
-                if let Ok(v) = v.parse::<f64>() {
+                // "NaN" parses, and a NaN volume would panic the player on
+                // every launch.
+                if let Some(v) = v.parse::<f64>().ok().filter(|v| v.is_finite()) {
                     if let Err(error) = player.send(player::Cmd::SetVolume(v)) {
                         log::warn!("could not restore player volume: {error}");
                     }

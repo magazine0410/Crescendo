@@ -52,6 +52,9 @@ pub async fn prefs_set(
     if key == "lastfm_scrobbling_enabled" {
         return Err("use the Last.fm scrobbling control to change this preference".into());
     }
+    if key == "volume" {
+        return Err("use the volume control to change this preference".into());
+    }
     if key == "visualizer_import_path" {
         return Err("that preference is managed by the projectM folder chooser".into());
     }

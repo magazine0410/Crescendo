@@ -9,7 +9,7 @@ use crescendo_core::db::Db;
 use crescendo_core::lastfm::scrobble::{now, Scrobbler};
 use crescendo_core::listening::ListeningProgress;
 use crescendo_core::model::{Track, MAX_SEEK_MS};
-use crescendo_core::playqueue::{PlayQueue, RepeatMode};
+use crescendo_core::playqueue::{PlayQueue, RepeatMode, Reservation};
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use serde::Serialize;
@@ -77,7 +77,8 @@ pub enum Cmd {
     /// projectM's expected 44.1 kHz without changing the audible stream.
     SetProjectMEnabled(bool),
     QueueAdd(Vec<i64>),
-    QueueRemove(Vec<usize>),
+    /// `(position, id)` as the queue view showed them.
+    QueueRemove(Vec<(usize, i64)>),
     QueueClear,
 }
 
@@ -374,8 +375,10 @@ struct Engine {
     /// The track currently loaded in playbin, tracked so its play can be
     /// credited when it is replaced, skipped, or ends.
     current_track_id: Option<i64>,
-    /// Set inside about-to-finish; consumed on the next stream-start.
-    gapless_pending: Arc<Mutex<bool>>,
+    /// Set inside about-to-finish; consumed on the next stream-start. Holds
+    /// what the callback's advance changed, so a transition that does not
+    /// continue to the reserved track can undo it.
+    gapless_pending: Arc<Mutex<Option<Reservation>>>,
     /// Serializes queue/URI gapless handoffs with explicit track changes.
     handoff: Arc<Mutex<HandoffCoordinator>>,
     /// One-shot "stop after this song": suppresses the gapless handoff so EOS
@@ -456,7 +459,7 @@ fn run_player(
     playbin.set_property("audio-filter", &audio_filter);
 
     let queue = Arc::new(Mutex::new(PlayQueue::default()));
-    let gapless_pending = Arc::new(Mutex::new(false));
+    let gapless_pending = Arc::new(Mutex::new(None));
     let handoff = Arc::new(Mutex::new(HandoffCoordinator::default()));
     let stop_after_current = Arc::new(AtomicBool::new(false));
 
@@ -496,12 +499,17 @@ fn run_player(
                     log::error!("gapless queue changed without advancing its generation");
                     return None;
                 }
-                if live_queue.advance() != Some(next_id) {
+                let Some((advanced, reservation)) = live_queue.advance_reserving() else {
+                    log::error!("gapless queue peek and advance disagreed");
+                    return None;
+                };
+                if advanced != next_id {
+                    live_queue.undo(reservation);
                     log::error!("gapless queue peek and advance disagreed");
                     return None;
                 }
                 playbin.set_property("uri", uri.as_str());
-                *pending = true;
+                *pending = Some(reservation);
             }
             None
         });
@@ -719,15 +727,24 @@ mod tests {
 impl Engine {
     /// Bar gapless callbacks, then mutate the queue. The player thread is the
     /// only caller, so one manual transition cannot overlap another.
-    fn begin_manual_transition<T>(&self, mutate: impl FnOnce(&mut PlayQueue, bool) -> T) -> T {
+    ///
+    /// `mutate` receives the reservation of a gapless handoff that has not
+    /// been heard yet. A transition that continues to the reserved track
+    /// keeps it; any other must `undo` it first, or the queue is one track
+    /// ahead of what is audible and a queued track the handoff took is lost.
+    fn begin_manual_transition<T>(
+        &self,
+        mutate: impl FnOnce(&mut PlayQueue, Option<Reservation>) -> T,
+    ) -> T {
         let mut handoff = self.handoff.lock().expect("handoff coordinator poisoned");
         handoff.begin_manual();
-        let was_gapless = {
-            let mut pending = self.gapless_pending.lock().expect("gapless flag poisoned");
-            std::mem::take(&mut *pending)
-        };
+        let reservation = self
+            .gapless_pending
+            .lock()
+            .expect("gapless flag poisoned")
+            .take();
         let mut queue = self.queue.lock().expect("queue poisoned");
-        mutate(&mut queue, was_gapless)
+        mutate(&mut queue, reservation)
     }
 
     /// Queue-only changes take the same lock as the callback's queue/URI pair.
@@ -765,7 +782,10 @@ impl Engine {
                     log::warn!("play_context resolved to an empty track list");
                     return;
                 }
-                let id = self.begin_manual_transition(|q, _| {
+                let id = self.begin_manual_transition(|q, reservation| {
+                    if let Some(reservation) = reservation {
+                        q.undo(reservation);
+                    }
                     q.set_context(ids, start_index);
                     q.current()
                 });
@@ -776,7 +796,19 @@ impl Engine {
                 }
             }
             Cmd::JumpTo(display_index) => {
-                let id = self.begin_manual_transition(|q, _| q.jump_to(display_index));
+                // Out of range changes nothing, not even a handoff in flight:
+                // playbin already holds its uri, so undoing it here would
+                // leave the next stream unaccounted for.
+                if display_index >= self.queue.lock().expect("queue poisoned").context_len() {
+                    log::warn!("ignoring jump to a row outside the context");
+                    return;
+                }
+                let id = self.begin_manual_transition(|q, reservation| {
+                    if let Some(reservation) = reservation {
+                        q.undo(reservation);
+                    }
+                    q.jump_to(display_index)
+                });
                 if let Some(id) = id {
                     self.start_track(id);
                 } else {
@@ -796,8 +828,12 @@ impl Engine {
                 }
                 Status::Stopped => {
                     // Play from the top of the context if there is one.
-                    let id =
-                        self.begin_manual_transition(|q, _| q.current().or_else(|| q.advance()));
+                    let id = self.begin_manual_transition(|q, reservation| {
+                        if let Some(reservation) = reservation {
+                            q.undo(reservation);
+                        }
+                        q.current().or_else(|| q.advance())
+                    });
                     if let Some(id) = id {
                         self.start_track(id);
                     } else {
@@ -810,15 +846,22 @@ impl Engine {
                 // The callback may already have queued the next URI while the
                 // outgoing track is still audible. In that case its queue entry
                 // is the track Next should start, not one to skip over again.
-                let id = self.begin_manual_transition(skip_for_transition);
-                self.sync_queue_shared();
+                let id = self.begin_manual_transition(|q, reservation| {
+                    skip_for_transition(q, reservation.is_some())
+                });
                 match id {
                     Some(id) => self.start_track(id),
                     None => self.stop(),
                 }
             }
             Cmd::Prev => {
-                let id = self.begin_manual_transition(|q, _| q.previous());
+                // Back from the audible track, not from a handoff not yet heard.
+                let id = self.begin_manual_transition(|q, reservation| {
+                    if let Some(reservation) = reservation {
+                        q.undo(reservation);
+                    }
+                    q.previous()
+                });
                 match id {
                     Some(id) => self.start_track(id),
                     None => self.stop(),
@@ -842,6 +885,11 @@ impl Engine {
                 self.replaygain_enabled.store(enabled, Ordering::Relaxed);
             }
             Cmd::SetVolume(v) => {
+                // NaN survives clamp, and glib panics on it as a property.
+                if !v.is_finite() {
+                    log::warn!("ignoring a non-finite volume");
+                    return;
+                }
                 self.volume = v.clamp(0.0, 1.0);
                 if self.volume > 0.0 {
                     self.muted = false;
@@ -887,8 +935,8 @@ impl Engine {
                 self.mutate_queue(|q| q.queue_add(&ids));
                 self.sync_queue_shared();
             }
-            Cmd::QueueRemove(positions) => {
-                self.mutate_queue(|q| q.queue_remove(&positions));
+            Cmd::QueueRemove(items) => {
+                self.mutate_queue(|q| q.queue_remove(&items));
                 self.sync_queue_shared();
             }
             Cmd::QueueClear => {
@@ -911,8 +959,9 @@ impl Engine {
                 }
                 // Normal end without gapless handoff (e.g. repeat-off at the
                 // end of the context).
-                let id = self.begin_manual_transition(advance_for_transition);
-                self.sync_queue_shared();
+                let id = self.begin_manual_transition(|q, reservation| {
+                    advance_for_transition(q, reservation.is_some())
+                });
                 match id {
                     Some(id) => self.start_track(id),
                     None => self.stop(),
@@ -929,9 +978,9 @@ impl Engine {
                 // Skip to the next track rather than going silent.
                 self.consecutive_failures += 1;
                 let failures = self.consecutive_failures;
-                let id =
-                    self.begin_manual_transition(|q, gapless| after_failure(q, gapless, failures));
-                self.sync_queue_shared();
+                let id = self.begin_manual_transition(|q, reservation| {
+                    after_failure(q, reservation.is_some(), failures)
+                });
                 match id {
                     Some(id) => self.start_track(id),
                     None => {
@@ -970,10 +1019,22 @@ impl Engine {
             MessageView::StreamStart(_) => {
                 // Fires on every new stream; after a gapless handoff this is
                 // the moment the queue's current track is actually audible.
-                let was_gapless = {
-                    let mut pending = self.gapless_pending.lock().expect("gapless flag poisoned");
-                    std::mem::take(&mut *pending)
-                };
+                let reservation = self
+                    .gapless_pending
+                    .lock()
+                    .expect("gapless flag poisoned")
+                    .take();
+                // "Stop after current" armed once the handoff had already
+                // queued the next uri: the callback could no longer skip it,
+                // so stop here, at the track the user armed it on.
+                if let Some(reservation) = reservation {
+                    if self.stop_after_current.swap(false, Ordering::SeqCst) {
+                        self.mutate_queue(|q| q.undo(reservation));
+                        self.stop();
+                        return;
+                    }
+                }
+                let was_gapless = reservation.is_some();
                 if was_gapless {
                     // Finish the outgoing session before changing its identity;
                     // queued scrobbles already contain a snapshot of its tags.
@@ -1029,6 +1090,9 @@ impl Engine {
         self.status = Status::Playing;
         self.current_duration_ms = track.duration_ms.max(0) as u64;
         self.current_track_id = Some(track_id);
+        // Starting a track may have popped the ad-hoc queue (Play, an error,
+        // an undone handoff); the view's positions must match it again.
+        self.sync_queue_shared();
         self.publish_state();
         self.emit_position();
     }
@@ -1037,12 +1101,17 @@ impl Engine {
         // A later playback session must not inherit a one-shot stop request
         // from the stream that was stopped manually.
         self.stop_after_current.store(false, Ordering::SeqCst);
-        self.begin_manual_transition(|_, _| ());
+        self.begin_manual_transition(|q, reservation| {
+            if let Some(reservation) = reservation {
+                q.undo(reservation);
+            }
+        });
         self.commit_play();
         let _ = self.playbin.set_state(gstreamer::State::Null);
         self.finish_manual_transition();
         self.status = Status::Stopped;
         self.current_duration_ms = 0;
+        self.sync_queue_shared();
         self.publish_state();
         let _ = self.app.emit(
             "player:position",

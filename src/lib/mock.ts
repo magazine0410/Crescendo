@@ -831,8 +831,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       queue.push(...(args.trackIds as number[]));
       return undefined as T;
     case "queue_remove": {
-      const positions = new Set(args.positions as number[]);
-      for (let i = queue.length - 1; i >= 0; i--) if (positions.has(i)) queue.splice(i, 1);
+      const items = args.items as [number, number][];
+      for (const [position, id] of [...items].sort((a, b) => b[0] - a[0])) {
+        if (queue[position] === id) queue.splice(position, 1);
+      }
       return undefined as T;
     }
     case "queue_clear":

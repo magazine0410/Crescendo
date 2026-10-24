@@ -137,6 +137,10 @@ pub async fn player_seek(state: State<'_, AppState>, ms: u64) -> Result<(), Stri
 
 #[tauri::command]
 pub async fn player_set_volume(state: State<'_, AppState>, volume: f64) -> Result<(), String> {
+    if !volume.is_finite() {
+        return Err("volume must be a number from 0 to 1".into());
+    }
+    let volume = volume.clamp(0.0, 1.0);
     state.player.send(Cmd::SetVolume(volume))?;
     let _ = state.db.prefs_set("volume", &format!("{volume:.3}"));
     Ok(())
@@ -663,8 +667,11 @@ pub async fn queue_add(state: State<'_, AppState>, track_ids: Vec<i64>) -> Resul
 }
 
 #[tauri::command]
-pub async fn queue_remove(state: State<'_, AppState>, positions: Vec<usize>) -> Result<(), String> {
-    state.player.send(Cmd::QueueRemove(positions))
+pub async fn queue_remove(
+    state: State<'_, AppState>,
+    items: Vec<(usize, i64)>,
+) -> Result<(), String> {
+    state.player.send(Cmd::QueueRemove(items))
 }
 
 #[tauri::command]

@@ -2,13 +2,17 @@ import { call, type PlayContext, type Track } from "../api";
 
 class QueueStore {
   tracks = $state<Track[]>([]);
+  /** Bumped per refresh; a slower, older answer must not overwrite a newer one. */
+  private reqId = 0;
 
   async init() {
     await this.refresh();
   }
 
   async refresh() {
-    this.tracks = await call<Track[]>("queue_list");
+    const reqId = ++this.reqId;
+    const tracks = await call<Track[]>("queue_list");
+    if (reqId === this.reqId) this.tracks = tracks;
   }
 
   async add(trackIds: number[]) {
@@ -25,8 +29,15 @@ class QueueStore {
     await this.refresh();
   }
 
+  /** Remove rows as shown: each position goes with its track id, so the
+      player can tell when the head of the queue was taken since this view
+      was drawn and remove the right entry. */
   async removeAt(positions: number[]) {
-    await call("queue_remove", { positions });
+    const items = positions.flatMap((p) => {
+      const t = this.tracks[p];
+      return t ? [[p, t.id] as [number, number]] : [];
+    });
+    await call("queue_remove", { items });
     await this.refresh();
   }
 

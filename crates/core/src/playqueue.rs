@@ -31,6 +31,14 @@ pub enum RepeatMode {
     One,
 }
 
+/// What one [`PlayQueue::advance_reserving`] changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reservation {
+    context_index: Option<usize>,
+    playing_adhoc: Option<i64>,
+    popped: Option<i64>,
+}
+
 #[derive(Debug, Default)]
 pub struct PlayQueue {
     /// Track ids of the active context in display order.
@@ -121,14 +129,29 @@ impl PlayQueue {
         self.adhoc.extend_from_slice(ids);
     }
 
-    pub fn queue_remove(&mut self, positions: &[usize]) {
-        let mut keep = Vec::with_capacity(self.adhoc.len());
-        for (i, id) in self.adhoc.iter().enumerate() {
-            if !positions.contains(&i) {
-                keep.push(*id);
+    /// Remove the queued tracks a view showed as `(position, id)`. The view
+    /// can lag a pop at the head: the gapless handoff takes the next queued
+    /// track seconds before it is heard, which shifts every entry left. So an
+    /// id is looked for at its position and then before it, and an entry that
+    /// is no longer queued is left alone rather than removing its neighbour.
+    pub fn queue_remove(&mut self, items: &[(usize, i64)]) {
+        let mut remove = vec![false; self.adhoc.len()];
+        for &(position, id) in items {
+            let Some(last) = self.adhoc.len().checked_sub(1) else {
+                break;
+            };
+            if let Some(j) = (0..=position.min(last))
+                .rev()
+                .find(|&j| self.adhoc[j] == id && !remove[j])
+            {
+                remove[j] = true;
             }
         }
-        self.adhoc = keep;
+        let mut index = 0;
+        self.adhoc.retain(|_| {
+            index += 1;
+            !remove[index - 1]
+        });
     }
 
     pub fn queue_clear(&mut self) {
@@ -158,6 +181,35 @@ impl PlayQueue {
             Some(_) => return None,
         };
         Some(self.context[self.order[next]])
+    }
+
+    /// [`advance`](Self::advance) for the gapless handoff, which runs while the
+    /// outgoing track is still audible. The returned reservation lets a
+    /// manual transition before the handoff is heard put the queue back.
+    pub fn advance_reserving(&mut self) -> Option<(i64, Reservation)> {
+        let before = Reservation {
+            context_index: self.pos.map(|p| self.order[p]),
+            playing_adhoc: self.playing_adhoc,
+            popped: None,
+        };
+        let queued = self.adhoc.len();
+        let id = self.advance()?;
+        let popped = (self.adhoc.len() < queued).then_some(id);
+        Some((id, Reservation { popped, ..before }))
+    }
+
+    /// Return to the state before [`advance_reserving`](Self::advance_reserving):
+    /// the audible track is current again and a queued track the handoff took
+    /// is queued again. The position is kept as a context index, so a shuffle
+    /// toggled in between does not misplace it.
+    pub fn undo(&mut self, reservation: Reservation) {
+        self.pos = reservation
+            .context_index
+            .and_then(|index| self.order.iter().position(|&i| i == index));
+        self.playing_adhoc = reservation.playing_adhoc;
+        if let Some(id) = reservation.popped {
+            self.adhoc.insert(0, id);
+        }
     }
 
     /// The track that follows the current one; consumes queue/position state.
@@ -302,6 +354,42 @@ mod tests {
         assert_eq!(q.cycle_len(), 4);
         q.repeat = RepeatMode::One;
         assert_eq!(q.cycle_len(), 1);
+    }
+
+    #[test]
+    fn undo_restores_the_audible_track_and_a_reserved_queue_entry() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![10, 20, 30], 1);
+        q.queue_add(&[99, 98]);
+        let (id, reservation) = q.advance_reserving().unwrap();
+        assert_eq!(id, 99);
+        assert_eq!(q.queue_ids(), [98]);
+        q.undo(reservation);
+        assert_eq!(q.current(), Some(20));
+        assert_eq!(q.queue_ids(), [99, 98]);
+        assert_eq!(q.previous(), Some(10), "Prev goes back from what was heard");
+
+        // A shuffle toggled between the handoff and the undo.
+        let mut q = PlayQueue::default();
+        q.set_context((0..20).collect(), 5);
+        let (_, reservation) = q.advance_reserving().unwrap();
+        q.set_shuffle(true);
+        q.undo(reservation);
+        assert_eq!(q.current(), Some(5));
+    }
+
+    #[test]
+    fn queue_remove_follows_entries_shifted_by_a_pop() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![1], 0);
+        q.queue_add(&[10, 20, 30]);
+        // The view still shows [10, 20, 30] when the handoff pops 10.
+        q.advance();
+        q.queue_remove(&[(1, 20)]);
+        assert_eq!(q.queue_ids(), [30]);
+        // An entry that is gone is not replaced by its neighbour.
+        q.queue_remove(&[(0, 10)]);
+        assert_eq!(q.queue_ids(), [30]);
     }
 
     #[test]
