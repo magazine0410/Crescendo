@@ -867,7 +867,11 @@ fn installer_for(kind: PackageKind) -> Result<(PathBuf, Vec<&'static str>)> {
             } else if let Some(zypper) = find_system_program(&["zypper"]) {
                 (
                     zypper,
-                    vec!["--non-interactive", "--no-gpg-checks", "install"],
+                    // --allow-unsigned-rpm accepts only the packages named on
+                    // the command line. --no-gpg-checks was global: it also
+                    // waved through bad signatures on repository metadata and
+                    // on dependencies installed as root in the same run.
+                    vec!["--non-interactive", "install", "--allow-unsigned-rpm"],
                 )
             } else if let Some(rpm) = find_system_program(&["rpm"]) {
                 (rpm, vec!["-Uvh"])
