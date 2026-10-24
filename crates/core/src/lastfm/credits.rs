@@ -30,8 +30,10 @@ const MIN_UNCONFIRMED_CHARS: usize = 5;
 /// feat., ft., featuring, vs, x, & and + between spaces; and a "feat."
 /// with no space after it ("DJ Shimamura feat.美里").
 static JOINER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\s+(?:feat\.?|ft\.|featuring|vs\.?|x|&|\+)\s+|\s+(?:feat|ft)\.|\s*[;；/／×、]\s*")
-        .unwrap()
+    Regex::new(
+        r"(?i)\s+(?:feat\.?|ft\.|featuring|vs\.?|x|&|\+)\s+|\s+(?:feat|ft)\.|\s*[;；/／×、]\s*",
+    )
+    .unwrap()
 });
 
 /// Last.fm keeps pages for misspelled names whose whole bio points at the
@@ -147,7 +149,9 @@ fn resolve(
         (tags.artist, tags.artistsort),
     ] {
         for (name, sort, certain) in sort_pairs(value, sort) {
-            r.originals.entry(sort_key(&sort)).or_insert_with(|| name.clone());
+            r.originals
+                .entry(sort_key(&sort))
+                .or_insert_with(|| name.clone());
             if certain {
                 r.sorts.entry(norm(&name)).or_insert(sort);
             }
@@ -234,7 +238,13 @@ where
 
     /// Looks `name` up for a name the tag spells `spelled`. The length rule
     /// applies to the tag's spelling, since that is the name being credited.
-    fn find(&mut self, name: &str, spelled: &str, role: CreditRole, out: &mut Vec<Credit>) -> Outcome {
+    fn find(
+        &mut self,
+        name: &str,
+        spelled: &str,
+        role: CreditRole,
+        out: &mut Vec<Credit>,
+    ) -> Outcome {
         if self.shown_names.contains(&norm(name)) {
             return Outcome::Covered;
         }
@@ -350,7 +360,12 @@ fn sort_pairs(value: Option<&str>, sort: Option<&str>) -> Vec<(String, String, b
             .any(|(n, s)| norm(n) != norm(s) && named.contains(&norm(s)));
         pairs.push((value.to_string(), sort.to_string(), !reordered));
         if names.len() > 1 {
-            pairs.extend(names.into_iter().zip(sorts).map(|(n, s)| (n, s, !reordered)));
+            pairs.extend(
+                names
+                    .into_iter()
+                    .zip(sorts)
+                    .map(|(n, s)| (n, s, !reordered)),
+            );
         }
     } else if let [name] = names.as_slice() {
         pairs.extend(sorts.iter().map(|s| (name.clone(), s.clone(), false)));
@@ -469,11 +484,7 @@ mod tests {
             artist: Some("Team Shanghai Alice"),
             ..Default::default()
         };
-        let out = resolve(
-            tags,
-            |_| Some(artist("上海アリス幻樂団", true)),
-            |_| false,
-        );
+        let out = resolve(tags, |_| Some(artist("上海アリス幻樂団", true)), |_| false);
         assert!(out.is_empty());
     }
 
@@ -507,7 +518,12 @@ mod tests {
             artist: Some("Demetori & DARK PHOENiX"),
             ..Default::default()
         };
-        let (out, _) = run(tags, &["Demetori", "DARK PHOENiX"], &["Demetori & DARK PHOENiX"], &[]);
+        let (out, _) = run(
+            tags,
+            &["Demetori", "DARK PHOENiX"],
+            &["Demetori & DARK PHOENiX"],
+            &[],
+        );
         assert_eq!(
             out,
             [
@@ -591,7 +607,10 @@ mod tests {
             ("Komiya Mao", "Incorrect tag for 小宮真央"),
         ];
         let out = resolve(tags, bios(&pages), |_| false);
-        let out: Vec<_> = out.iter().map(|c| (c.role, c.name.as_str(), c.sort.as_deref())).collect();
+        let out: Vec<_> = out
+            .iter()
+            .map(|c| (c.role, c.name.as_str(), c.sort.as_deref()))
+            .collect();
         // Shown once, as a vocalist, though the original is under 5
         // characters: the vocalist tag spells it with 10.
         assert_eq!(out, [(Vocalist, "小宮真央", Some("Komiya, Mao"))]);
@@ -610,7 +629,10 @@ mod tests {
         };
         let pages = [("綾倉盟", "Mei Ayakura (綾倉盟, Ayakura Mei) is a vocalist.")];
         let out = resolve(tags, bios(&pages), |_| false);
-        let out: Vec<_> = out.iter().map(|c| (c.role, c.name.as_str(), c.sort.as_deref())).collect();
+        let out: Vec<_> = out
+            .iter()
+            .map(|c| (c.role, c.name.as_str(), c.sort.as_deref()))
+            .collect();
         assert_eq!(out, [(Vocalist, "綾倉盟", Some("Ayakura Mei"))]);
 
         // 柊秀雪 is the arranger, so his bio does not name the vocalist and he
@@ -627,7 +649,10 @@ mod tests {
             ("Atori", "Atori is a doujin singer."),
         ];
         let out = resolve(tags, bios(&pages), |name| name == "柊秀雪");
-        let out: Vec<_> = out.iter().map(|c| (c.role, c.name.as_str(), c.sort.as_deref())).collect();
+        let out: Vec<_> = out
+            .iter()
+            .map(|c| (c.role, c.name.as_str(), c.sort.as_deref()))
+            .collect();
         assert_eq!(out, [(Artist, "柊秀雪", None), (Vocalist, "Atori", None)]);
     }
 
@@ -641,8 +666,14 @@ mod tests {
         };
         let pages = [
             ("ARU", "There are multiple artists called ARU."),
-            ("ほたる", "ほたる (Hotaru) was the prime vocalist of the circle Halozy."),
-            ("Stack", "There are three different Acts called “Stack”: 1) German Hardcore"),
+            (
+                "ほたる",
+                "ほたる (Hotaru) was the prime vocalist of the circle Halozy.",
+            ),
+            (
+                "Stack",
+                "There are three different Acts called “Stack”: 1) German Hardcore",
+            ),
         ];
         let out = resolve(tags, bios(&pages), |_| true);
         let out: Vec<_> = out.iter().map(|c| c.name.as_str()).collect();
@@ -702,10 +733,17 @@ mod tests {
         };
         let out = resolve(
             tags,
-            |name| ["ビートまりお", "myu314"].contains(&name).then(|| artist(name, true)),
+            |name| {
+                ["ビートまりお", "myu314"]
+                    .contains(&name)
+                    .then(|| artist(name, true))
+            },
             |_| false,
         );
-        let out: Vec<_> = out.iter().map(|c| (c.name.as_str(), c.sort.as_deref())).collect();
+        let out: Vec<_> = out
+            .iter()
+            .map(|c| (c.name.as_str(), c.sort.as_deref()))
+            .collect();
         assert_eq!(out, [("ビートまりお", Some("Beatmario")), ("myu314", None)]);
     }
 
@@ -734,7 +772,10 @@ mod tests {
                 "Tracy vs. Astronomical feat.KUMI(ヲタみん)",
                 &["Tracy", "Astronomical", "KUMI"],
             ),
-            ("あやぽんず＊ x あよ X ビートまりお", &["あやぽんず＊", "あよ", "ビートまりお"]),
+            (
+                "あやぽんず＊ x あよ X ビートまりお",
+                &["あやぽんず＊", "あよ", "ビートまりお"],
+            ),
             ("A-One×豚乙女", &["A-One", "豚乙女"]),
             ("uno (vocals: あいかぴん, ちよこ, 高井さん)", &["uno"]),
             ("COOL&CREATE", &["COOL&CREATE"]),
@@ -742,8 +783,14 @@ mod tests {
         for (value, names) in cases {
             assert_eq!(split_names(value), names, "{value}");
         }
-        assert_eq!(split_names("Camellia / タカナシトリコ"), ["Camellia", "タカナシトリコ"]);
-        assert_eq!(split_names("大瀬良あい/BlackY/ココ"), ["大瀬良あい", "BlackY", "ココ"]);
+        assert_eq!(
+            split_names("Camellia / タカナシトリコ"),
+            ["Camellia", "タカナシトリコ"]
+        );
+        assert_eq!(
+            split_names("大瀬良あい/BlackY/ココ"),
+            ["大瀬良あい", "BlackY", "ココ"]
+        );
         assert_eq!(split_names("void (vocal: らんこ (豚乙女))"), ["void"]);
         assert_eq!(split_names("noa（discordia）"), ["noa"]);
     }
