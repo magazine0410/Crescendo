@@ -625,6 +625,35 @@ fn guest_work_is_bounded_by_fuel() {
     assert!(handle.runtime_info(PLUGIN_ID).error.is_some());
 }
 
+/// Auto-disable counts failed starts only. Every other plugin error (a
+/// rolled-back update, a facet conflict) used to bump the same counter, so a
+/// single failed start after one of those disabled the plugin.
+#[test]
+fn an_unrelated_earlier_error_does_not_count_toward_auto_disable() {
+    let (dir, db, manager) = setup();
+    let package = dir.path().join("broken.crescendo-plugin");
+    write_package(&package, &wasm_manifest("1.0.0", &[]), b"this is not wasm");
+    manager.install(&package).unwrap();
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    drop(manager);
+    db.plugin_record_error_preserving_state(PLUGIN_ID, "an update was rolled back")
+        .unwrap();
+
+    let manager = restart(&dir, db.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while plugin_info(&manager).runtime_error.is_none() {
+        assert!(Instant::now() < deadline, "the broken module never failed");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    drop(manager);
+    let state = db.plugin_state_get(PLUGIN_ID).unwrap().unwrap();
+    assert!(
+        state.desired_enabled,
+        "one failed start must not disable it"
+    );
+    assert_eq!(state.init_failures, 1);
+}
+
 #[test]
 fn a_broken_module_fails_isolated_and_auto_disables_after_repeated_startups() {
     let (dir, db, manager) = setup();

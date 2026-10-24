@@ -73,8 +73,17 @@ pub(crate) fn stage_archive(archive_path: &Path, staging_root: &Path) -> Result<
         // otherwise change between hashing and extraction.
         let archive_copy = operation_dir.join("package.crescendo-plugin");
         let package_hash = copy_and_hash(archive_path, &archive_copy, archive_meta.len())?;
-        let file = File::open(&archive_copy).context("could not open the staged plugin package")?;
+        let mut file =
+            File::open(&archive_copy).context("could not open the staged plugin package")?;
+        let declared = declared_entry_count(&mut file)?;
         let mut archive = ZipArchive::new(file).context("the plugin package is not a valid ZIP")?;
+        // The zip crate keys entries by name, so a second `module.wasm` or
+        // `manifest.json` silently replaces the first and is counted once. A
+        // reviewer's tool that takes the first copy would then inspect other
+        // bytes than the ones installed.
+        if declared != archive.len() {
+            bail!("plugin package contains duplicate entry names");
+        }
         let plans = validate_entries(&mut archive)?;
         extract_entries(&mut archive, &plans, &content_dir)?;
 
@@ -112,13 +121,43 @@ pub(crate) fn stage_archive(archive_path: &Path, staging_root: &Path) -> Result<
     result
 }
 
+/// The entry count the end-of-central-directory record declares. Packages are
+/// far below the sizes that need ZIP64, so a ZIP64 marker is refused.
+fn declared_entry_count(file: &mut File) -> Result<usize> {
+    use std::io::{Read, Seek, SeekFrom};
+    const EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+    const EOCD_MIN_LEN: u64 = 22;
+    let len = file.seek(SeekFrom::End(0))?;
+    // The record sits at the end, followed by a comment of at most 64 KiB.
+    let tail_len = len.min(EOCD_MIN_LEN + u64::from(u16::MAX));
+    file.seek(SeekFrom::Start(len - tail_len))?;
+    let mut tail = vec![0; tail_len as usize];
+    file.read_exact(&mut tail)?;
+    file.seek(SeekFrom::Start(0))?;
+    let start = tail
+        .windows(4)
+        .rposition(|window| window == EOCD_SIGNATURE)
+        .filter(|&start| tail.len() - start >= EOCD_MIN_LEN as usize)
+        .ok_or_else(|| anyhow!("the plugin package is not a valid ZIP"))?;
+    let total = u16::from_le_bytes([tail[start + 10], tail[start + 11]]);
+    if total == u16::MAX {
+        bail!("plugin packages cannot use ZIP64");
+    }
+    Ok(usize::from(total))
+}
+
 pub(crate) fn load_installed(path: &Path, expected_id: &str) -> Result<InstalledPackage> {
     let root_meta = fs::symlink_metadata(path)?;
     if !root_meta.file_type().is_dir() || root_meta.file_type().is_symlink() {
         bail!("installed plugin path is not a regular directory");
     }
 
-    let mut count = 0usize;
+    // Files are counted against the package limit, as the archive's entries
+    // were: extraction creates the parent directories a package's paths
+    // imply, and counting those let a package that validated and installed
+    // read as invalid afterwards. Directories get a loose bound of their own.
+    let mut files = 0usize;
+    let mut directories = 0usize;
     let mut total = 0u64;
     let mut has_module = false;
     for entry in WalkDir::new(path).follow_links(false) {
@@ -126,11 +165,17 @@ pub(crate) fn load_installed(path: &Path, expected_id: &str) -> Result<Installed
         if entry.path() == path {
             continue;
         }
-        count += 1;
-        if count > MAX_ENTRIES + 1 {
+        let metadata = fs::symlink_metadata(entry.path())?;
+        let counter = if metadata.is_dir() {
+            &mut directories
+        } else {
+            &mut files
+        };
+        *counter += 1;
+        // `+ 1` is the installation metadata file the host adds.
+        if files > MAX_ENTRIES + 1 || directories > 4 * MAX_ENTRIES {
             bail!("installed plugin contains too many entries");
         }
-        let metadata = fs::symlink_metadata(entry.path())?;
         if metadata.file_type().is_symlink()
             || (!metadata.file_type().is_file() && !metadata.file_type().is_dir())
         {
@@ -624,6 +669,46 @@ mod tests {
             &[("assets/a/./x", b"one", None), ("assets/a/x", b"two", None)],
         );
         assert!(stage_archive(&archive, &dir.path().join("staging")).is_err());
+    }
+
+    #[test]
+    fn rejects_exact_duplicate_entry_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("duplicate.crescendo-plugin");
+        // The writer refuses a repeated name, so write a same-length stand-in
+        // and rename it in both the local header and the central directory.
+        write_test_package(&archive, &manifest(), &[("manifest.jsoX", b"{}", None)]);
+        let mut bytes = fs::read(&archive).unwrap();
+        let stand_in = b"manifest.jsoX";
+        let mut at = 0;
+        while let Some(found) = bytes[at..]
+            .windows(stand_in.len())
+            .position(|window| window == stand_in)
+        {
+            bytes[at + found + stand_in.len() - 1] = b'n';
+            at += found + stand_in.len();
+        }
+        fs::write(&archive, bytes).unwrap();
+        let error = stage_archive(&archive, &dir.path().join("staging"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("duplicate entry names"), "{error}");
+    }
+
+    /// Extraction creates the directories a package's paths imply. Counting
+    /// them made a package that validated read as invalid once installed.
+    #[test]
+    fn implied_directories_do_not_count_against_the_entry_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("nested.crescendo-plugin");
+        let names: Vec<String> = (0..300).map(|i| format!("assets/d{i}/note.txt")).collect();
+        let entries: Vec<(&str, &[u8], Option<u32>)> = names
+            .iter()
+            .map(|name| (name.as_str(), b"x".as_slice(), None))
+            .collect();
+        write_test_package(&archive, &manifest(), &entries);
+        let staged = stage_archive(&archive, &dir.path().join("staging")).unwrap();
+        load_installed(&staged.content_dir, &manifest().id).unwrap();
     }
 
     #[test]

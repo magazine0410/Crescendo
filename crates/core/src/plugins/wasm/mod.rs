@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use wasmtime::component::{bindgen, Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, ResourceLimiter, Store};
 
@@ -112,6 +112,10 @@ enum RuntimeMsg {
         command: String,
         input: String,
         reply: mpsc::Sender<Result<String>>,
+        /// When the caller stops waiting. A command still queued then is not
+        /// run: its caller already reported a timeout, and the user may well
+        /// have clicked again.
+        deadline: Instant,
     },
     SettingsChanged {
         plugin_id: String,
@@ -205,6 +209,10 @@ impl RuntimeStates {
     /// A trapped, timed-out, or otherwise failed guest call. Repeated
     /// failures mark the plugin unhealthy for the rest of the session.
     fn record_failure(&self, plugin_id: &str, message: &str) {
+        // Trap text carries a backtrace whose frame names come from the
+        // guest's name section, each up to 100 KB. It reaches every snapshot
+        // and the database, so it is bounded like a guest error.
+        let message = &truncate_on_boundary(message, MAX_GUEST_ERROR_BYTES);
         self.push_diagnostic(plugin_id, message);
         self.with_plugin(plugin_id, |state| {
             state.session_failures = state.session_failures.saturating_add(1);
@@ -298,6 +306,7 @@ impl WasmHandle {
                 command: command.to_string(),
                 input: input.to_string(),
                 reply,
+                deadline: Instant::now() + self.invoke_timeout,
             })
             .map_err(|_| anyhow!("the Wasm plugin runtime is busy"))?;
         receiver
@@ -925,9 +934,15 @@ impl crescendo::host::net::Host for StoreData {
 }
 
 /// Playlist names are host-rendered text; keep them short and printable.
+/// A playlist name a plugin may store. The length counts the name as stored:
+/// checking only the trimmed text let a plugin pad one letter with megabytes
+/// of spaces. Bidi overrides are refused because they make the sidebar show
+/// text in a different order than it is stored.
 fn valid_playlist_name(name: &str) -> bool {
-    let trimmed = name.trim();
-    !trimmed.is_empty() && trimmed.len() <= 200 && !name.chars().any(char::is_control)
+    let is_bidi_control = |c: char| matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    !name.trim().is_empty()
+        && name.len() <= 200
+        && !name.chars().any(|c| c.is_control() || is_bidi_control(c))
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1092,33 @@ struct RuntimeThread<'a> {
     paths: RuntimePaths,
 }
 
+/// Keep a message drained from the channel while coalescing. Without a bound
+/// here the channel's own bound meant nothing: every drain moved its contents
+/// into this queue, and a slow guest let player-state bursts pile up. So a
+/// notification already waiting is not queued again, and once the backlog is
+/// as full as the channel can be, notifications are dropped (as a full
+/// channel drops them) and commands are refused as busy.
+fn defer(backlog: &mut VecDeque<RuntimeMsg>, message: RuntimeMsg) {
+    let waiting = backlog.iter().any(|queued| match (queued, &message) {
+        (RuntimeMsg::Event(a), RuntimeMsg::Event(b)) => a == b,
+        (
+            RuntimeMsg::SettingsChanged { plugin_id: a },
+            RuntimeMsg::SettingsChanged { plugin_id: b },
+        ) => a == b,
+        _ => false,
+    });
+    if waiting {
+        return;
+    }
+    if backlog.len() >= MAX_PENDING_REQUESTS && !matches!(message, RuntimeMsg::Shutdown) {
+        if let RuntimeMsg::Invoke { reply, .. } = message {
+            let _ = reply.send(Err(anyhow!("the Wasm plugin runtime is busy")));
+        }
+        return;
+    }
+    backlog.push_back(message);
+}
+
 impl RuntimeThread<'_> {
     fn main(mut self, rx: mpsc::Receiver<RuntimeMsg>, specs: Vec<WasmPluginSpec>) {
         for spec in specs {
@@ -1095,8 +1137,13 @@ impl RuntimeThread<'_> {
                     command,
                     input,
                     reply,
+                    deadline,
                 } => {
-                    let result = self.dispatch_invoke(&plugin_id, &command, &input);
+                    let result = if Instant::now() >= deadline {
+                        Err(anyhow!("the plugin command expired before it could run"))
+                    } else {
+                        self.dispatch_invoke(&plugin_id, &command, &input)
+                    };
                     let _ = reply.send(result);
                 }
                 RuntimeMsg::SettingsChanged { plugin_id } => {
@@ -1107,7 +1154,7 @@ impl RuntimeThread<'_> {
                             RuntimeMsg::SettingsChanged {
                                 plugin_id: other, ..
                             } if other == plugin_id => continue,
-                            other => backlog.push_back(other),
+                            other => defer(&mut backlog, other),
                         }
                     }
                     self.dispatch_settings_changed(&plugin_id);
@@ -1116,7 +1163,7 @@ impl RuntimeThread<'_> {
                     while let Ok(next) = rx.try_recv() {
                         match next {
                             RuntimeMsg::Event(other) if other == event => continue,
-                            other => backlog.push_back(other),
+                            other => defer(&mut backlog, other),
                         }
                     }
                     self.dispatch_event(&event);
@@ -1216,7 +1263,9 @@ impl RuntimeThread<'_> {
             .plugin_state_get(&spec.id)
             .ok()
             .flatten()
-            .is_some_and(|state| state.failure_count > 0 || state.last_error.is_some())
+            .is_some_and(|state| {
+                state.failure_count > 0 || state.init_failures > 0 || state.last_error.is_some()
+            })
         {
             let _ = self.db.plugin_record_error(&spec.id, None);
         }
@@ -1227,12 +1276,19 @@ impl RuntimeThread<'_> {
     /// failures (persisted via `failure_count`) auto-disable it so a broken
     /// package can never wedge every startup.
     fn record_init_failure(&mut self, spec: &WasmPluginSpec, message: String) {
+        let message = truncate_on_boundary(&message, MAX_GUEST_ERROR_BYTES);
         log::warn!("plugin {} failed to initialize: {message}", spec.id);
         let prior_failures = self
             .db
             .plugin_state_get(&spec.id)
-            .map(|state| state.map_or(0, |state| state.failure_count))
+            .map(|state| state.map_or(0, |state| state.init_failures))
             .unwrap_or(0);
+        if let Err(error) = self.db.plugin_note_init_failure(&spec.id) {
+            log::warn!(
+                "could not count the startup failure of {}: {error}",
+                spec.id
+            );
+        }
         let message = if prior_failures + 1 >= STARTUP_FAILURE_AUTO_DISABLE {
             // The plan pairs auto-disable with safe mode: a package that fails
             // to initialize twice means the next launch should be cautious,
@@ -1312,7 +1368,10 @@ impl RuntimeThread<'_> {
                 bail!("plugin command {command:?} failed: {message}")
             }
             Err(error) => {
-                let entry = format!("command {command:?} trapped or timed out: {error:#}");
+                let entry = truncate_on_boundary(
+                    &format!("command {command:?} trapped or timed out: {error:#}"),
+                    MAX_GUEST_ERROR_BYTES,
+                );
                 self.states.record_failure(plugin_id, &entry);
                 bail!("{entry}")
             }
@@ -1369,6 +1428,52 @@ pub(crate) fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playlist_names_are_measured_as_stored() {
+        assert!(valid_playlist_name("Mix"));
+        assert!(!valid_playlist_name(&format!("x{}", " ".repeat(300))));
+        assert!(!valid_playlist_name("Mix\u{202E}gpj.exe"));
+        assert!(
+            valid_playlist_name("家族 👨‍👩‍👧"),
+            "a ZWJ emoji is ordinary text"
+        );
+    }
+
+    #[test]
+    fn the_backlog_holds_each_notification_once_and_stays_bounded() {
+        let mut backlog = VecDeque::new();
+        for _ in 0..3 {
+            defer(
+                &mut backlog,
+                RuntimeMsg::Event(HostEvent::PlayerStateChanged),
+            );
+        }
+        assert_eq!(backlog.len(), 1);
+        for id in 0..100 {
+            defer(
+                &mut backlog,
+                RuntimeMsg::Event(HostEvent::TrackChanged(Some(id))),
+            );
+        }
+        assert_eq!(backlog.len(), MAX_PENDING_REQUESTS);
+
+        let (reply, answer) = mpsc::channel();
+        defer(
+            &mut backlog,
+            RuntimeMsg::Invoke {
+                plugin_id: "p".into(),
+                command: "c".into(),
+                input: "{}".into(),
+                reply,
+                deadline: Instant::now(),
+            },
+        );
+        let refused = answer.try_recv().unwrap().unwrap_err().to_string();
+        assert!(refused.contains("busy"), "{refused}");
+        defer(&mut backlog, RuntimeMsg::Shutdown);
+        assert!(matches!(backlog.back(), Some(RuntimeMsg::Shutdown)));
+    }
 
     #[test]
     fn guest_seek_is_checked_before_bridge_dispatch() {

@@ -113,7 +113,14 @@ pub fn is_public_address(address: IpAddr) -> bool {
                 // 100.64.0.0/10 carrier-grade NAT.
                 || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
                 // 0.0.0.0/8 "this network".
-                || v4.octets()[0] == 0)
+                || v4.octets()[0] == 0
+                // 192.0.0.0/24 protocol assignments.
+                || (v4.octets()[..3] == [192, 0, 0])
+                // 198.18.0.0/15 benchmarking, which fake-IP proxies hand out
+                // for every name they intercept.
+                || (v4.octets()[0] == 198 && (18..20).contains(&v4.octets()[1]))
+                // 240.0.0.0/4 reserved.
+                || v4.octets()[0] >= 240)
         }
         IpAddr::V6(v6) => {
             !(v6.is_loopback()
@@ -123,10 +130,32 @@ pub fn is_public_address(address: IpAddr) -> bool {
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
                 // fe80::/10 link-local.
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
-                // IPv4-mapped addresses inherit the IPv4 rules.
-                || v6.to_ipv4_mapped().is_some_and(|v4| !is_public_address(IpAddr::V4(v4))))
+                // fec0::/10 deprecated site-local.
+                || (v6.segments()[0] & 0xffc0) == 0xfec0
+                // 2001::/32 Teredo, 2002::/16 6to4: tunnels to an IPv4
+                // address of the sender's choosing.
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0)
+                || v6.segments()[0] == 0x2002
+                // Addresses that carry an IPv4 address take the IPv4 rules:
+                // mapped (::ffff:0:0/96), translated (::ffff:0:0:0/96),
+                // compatible (::/96), and NAT64 (64:ff9b::/96 and
+                // 64:ff9b:1::/48), which a DNS64 network answers with for a
+                // name whose IPv4 address may be on the LAN.
+                || embedded_ipv4(v6).is_some_and(|v4| !is_public_address(IpAddr::V4(v4))))
         }
     }
+}
+
+/// The IPv4 address an IPv6 address stands for, when its prefix says it
+/// carries one in the low 32 bits.
+fn embedded_ipv4(v6: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    let s = v6.segments();
+    let low = || std::net::Ipv4Addr::from(((s[6] as u32) << 16) | s[7] as u32);
+    let carries = s[..5] == [0; 5] && (s[5] == 0 || s[5] == 0xffff) // compatible, mapped
+        || s[..4] == [0; 4] && s[4] == 0xffff && s[5] == 0 // translated
+        || s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] // NAT64 well-known
+        || s[..3] == [0x64, 0xff9b, 1]; // NAT64 local-use
+    carries.then(low)
 }
 
 /// Policy checks for one URL — this request or a redirect target. Everything
@@ -134,10 +163,17 @@ pub fn is_public_address(address: IpAddr) -> bool {
 /// resolves is checked by [`GuardedResolver`], which is the only lookup and
 /// therefore the only answer the connector can act on.
 pub fn check_url(url: &str, approved: &[String]) -> std::result::Result<(), NetRejection> {
-    let (host, _port) = https_host(url)?;
+    let (host, port) = https_host(url)?;
     if !host_is_approved(&host, approved) {
         return Err(NetRejection::BlockedHost(format!(
             "{host} is not an approved domain for this plugin"
+        )));
+    }
+    // A domain is approved as an HTTPS site, not as every service its host
+    // runs; another port could reach an admin interface on the same name.
+    if port != 443 {
+        return Err(NetRejection::BlockedHost(format!(
+            "plugin requests may only use port 443, not {port}"
         )));
     }
     Ok(())
@@ -499,6 +535,9 @@ mod tests {
             "169.254.169.254",
             "100.64.0.1",
             "0.0.0.0",
+            "198.18.0.1",
+            "192.0.0.8",
+            "240.0.0.1",
         ] {
             let address: Ipv4Addr = blocked.parse().unwrap();
             assert!(
@@ -510,7 +549,19 @@ mod tests {
             93, 184, 216, 34
         ))));
 
-        for blocked in ["::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"] {
+        for blocked in [
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "fec0::1",
+            "::ffff:127.0.0.1",
+            "::ffff:0:192.168.1.1",
+            "::10.0.0.1",
+            "64:ff9b::c0a8:101",
+            "64:ff9b:1::a00:1",
+            "2002:c0a8:101::1",
+            "2001:0:4136:e378::1",
+        ] {
             let address: Ipv6Addr = blocked.parse().unwrap();
             assert!(
                 !is_public_address(IpAddr::V6(address)),
@@ -520,6 +571,10 @@ mod tests {
         assert!(is_public_address(IpAddr::V6(
             "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()
         )));
+        // NAT64 to a public IPv4 address is an ordinary route on DNS64 networks.
+        assert!(is_public_address(IpAddr::V6(
+            "64:ff9b::5db8:d822".parse().unwrap()
+        )));
     }
 
     #[test]
@@ -528,6 +583,9 @@ mod tests {
         assert!(matches!(error, NetRejection::BlockedHost(_)));
         let error = check_url("http://example.com", &["example.com".into()]).unwrap_err();
         assert!(matches!(error, NetRejection::InvalidRequest(_)));
+        let error = check_url("https://example.com:8443/x", &["example.com".into()]).unwrap_err();
+        assert!(matches!(error, NetRejection::BlockedHost(_)));
+        assert!(check_url("https://example.com:443/x", &["example.com".into()]).is_ok());
     }
 
     #[test]

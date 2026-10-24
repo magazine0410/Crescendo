@@ -121,8 +121,7 @@ pub fn validate_plugin_source(source: &Path) -> Result<PluginSourceReport> {
 /// the immutable-copy, ZIP, containment, manifest and content-policy checks.
 pub fn validate_plugin_package(package: &Path) -> Result<PluginPackageReport> {
     validate_shipped_schema()?;
-    let validation_base = std::env::temp_dir().join("crescendo-plugin-validation");
-    fs::create_dir_all(&validation_base)?;
+    let validation_base = private_temp_dir()?;
     let (_, operation_dir) = create_operation_dir(&validation_base)?;
     let result = (|| {
         let staged = stage_archive(package, &operation_dir)?;
@@ -149,8 +148,31 @@ pub fn validate_plugin_package(package: &Path) -> Result<PluginPackageReport> {
             archive_bytes: fs::metadata(package)?.len(),
         })
     })();
-    let _ = fs::remove_dir_all(&operation_dir);
+    let _ = fs::remove_dir_all(&validation_base);
     result
+}
+
+/// A new directory only this user can enter. A fixed name under the shared
+/// temp directory let another local user create it first, and either block
+/// validation or swap in a symlink that redirected extraction.
+fn private_temp_dir() -> Result<std::path::PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    for attempt in 0..16u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(attempt);
+        let path = std::env::temp_dir().join(format!(
+            "crescendo-plugin-validation-{}-{nanos:08x}{attempt}",
+            std::process::id()
+        ));
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    bail!("could not create a private temporary directory")
 }
 
 /// Create a reproducible `.crescendo-plugin` archive. Paths are sorted,

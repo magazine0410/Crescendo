@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -347,6 +347,31 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
                disc_no, track_no, path
              ) WHERE missing = 0;",
         )?;
+    }
+    if version < 13 {
+        // Consecutive startup-initialization failures, apart from
+        // failure_count, which every kind of plugin error bumps. Auto-disable
+        // reads only this one, so a rolled-back update or a facet conflict
+        // no longer counts as a failed start.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS plugin_state (
+               plugin_id TEXT PRIMARY KEY,
+               desired_enabled INTEGER NOT NULL DEFAULT 0,
+               failure_count INTEGER NOT NULL DEFAULT 0,
+               last_error TEXT
+             );",
+        )?;
+        let has_column: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('plugin_state') \
+             WHERE name = 'init_failures')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_column {
+            tx.execute_batch(
+                "ALTER TABLE plugin_state ADD COLUMN init_failures INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;

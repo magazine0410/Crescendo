@@ -9,6 +9,8 @@ pub struct PluginStateRow {
     pub desired_enabled: bool,
     pub failure_count: i64,
     pub last_error: Option<String>,
+    /// Startup-initialization failures since the last clean start.
+    pub init_failures: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +28,7 @@ impl Db {
         self.with(|conn| {
             Ok(conn
                 .query_row(
-                    "SELECT desired_enabled, failure_count, last_error
+                    "SELECT desired_enabled, failure_count, last_error, init_failures
                      FROM plugin_state WHERE plugin_id = ?1",
                     [plugin_id],
                     |row| {
@@ -34,6 +36,7 @@ impl Db {
                             desired_enabled: row.get::<_, i64>(0)? != 0,
                             failure_count: row.get(1)?,
                             last_error: row.get(2)?,
+                            init_failures: row.get(3)?,
                         })
                     },
                 )
@@ -80,11 +83,25 @@ impl Db {
                 None => {
                     conn.execute(
                         "INSERT INTO plugin_state(plugin_id) VALUES (?1)
-                         ON CONFLICT(plugin_id) DO UPDATE SET failure_count = 0, last_error = NULL",
+                         ON CONFLICT(plugin_id) DO UPDATE SET
+                           failure_count = 0, init_failures = 0, last_error = NULL",
                         [plugin_id],
                     )?;
                 }
             }
+            Ok(())
+        })
+    }
+
+    /// Count one failed startup initialization toward auto-disable.
+    pub fn plugin_note_init_failure(&self, plugin_id: &str) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "INSERT INTO plugin_state(plugin_id, init_failures) VALUES (?1, 1)
+                 ON CONFLICT(plugin_id) DO UPDATE SET
+                   init_failures = plugin_state.init_failures + 1",
+                [plugin_id],
+            )?;
             Ok(())
         })
     }

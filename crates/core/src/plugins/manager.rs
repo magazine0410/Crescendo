@@ -409,6 +409,7 @@ impl PluginManager {
                         desired_enabled: false,
                         failure_count: 0,
                         last_error: None,
+                        init_failures: 0,
                     });
             if state.desired_enabled && !safe_mode {
                 // A Wasm plugin whose requested capabilities are not covered
@@ -459,6 +460,24 @@ impl PluginManager {
             }
         }
 
+        // Commit before the runtime starts: clearing an updated plugin's
+        // error must not race the runtime thread recording that the new
+        // version failed to start.
+        for operation in committed {
+            if operation.row.operation == "update" {
+                db.plugin_record_error(&operation.row.plugin_id, None)?;
+            }
+            db.plugin_pending_commit(&operation.row.plugin_id, operation.row.remove_data)?;
+            if let Err(error) = fs::remove_dir_all(&operation.operation_dir) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    startup_errors.push(format!(
+                        "Could not remove completed staging operation {}: {error}",
+                        operation.operation_dir.display()
+                    ));
+                }
+            }
+        }
+
         let registry = ContributionRegistry::from_loaded(&loaded);
         let projection = projection_from_loaded(&db, &loaded, 0)?;
 
@@ -500,20 +519,6 @@ impl PluginManager {
             None
         };
 
-        for operation in committed {
-            if operation.row.operation == "update" {
-                db.plugin_record_error(&operation.row.plugin_id, None)?;
-            }
-            db.plugin_pending_commit(&operation.row.plugin_id, operation.row.remove_data)?;
-            if let Err(error) = fs::remove_dir_all(&operation.operation_dir) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    startup_errors.push(format!(
-                        "Could not remove completed staging operation {}: {error}",
-                        operation.operation_dir.display()
-                    ));
-                }
-            }
-        }
         cleanup_orphan_staging(&staging_root, &mut startup_errors)?;
         fs::remove_file(&marker)?;
         sync_directory(&root)?;
@@ -740,7 +745,9 @@ impl PluginManager {
                     .context("the installed plugin must be valid before it can be updated")?;
                 let current_version = Version::parse(&current.manifest.version)?;
                 let next_version = Version::parse(&staged.manifest.version)?;
-                if next_version <= current_version {
+                // By SemVer precedence: `Version`'s ordering also compares
+                // build metadata, which let 1.0.0+x replace 1.0.0.
+                if next_version.cmp_precedence(&current_version) != std::cmp::Ordering::Greater {
                     bail!(
                         "updates must have a higher version than the installed {}",
                         current.manifest.version
@@ -1465,14 +1472,17 @@ fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Opti
     // component fail to instantiate, so it must read as incompatible here
     // rather than load and trap.
     let breaking_minor = supported.major == 0 && requested.minor != supported.minor;
-    if requested.major != supported.major || breaking_minor || requested > supported {
+    if requested.major != supported.major
+        || breaking_minor
+        || requested.cmp_precedence(&supported) == std::cmp::Ordering::Greater
+    {
         return Some(format!(
             "Requires {api_label} {}, but this build supports {supported}.",
             manifest.api_version
         ));
     }
     let minimum = Version::parse(&manifest.min_crescendo_version).ok()?;
-    if minimum > *app_version {
+    if minimum.cmp_precedence(app_version) == std::cmp::Ordering::Greater {
         return Some(format!("Requires Crescendo {minimum} or newer."));
     }
     None
@@ -2409,6 +2419,17 @@ mod tests {
                 .unwrap()
                 .safe_mode
         );
+    }
+
+    #[test]
+    fn build_metadata_alone_is_not_an_update() {
+        let (dir, _db, manager) = setup();
+        let package = dir.path().join("plugin.crescendo-plugin");
+        write_test_package(&package, &manifest("1.0.0"), &[]);
+        manager.install(&package).unwrap();
+        write_test_package(&package, &manifest("1.0.0+rebuilt"), &[]);
+        let error = manager.install(&package).unwrap_err().to_string();
+        assert!(error.contains("higher version"), "{error}");
     }
 
     #[test]
