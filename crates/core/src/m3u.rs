@@ -4,6 +4,9 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Far beyond any real playlist; a cap on what one import reads.
+const MAX_M3U_BYTES: u64 = 8 * 1024 * 1024;
+
 #[derive(Debug, Serialize)]
 pub struct M3uImportResult {
     pub playlist_id: i64,
@@ -16,7 +19,28 @@ pub struct M3uImportResult {
 /// relative to the m3u's directory; entries not present in the library are
 /// reported back, not silently dropped.
 pub fn import(db: &Db, m3u_path: &Path) -> Result<M3uImportResult> {
-    let bytes = std::fs::read(m3u_path)?;
+    // The path comes from the webview. Its unmatched lines are returned as
+    // `missing`, so without these checks any readable file could be read
+    // back line by line, and /dev/zero or a FIFO would hang the import.
+    let is_playlist = m3u_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("m3u") || e.eq_ignore_ascii_case("m3u8"));
+    if !is_playlist {
+        anyhow::bail!("only .m3u and .m3u8 files can be imported");
+    }
+    let meta = std::fs::metadata(m3u_path)?;
+    if !meta.is_file() {
+        anyhow::bail!("the playlist is not a regular file");
+    }
+    if meta.len() > MAX_M3U_BYTES {
+        anyhow::bail!("the playlist is larger than 8 MiB");
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(std::fs::File::open(m3u_path)?, MAX_M3U_BYTES),
+        &mut bytes,
+    )?;
     // .m3u8 is UTF-8 by definition; plain .m3u is assumed UTF-8 too (lossy
     // fallback keeps imports working on stray encodings).
     let content = String::from_utf8_lossy(&bytes);
@@ -182,6 +206,27 @@ mod tests {
     use super::import;
     use crate::db::Db;
     use std::path::Path;
+
+    #[test]
+    fn only_regular_playlist_files_are_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).unwrap();
+        let secret = dir.path().join("id_ed25519");
+        std::fs::write(&secret, "PRIVATE KEY\n").unwrap();
+        assert!(
+            import(&db, &secret).is_err(),
+            "any file read back as `missing`"
+        );
+        std::fs::create_dir(dir.path().join("folder.m3u")).unwrap();
+        assert!(import(&db, &dir.path().join("folder.m3u")).is_err());
+        let fifo = dir.path().join("fifo.m3u");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(import(&db, &fifo).is_err(), "a FIFO would block forever");
+    }
 
     fn insert_track(db: &Db, id: i64, path: &Path) {
         db.with(|conn| {

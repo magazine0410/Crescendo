@@ -12,14 +12,14 @@ fn main() -> anyhow::Result<()> {
         .nth(1)
         .expect("usage: waveform_test <audio-file>");
 
-    // Duration is what production passes in (it comes from the DB there).
+    // For the printout; buckets follow the decoded length.
     let duration_ms = Probe::open(&path)?
         .read()?
         .properties()
         .duration()
         .as_millis() as i64;
 
-    let peaks = crescendo_lib::waveform::decode_peaks(&path, duration_ms)?;
+    let peaks = crescendo_lib::waveform::decode_peaks(&path)?;
 
     let bars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let step = peaks.len() / 80 + 1;

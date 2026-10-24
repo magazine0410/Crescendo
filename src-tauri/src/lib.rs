@@ -26,6 +26,7 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("crescendo-art", art_protocol::handle)
         .setup(|app| {
             let db = Arc::new(Db::open(&state::db_path())?);
+            commands::library::ensure_library_path(&db);
             // Reconcile edits made while closed before a startup scan can
             // mistake a renamed file for a new track.
             match crescendo_core::forte::refresh_pending(
@@ -164,6 +165,7 @@ pub fn run() {
                 projectm_grants: Arc::new(std::sync::Mutex::new(Default::default())),
                 scanning: Arc::new(AtomicBool::new(false)),
                 scan_cancel: Arc::new(AtomicBool::new(false)),
+                dropped_paths: Default::default(),
             });
             commands::forte::start_listener(app.handle().clone());
             Ok(())
@@ -260,6 +262,20 @@ pub fn run() {
             commands::update::update_check,
             commands::update::update_install,
         ])
+        // Runs in the same event-loop callback that hands the drop to the
+        // webview, so the record exists before the webview can act on it.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if window.label() != "main" {
+                    return;
+                }
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    if let Ok(mut dropped) = state.dropped_paths.lock() {
+                        *dropped = paths.iter().cloned().collect();
+                    }
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

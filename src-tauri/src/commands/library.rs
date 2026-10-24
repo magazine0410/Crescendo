@@ -96,6 +96,42 @@ fn filter_for(query: Option<&str>) -> Result<Option<SearchFilter>, ProjectionCom
     }
 }
 
+/// The music folder before one is chosen: the user's XDG music directory.
+fn default_library_path() -> String {
+    dirs::audio_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join("Music")))
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Releases up to 1.0.2 fell back to the developer's own music folder when no
+/// folder was set. A library scanned from there keeps it, saved as a real
+/// preference; every other library gets the XDG music folder. Saving it means
+/// Settings shows the folder a scan will actually read.
+pub fn ensure_library_path(db: &crescendo_core::Db) {
+    const PREVIOUS_DEFAULT: &str = "/mnt/Mythic_Meme/Music/";
+    if !matches!(db.prefs_get("library_path"), Ok(None)) {
+        return;
+    }
+    let scanned_from_previous_default = db
+        .with(|conn| {
+            Ok(conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tracks WHERE path LIKE ?1 || '%')",
+                [PREVIOUS_DEFAULT],
+                |row| row.get::<_, bool>(0),
+            )?)
+        })
+        .unwrap_or(false);
+    let path = if scanned_from_previous_default {
+        PREVIOUS_DEFAULT.to_string()
+    } else {
+        default_library_path()
+    };
+    if let Err(error) = db.prefs_set("library_path", &path) {
+        log::warn!("could not save the music folder: {error}");
+    }
+}
+
 #[tauri::command]
 pub async fn scan_start(
     app: AppHandle,
@@ -115,7 +151,7 @@ pub async fn scan_start(
         .prefs_get("library_path")
         .ok()
         .flatten()
-        .unwrap_or_else(|| "/mnt/Mythic_Meme/Music/".to_string());
+        .unwrap_or_else(default_library_path);
     let threads: usize = db
         .prefs_get("scan_threads")
         .ok()

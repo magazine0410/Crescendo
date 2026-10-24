@@ -166,9 +166,18 @@ pub async fn playlist_add_paths(
     id: i64,
     paths: Vec<String>,
 ) -> Result<DropImportResult, String> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    {
+        let dropped = state
+            .dropped_paths
+            .lock()
+            .map_err(|_| "the drop record is unavailable".to_string())?;
+        if paths.iter().any(|path| !dropped.contains(path)) {
+            return Err("only files dropped onto the window can be added".into());
+        }
+    }
     let db = state.db.clone();
     let art = state.art.clone();
-    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let result = crescendo_core::import::add_paths_to_playlist(&db, id, &paths)
             .map_err(|e| e.to_string())?;

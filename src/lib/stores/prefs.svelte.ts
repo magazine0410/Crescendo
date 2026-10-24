@@ -77,7 +77,9 @@ export interface Prefs {
 }
 
 const DEFAULTS: Prefs = {
-  library_path: "/mnt/Mythic_Meme/Music/",
+  // The backend saves a folder at startup (see ensure_library_path), so this
+  // shows only until prefs load.
+  library_path: "",
   lastfm_api_key: "",
   history_time_format: "absolute",
   lyrics_online: true,

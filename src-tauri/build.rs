@@ -181,6 +181,17 @@ fn verify_plugin_capability_scope(root: &Path) {
         !about.contains("\"allow-plugin-") && !default.contains("\"allow-plugin-"),
         "plugin permissions must not be granted to the about or shared cover-window capability"
     );
+    // Events flow from Rust to the webviews only. `core:default` includes
+    // emit, which let the About or cover window forge `player:state` for the
+    // main window and the plugins' track events.
+    for (name, capability) in [("main", &main), ("about", &about), ("default", &default)] {
+        assert!(
+            !capability.contains("\"core:default\"")
+                && !capability.contains("\"core:event:default\"")
+                && !capability.contains("\"core:event:allow-emit"),
+            "the {name} capability must not grant event emit"
+        );
+    }
     for command in COMMANDS
         .iter()
         .copied()

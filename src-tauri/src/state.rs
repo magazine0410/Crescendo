@@ -3,6 +3,7 @@ use crate::waveform::WaveformStore;
 use crescendo_core::art::ArtStore;
 use crescendo_core::db::Db;
 use crescendo_core::plugins::PluginManager;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -43,6 +44,11 @@ pub struct AppState {
     pub projectm_grants: Arc<Mutex<ProjectMGrants>>,
     pub scanning: Arc<AtomicBool>,
     pub scan_cancel: Arc<AtomicBool>,
+    /// The paths of the last file-manager drop onto the main window, as the
+    /// native drop event reported them. `playlist_add_paths` takes only
+    /// these, so the webview can pass on a drop but cannot name a path of
+    /// its own, such as `/`, for the importer to walk.
+    pub dropped_paths: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 pub fn data_dir() -> PathBuf {
