@@ -22,6 +22,18 @@ struct SavedFiles {
     receipt: Option<String>,
 }
 
+/// The notice for Forte changes `refresh_pending` could not apply, if any.
+fn set_aside_message(set_aside: &[String]) -> Option<String> {
+    let first = set_aside.first()?;
+    let more = match set_aside.len() - 1 {
+        0 => String::new(),
+        n => format!(" (and {n} more)"),
+    };
+    Some(format!(
+        "Forte saved files, but Crescendo could not update the library for {first}{more}"
+    ))
+}
+
 /// Pick up independent Forte saves while idle; the same latch prevents a
 /// scanner, companion window, and inbox refresh from changing paths at once.
 pub fn start_listener(app: AppHandle) {
@@ -39,9 +51,12 @@ pub fn start_listener(app: AppHandle) {
             }
             let _guard = EditGuard(state.scanning.clone());
             match refresh_pending(&state.db, &crate::state::data_dir().join("forte-inbox")) {
-                Ok(changed) => {
+                Ok(refresh) => {
                     last_error.clear();
-                    if changed {
+                    if let Some(message) = set_aside_message(&refresh.set_aside) {
+                        let _ = app.emit("forte:error", &message);
+                    }
+                    if refresh.changed {
                         let _ = state.art.invalidate_stale(&state.db);
                         let _ = state.player.send(crate::player::Cmd::RefreshMetadata);
                         let _ = app.emit("library:changed", ());
@@ -139,7 +154,11 @@ pub async fn tag_edit_open(
                 let Ok(saved) = serde_json::from_str::<SavedFiles>(&line) else { continue; };
                 if saved.forte != 1 { continue; }
                 let refreshed = if saved.receipt.is_some() {
-                    refresh_pending(&db, &crate::state::data_dir().join("forte-inbox")).map(|_| ())
+                    refresh_pending(&db, &crate::state::data_dir().join("forte-inbox")).map(|refresh| {
+                        if let Some(message) = set_aside_message(&refresh.set_aside) {
+                            let _ = app.emit("forte:error", &message);
+                        }
+                    })
                 } else { refresh_files(&db, &saved.changes) };
                 if let Err(error) = refreshed {
                     let _ = app.emit("forte:error", format!("Files were saved, but Crescendo could not refresh them: {error:#}"));

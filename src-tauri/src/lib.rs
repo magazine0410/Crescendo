@@ -28,10 +28,16 @@ pub fn run() {
             let db = Arc::new(Db::open(&state::db_path())?);
             // Reconcile edits made while closed before a startup scan can
             // mistake a renamed file for a new track.
-            if let Err(error) =
-                crescendo_core::forte::refresh_pending(&db, &state::data_dir().join("forte-inbox"))
-            {
-                log::warn!("Forte library refresh deferred: {error:#}");
+            match crescendo_core::forte::refresh_pending(
+                &db,
+                &state::data_dir().join("forte-inbox"),
+            ) {
+                Ok(refresh) => {
+                    for message in refresh.set_aside {
+                        log::warn!("Forte change set aside: {message}");
+                    }
+                }
+                Err(error) => log::warn!("Forte library refresh deferred: {error:#}"),
             }
             if let Ok(stats) = db.library_stats() {
                 log::info!(
