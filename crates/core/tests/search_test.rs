@@ -147,6 +147,32 @@ fn negation() {
 }
 
 #[test]
+fn exclamation_inside_a_word_is_text() {
+    use search::Node;
+    let word = |w: &str| Node::FreeText(w.into());
+    assert_eq!(search::parse("P!nk").unwrap(), word("P!nk"));
+    assert_eq!(
+        search::parse("bad apple!!").unwrap(),
+        Node::And(vec![word("bad"), word("apple!!")])
+    );
+    assert_eq!(
+        search::parse("panic! at").unwrap(),
+        Node::And(vec![word("panic!"), word("at")])
+    );
+    // Only a leading '!' negates, and '!=' is still a tag match.
+    assert_eq!(
+        search::parse("a !b").unwrap(),
+        Node::And(vec![word("a"), Node::Not(Box::new(word("b")))])
+    );
+    assert!(matches!(
+        search::parse("genre!=jazz").unwrap(),
+        Node::Tag { negated: true, .. }
+    ));
+    let (_d, db) = test_db();
+    assert_eq!(count(&db, "genre!=jazz"), 3);
+}
+
+#[test]
 fn boolean_ops() {
     let (_d, db) = test_db();
     assert_eq!(count(&db, "|(parker, misery)"), 2);

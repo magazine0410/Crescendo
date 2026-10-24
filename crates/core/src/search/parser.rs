@@ -234,8 +234,15 @@ impl Parser {
         // '<' and '>' start a comparison only after a numeric operand — a
         // numeric tag or a literal (`plays>2`, `1980<=year`). Anywhere else
         // they are ordinary characters of the word (titles do contain them),
-        // so glue the rest of the word back on.
-        while matches!(self.peek(), Some('<' | '>')) && num_operand_word(&word).is_none() {
+        // so glue the rest of the word back on. So is a '!' after the start of
+        // a word that does not begin `!=`: it negates only a whole term, and
+        // names like `P!nk` or `Bad Apple!!` would otherwise lose their tail.
+        loop {
+            match self.peek() {
+                Some('<' | '>') if num_operand_word(&word).is_none() => {}
+                Some('!') if !word.is_empty() && self.peek_at(1) != Some('=') => {}
+                _ => break,
+            }
             word.push(self.bump().unwrap());
             word.push_str(&self.bareword(&['=', '!', '<', '>'])?);
         }
