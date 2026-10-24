@@ -1,6 +1,7 @@
 pub mod art;
 pub mod db;
 pub mod forte;
+pub(crate) mod http;
 pub mod import;
 pub mod lastfm;
 pub mod listening;

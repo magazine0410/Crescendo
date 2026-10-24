@@ -134,27 +134,13 @@ fn signature(params: &BTreeMap<String, String>, secret: &str) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn pace_requests() {
-    // History lookups and outbox delivery share a modest request rate.
-    // This runs only on blocking workers, never the audio or UI thread.
-    #[cfg(not(test))]
-    {
-        static LAST_REQUEST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-        let mut last = LAST_REQUEST.lock().unwrap();
-        if let Some(previous) = *last {
-            std::thread::sleep(Duration::from_millis(350).saturating_sub(previous.elapsed()));
-        }
-        *last = Some(std::time::Instant::now());
-    }
-}
-
 fn signed_call(
     endpoint: &str,
     c: &Credentials,
     method: &str,
     mut params: BTreeMap<String, String>,
 ) -> Result<Value> {
-    pace_requests();
+    super::pace_requests();
     params.insert("api_key".into(), c.api_key.clone());
     params.insert("method".into(), method.into());
     if !c.session.is_empty() {
@@ -171,10 +157,8 @@ fn signed_call(
         .send_form(&params)
         .map_err(|_| Outage("Cannot reach Last.fm. Will retry."))?;
     let status = response.status().as_u16();
-    let value = response
-        .body_mut()
-        .read_json::<Value>()
-        .map_err(|_| unreadable(status))?;
+    let value: Value =
+        crate::http::read_json(response.body_mut()).map_err(|_| unreadable(status))?;
     api_result(status, value)
 }
 
@@ -211,7 +195,7 @@ fn track_url_at(endpoint: &str, db: &Db, api_key: &str, track: &Track) -> Result
         let url: Option<String> = serde_json::from_str(&raw)?;
         return Ok(url.and_then(|u| valid_track_url(&u)));
     }
-    pace_requests();
+    super::pace_requests();
     let mut response = ureq::get(endpoint)
         .query("method", "track.getInfo")
         .query("api_key", api_key)
@@ -227,10 +211,8 @@ fn track_url_at(endpoint: &str, db: &Db, api_key: &str, track: &Track) -> Result
         .call()
         .map_err(|_| Outage("Cannot reach Last.fm. Will retry."))?;
     let status = response.status().as_u16();
-    let value: Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|_| unreadable(status))?;
+    let value: Value =
+        crate::http::read_json(response.body_mut()).map_err(|_| unreadable(status))?;
     let found = match api_result(status, value) {
         Ok(value) => {
             let t = &value["track"];

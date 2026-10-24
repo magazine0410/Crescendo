@@ -119,7 +119,7 @@ pub fn check(current_version: &str, cache_dir: &Path) -> Result<UpdateCheck> {
     let release = fetch_latest_release(&user_agent(&current))?;
     let latest = version_from_tag(&release.tag_name)?;
 
-    if latest <= current {
+    if !is_newer(&latest, &current) {
         return Ok(UpdateCheck {
             current_version: current.to_string(),
             available: false,
@@ -168,7 +168,7 @@ pub fn install(
             "GitHub's latest release changed from {requested} to {latest}. Check for updates again."
         );
     }
-    if latest <= current {
+    if !is_newer(&latest, &current) {
         bail!("Crescendo {current} is already up to date");
     }
 
@@ -234,9 +234,7 @@ fn fetch_latest_release(user_agent: &str) -> Result<GithubRelease> {
         Err(error) => return Err(anyhow!(error)).context("could not check GitHub for updates"),
     };
 
-    response
-        .body_mut()
-        .read_json::<GithubRelease>()
+    crate::http::read_json::<GithubRelease>(response.body_mut())
         .context("GitHub returned invalid release information")
 }
 
@@ -249,14 +247,14 @@ fn fetch_latest_release_with_gh(reason: AnonymousFailure) -> Result<GithubReleas
             "GitHub is rate-limiting update checks that are not signed in, for this whole network. Wait an hour and try again, or install GitHub CLI and run `gh auth login` to check as yourself."
         ),
     })?;
-    let output = Command::new(gh)
-        .args([
-            "api",
-            "repos/magazine0410/Crescendo/releases/latest",
-            "-H",
-            "Accept: application/vnd.github+json",
-        ])
-        .output()
+    let mut command = Command::new(gh);
+    command.args([
+        "api",
+        "repos/magazine0410/Crescendo/releases/latest",
+        "-H",
+        "Accept: application/vnd.github+json",
+    ]);
+    let output = output_within(&mut command, GH_CHECK_TIMEOUT)
         .context("could not run GitHub CLI for the private release check")?;
     if !output.status.success() {
         let detail = command_error_detail(&output);
@@ -317,6 +315,13 @@ fn version_from_tag(tag: &str) -> Result<Version> {
         .unwrap_or(trimmed);
     parse_version(without_v)
         .with_context(|| format!("GitHub's release tag {tag:?} is not a version"))
+}
+
+/// Newer by SemVer precedence. `Version`'s own ordering also compares build
+/// metadata, so a `v1.0.2+fix` tag would count as newer than an installed
+/// 1.0.2 and be offered on every check.
+fn is_newer(candidate: &Version, current: &Version) -> bool {
+    candidate.cmp_precedence(current) == std::cmp::Ordering::Greater
 }
 
 fn parse_version(value: &str) -> Result<Version> {
@@ -515,11 +520,60 @@ fn download_package_anonymously(
     Ok(bytes)
 }
 
+const GH_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+const GH_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// `Command::output`, but killed after `timeout`. A stalled network would
+/// otherwise keep the install permit, and the About window's "Updating…",
+/// until Crescendo restarts.
+fn output_within(command: &mut Command, timeout: Duration) -> Result<Output> {
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Drain both pipes while waiting, or a chatty child blocks on a full one.
+    let mut stdout = child.stdout.take().expect("piped");
+    let mut stderr = child.stderr.take().expect("piped");
+    let out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "GitHub CLI did not finish within {} seconds",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    Ok(Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
+}
+
 fn download_package_with_gh(asset: &GithubAsset, partial: &Path, release_tag: &str) -> Result<u64> {
     let gh = find_program(&["gh"]).ok_or_else(|| {
         anyhow!("GitHub CLI is required to download an update from the private repository")
     })?;
-    let output = Command::new(gh)
+    let mut command = Command::new(gh);
+    command
         .args([
             "release",
             "download",
@@ -530,8 +584,8 @@ fn download_package_with_gh(asset: &GithubAsset, partial: &Path, release_tag: &s
         .arg("--pattern")
         .arg(&asset.name)
         .arg("--output")
-        .arg(partial)
-        .output()
+        .arg(partial);
+    let output = output_within(&mut command, GH_DOWNLOAD_TIMEOUT)
         .context("could not run GitHub CLI to download the private update")?;
     if !output.status.success() {
         let detail = command_error_detail(&output);
@@ -586,9 +640,9 @@ fn detect_package_kind() -> Result<PackageKind> {
         return Ok(PackageKind::Rpm);
     }
 
-    if find_program(&["apt-get", "dpkg"]).is_some() {
+    if find_system_program(&["apt-get", "dpkg"]).is_some() {
         Ok(PackageKind::Deb)
-    } else if find_program(&["dnf5", "dnf", "zypper", "rpm"]).is_some() {
+    } else if find_system_program(&["dnf5", "dnf", "zypper", "rpm"]).is_some() {
         Ok(PackageKind::Rpm)
     } else {
         bail!("This Linux system does not support Crescendo's .deb or .rpm updater")
@@ -654,23 +708,23 @@ fn install_script_args(
 fn installer_for(kind: PackageKind) -> Result<(PathBuf, Vec<&'static str>)> {
     Ok(match kind {
         PackageKind::Deb => {
-            if let Some(apt_get) = find_program(&["apt-get"]) {
+            if let Some(apt_get) = find_system_program(&["apt-get"]) {
                 (apt_get, vec!["install", "-y"])
-            } else if let Some(dpkg) = find_program(&["dpkg"]) {
+            } else if let Some(dpkg) = find_system_program(&["dpkg"]) {
                 (dpkg, vec!["-i"])
             } else {
                 bail!("No Debian package installer was found")
             }
         }
         PackageKind::Rpm => {
-            if let Some(dnf) = find_program(&["dnf5", "dnf"]) {
+            if let Some(dnf) = find_system_program(&["dnf5", "dnf"]) {
                 (dnf, vec!["install", "-y"])
-            } else if let Some(zypper) = find_program(&["zypper"]) {
+            } else if let Some(zypper) = find_system_program(&["zypper"]) {
                 (
                     zypper,
                     vec!["--non-interactive", "--no-gpg-checks", "install"],
                 )
-            } else if let Some(rpm) = find_program(&["rpm"]) {
+            } else if let Some(rpm) = find_system_program(&["rpm"]) {
                 (rpm, vec!["-Uvh"])
             } else {
                 bail!("No RPM package installer was found")
@@ -680,10 +734,10 @@ fn installer_for(kind: PackageKind) -> Result<(PathBuf, Vec<&'static str>)> {
 }
 
 fn run_installer(kind: PackageKind, package: &Path, asset: &GithubAsset) -> Result<()> {
-    let pkexec = find_program(&["pkexec"]).ok_or_else(|| {
+    let pkexec = find_system_program(&["pkexec"]).ok_or_else(|| {
         anyhow!("PolicyKit (pkexec) is required to install the update with administrator access")
     })?;
-    let shell = find_program(&["sh"])
+    let shell = find_system_program(&["sh"])
         .ok_or_else(|| anyhow!("A POSIX shell is required to install the update"))?;
     let (installer, args) = installer_for(kind)?;
     let digest = expected_sha256(asset)?;
@@ -748,7 +802,11 @@ fn command_error_detail(output: &Output) -> String {
         .collect()
 }
 
-fn find_program(names: &[&str]) -> Option<PathBuf> {
+/// A program in the root-owned system directories only. Everything that runs
+/// as root through pkexec is found this way: a user's `PATH` may hold
+/// directories they can write, such as `~/bin`, and pkexec's clean
+/// environment does not help once the full path has been chosen here.
+fn find_system_program(names: &[&str]) -> Option<PathBuf> {
     for directory in [
         "/usr/local/bin",
         "/usr/local/sbin",
@@ -763,6 +821,15 @@ fn find_program(names: &[&str]) -> Option<PathBuf> {
                 return Some(candidate);
             }
         }
+    }
+    None
+}
+
+/// A program the user runs as themselves, such as GitHub CLI, which is often
+/// installed under the home directory.
+fn find_program(names: &[&str]) -> Option<PathBuf> {
+    if let Some(found) = find_system_program(names) {
+        return Some(found);
     }
     let path = env::var_os("PATH")?;
     for directory in env::split_paths(&path) {
@@ -794,6 +861,38 @@ mod tests {
         assert_eq!(version_from_tag("v0.8.0").unwrap(), Version::new(0, 8, 0));
         assert_eq!(version_from_tag("0.7.3").unwrap(), Version::new(0, 7, 3));
         assert!(version_from_tag("release-eight").is_err());
+    }
+
+    #[test]
+    fn build_metadata_does_not_make_a_release_newer() {
+        let installed = Version::new(1, 0, 2);
+        assert!(!is_newer(
+            &version_from_tag("v1.0.2+fix").unwrap(),
+            &installed
+        ));
+        assert!(is_newer(&version_from_tag("v1.0.3").unwrap(), &installed));
+        assert!(!is_newer(
+            &version_from_tag("v1.0.3-rc.1").unwrap(),
+            &Version::new(1, 0, 3)
+        ));
+    }
+
+    #[test]
+    fn a_stalled_subprocess_is_killed_at_its_deadline() {
+        let started = std::time::Instant::now();
+        let error = output_within(
+            Command::new("/bin/sh").args(["-c", "sleep 30"]),
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("did not finish"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let ok = output_within(
+            Command::new("/bin/sh").args(["-c", "echo done"]),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(ok.stdout, b"done\n");
     }
 
     #[test]

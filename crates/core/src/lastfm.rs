@@ -119,12 +119,23 @@ pub fn test_key(api_key: &str) -> Result<bool> {
         .timeout_global(Some(std::time::Duration::from_secs(10)))
         .build()
         .call();
+    // Only Last.fm's verdict on the key answers "invalid"; an outage or rate
+    // limit says nothing about it and must not send the user to replace it.
     match resp {
         Ok(mut r) => {
-            let json: Value = r.body_mut().read_json()?;
-            Ok(json.get("error").is_none())
+            let json: Value = crate::http::read_json(r.body_mut())?;
+            match int_of(&json["error"]) {
+                None => Ok(true),
+                Some(11 | 16 | 29) => {
+                    anyhow::bail!("Last.fm is temporarily unavailable. Try again later.")
+                }
+                Some(_) => Ok(false),
+            }
         }
-        Err(ureq::Error::StatusCode(_)) => Ok(false),
+        Err(ureq::Error::StatusCode(400 | 403)) => Ok(false),
+        Err(ureq::Error::StatusCode(code)) => {
+            anyhow::bail!("Last.fm returned HTTP {code}. Try again later.")
+        }
         Err(e) => Err(e.into()),
     }
 }
@@ -138,11 +149,24 @@ fn cached_or_fetch(
     cached_response(db, cache_key, || fetch(api_key, params))
 }
 
+/// How long a name Last.fm does not know is remembered as unknown. Shorter
+/// than the cache of real answers, so a page created later still turns up.
+const NOT_FOUND_TTL_SECS: i64 = 7 * 86_400;
+
 fn cached_response(
     db: &Db,
     cache_key: &str,
     fetch: impl FnOnce() -> Result<Option<Value>>,
 ) -> Result<Option<Value>> {
+    // Credits look up every name in a track's tags, and many of those have no
+    // Last.fm page; without this they were fetched again on every play.
+    let not_found_key = format!("not-found\u{1f}{cache_key}");
+    if db
+        .lastfm_cache_get(&not_found_key, NOT_FOUND_TTL_SECS)?
+        .is_some()
+    {
+        return Ok(None);
+    }
     if let Some(raw) = db.lastfm_cache_get(cache_key, CACHE_TTL_SECS)? {
         if let Ok(json) = serde_json::from_str::<Value>(&raw) {
             // Older versions cached every API failure as null. Those entries
@@ -156,15 +180,39 @@ fn cached_response(
         return Ok(None);
     };
     // API errors include invalid keys and transient failures even on HTTP 200.
-    // Only successful metadata belongs in the month-long cache.
+    // Only successful metadata belongs in the month-long cache; "not found"
+    // (error 6) gets its own shorter one.
     if !json.is_object() || json.get("error").is_some() {
+        if int_of(&json["error"]) == Some(6) {
+            db.lastfm_cache_put(&not_found_key, "null")?;
+        }
         return Ok(None);
     }
     db.lastfm_cache_put(cache_key, &serde_json::to_string(&json)?)?;
     Ok(Some(json))
 }
 
+/// Every Last.fm request from this app shares one modest rate: Now Playing
+/// credits look up several names per track change, and quick skipping sent
+/// bursts past Last.fm's guideline of about five requests a second, which
+/// risks the key being suspended. This runs only on blocking workers, never
+/// the audio or UI thread.
+pub(crate) fn pace_requests() {
+    #[cfg(not(test))]
+    {
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+        static LAST_REQUEST: Mutex<Option<Instant>> = Mutex::new(None);
+        let mut last = LAST_REQUEST.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = *last {
+            std::thread::sleep(Duration::from_millis(350).saturating_sub(previous.elapsed()));
+        }
+        *last = Some(Instant::now());
+    }
+}
+
 fn fetch(api_key: &str, params: &[(&str, &str)]) -> Result<Option<Value>> {
+    pace_requests();
     let mut req = ureq::get(API_ROOT)
         .query("api_key", api_key)
         .query("format", "json")
@@ -185,7 +233,7 @@ fn fetch(api_key: &str, params: &[(&str, &str)]) -> Result<Option<Value>> {
             return Ok(None);
         }
     };
-    let json: Value = resp.body_mut().read_json()?;
+    let json: Value = crate::http::read_json(resp.body_mut())?;
     Ok(Some(json))
 }
 
@@ -248,6 +296,23 @@ mod tests {
         assert_eq!(
             cached_response(&db, "artist", || panic!("positive cache missed")).unwrap(),
             Some(success)
+        );
+    }
+
+    /// Only "not found" is remembered, and only that one key: an outage
+    /// (above) or another name must still be fetched.
+    #[test]
+    fn an_unknown_name_is_not_fetched_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("cache.db")).unwrap();
+        let missing = cached_response(&db, "nobody", || Ok(Some(json!({"error": 6})))).unwrap();
+        assert!(missing.is_none());
+        let again = cached_response(&db, "nobody", || panic!("not-found cache missed")).unwrap();
+        assert!(again.is_none());
+        let other = json!({"artist": {"name": "Somebody"}});
+        assert_eq!(
+            cached_response(&db, "somebody", || Ok(Some(other.clone()))).unwrap(),
+            Some(other)
         );
     }
 

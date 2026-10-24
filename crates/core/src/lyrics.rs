@@ -423,7 +423,7 @@ fn thwiki_lyrics(track: &Track) -> OnlineResult {
             .build()
             .call()
         {
-            Ok(mut r) => match r.body_mut().read_to_string() {
+            Ok(mut r) => match crate::http::read_string(r.body_mut()) {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!("LyricsTouHou returned unreadable text ({query}): {e}");
@@ -545,7 +545,7 @@ fn lrclib_lyrics(track: &Track) -> OnlineResult {
         .timeout_global(Some(std::time::Duration::from_secs(15)))
         .build();
     let json: Value = match req.call() {
-        Ok(mut r) => match r.body_mut().read_json() {
+        Ok(mut r) => match crate::http::read_json(r.body_mut()) {
             Ok(v) => v,
             Err(e) => {
                 log::warn!("LRCLIB returned unreadable JSON: {e}");
@@ -596,7 +596,7 @@ fn vocadb_get(root: &str, path: &str, query: &[(&str, &str)]) -> Fetch {
         req = req.query(k, v);
     }
     match req.call() {
-        Ok(mut r) => match r.body_mut().read_json() {
+        Ok(mut r) => match crate::http::read_json(r.body_mut()) {
             Ok(v) => Fetch::Ok(v),
             Err(e) => {
                 log::warn!("{root}{path} returned unreadable JSON: {e}");
@@ -685,6 +685,8 @@ fn parse_lyrics(raw: &str, source: &str) -> Option<LyricsResult> {
     })
 }
 
+const MAX_LRC_OFFSET_MS: i64 = 3_600_000;
+
 /// The LRC format: `[mm:ss.xx]` line tags, `[ar:…]`-style ID tags, enhanced
 /// `<mm:ss.xx>` word tags, and a line repeated at several times by carrying
 /// several tags at once.
@@ -720,7 +722,13 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
             if stamps.is_empty() {
                 if let Some(end) = ID_TAG.captures(rest).map(|c| {
                     if c[1].eq_ignore_ascii_case("offset") {
-                        offset_ms = c[2].trim().parse().unwrap_or(0);
+                        // Any i64 parses; an hour either way is already absurd,
+                        // and the extremes overflowed the shift below.
+                        offset_ms = c[2]
+                            .trim()
+                            .parse::<i64>()
+                            .unwrap_or(0)
+                            .clamp(-MAX_LRC_OFFSET_MS, MAX_LRC_OFFSET_MS);
                     }
                     c[0].len()
                 }) {
@@ -749,7 +757,7 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
     // move back by it.
     if offset_ms != 0 {
         for line in &mut lines {
-            line.ms = (line.ms - offset_ms).max(0);
+            line.ms = line.ms.saturating_sub(offset_ms).max(0);
         }
     }
     lines.sort_by_key(|l| l.ms);
@@ -859,6 +867,12 @@ mod tests {
         assert_eq!(timed("[offset:+500]\n[00:12.34]a")[0].0, 11_840);
         assert_eq!(timed("[offset:-500]\n[00:12.34]a")[0].0, 12_840);
         assert_eq!(timed("[offset:+5000]\n[00:01.00]a")[0].0, 0);
+        // The extremes of i64 used to overflow the shift.
+        assert_eq!(
+            timed("[offset:-9223372036854775808]\n[00:01.00]a")[0].0,
+            3_601_000
+        );
+        assert_eq!(timed("[offset:9223372036854775807]\n[00:01.00]a")[0].0, 0);
     }
 
     #[test]

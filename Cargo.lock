@@ -897,6 +897,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "env_logger",
+ "flate2",
  "image",
  "lofty",
  "log",
