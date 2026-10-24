@@ -3,7 +3,7 @@
 use crate::{db::Db, model::Track};
 use anyhow::{bail, Context, Result};
 use md5::{Digest, Md5};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -41,7 +41,15 @@ struct Config {
     token: Option<(String, i64)>,
     generation: u64,
     error: Option<String>,
+    /// Failed deliveries per outbox row in this run that were not outages.
+    /// Kept in memory: a row reaching `MAX_ITEM_ATTEMPTS` is marked failed,
+    /// and a restart only grants the rest another few tries.
+    attempts: std::collections::HashMap<i64, u32>,
 }
+
+/// Deliveries of one scrobble that may fail for reasons of its own before it
+/// is given up on.
+const MAX_ITEM_ATTEMPTS: u32 = 5;
 
 #[derive(Serialize)]
 pub struct ScrobbleStatus {
@@ -57,6 +65,34 @@ pub struct ScrobbleStatus {
 struct ApiError {
     code: i64,
     message: String,
+}
+
+/// Last.fm as a whole could not take the request: unreachable, a server
+/// error, or rate limiting. Delivery stops and retries later, without holding
+/// it against the scrobble that happened to be first.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct Outage(&'static str);
+
+fn is_outage_status(status: u16) -> bool {
+    status == 429 || status >= 500
+}
+
+fn is_outage(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<Outage>().is_some()
+        || error
+            .downcast_ref::<ApiError>()
+            .is_some_and(|e| matches!(e.code, 11 | 16 | 29))
+}
+
+/// A response body that is not JSON: an outage when the status says so,
+/// otherwise a rejection of this one request (a proxy's 4xx page, say).
+fn unreadable(status: u16) -> anyhow::Error {
+    if is_outage_status(status) {
+        Outage("Last.fm returned an unreadable response. Will retry.").into()
+    } else {
+        anyhow::anyhow!("Last.fm returned an unreadable response (HTTP {status}).")
+    }
 }
 
 fn api_result(status: u16, value: Value) -> Result<Value> {
@@ -77,8 +113,11 @@ fn api_result(status: u16, value: Value) -> Result<Value> {
         }
         .into());
     }
+    if is_outage_status(status) {
+        return Err(Outage("Last.fm is unavailable. Will retry.").into());
+    }
     if !(200..300).contains(&status) {
-        bail!("Last.fm returned HTTP {status}. Will retry.");
+        bail!("Last.fm returned HTTP {status}.");
     }
     Ok(value)
 }
@@ -130,12 +169,12 @@ fn signed_call(
         .http_status_as_error(false)
         .build()
         .send_form(&params)
-        .map_err(|_| anyhow::anyhow!("Cannot reach Last.fm. Will retry."))?;
+        .map_err(|_| Outage("Cannot reach Last.fm. Will retry."))?;
     let status = response.status().as_u16();
     let value = response
         .body_mut()
         .read_json::<Value>()
-        .map_err(|_| anyhow::anyhow!("Last.fm returned an unreadable response. Will retry."))?;
+        .map_err(|_| unreadable(status))?;
     api_result(status, value)
 }
 
@@ -186,12 +225,12 @@ fn track_url_at(endpoint: &str, db: &Db, api_key: &str, track: &Track) -> Result
         .http_status_as_error(false)
         .build()
         .call()
-        .map_err(|_| anyhow::anyhow!("Cannot reach Last.fm. Will retry."))?;
+        .map_err(|_| Outage("Cannot reach Last.fm. Will retry."))?;
     let status = response.status().as_u16();
     let value: Value = response
         .body_mut()
         .read_json()
-        .map_err(|_| anyhow::anyhow!("Last.fm returned an unreadable response."))?;
+        .map_err(|_| unreadable(status))?;
     let found = match api_result(status, value) {
         Ok(value) => {
             let t = &value["track"];
@@ -476,24 +515,42 @@ impl Scrobbler {
     }
 
     fn deliver(&self) -> Result<()> {
-        // One batch is bounded; wakeups coalesce, and outages retry once a minute.
-        for _ in 0..50 {
+        // One batch is bounded; wakeups coalesce, and outages retry once a
+        // minute. A scrobble that fails on its own account does not stop the
+        // batch, so it cannot hold back the ones queued after it.
+        let account = {
+            let config = self.config.lock().unwrap();
+            config.credentials.username.clone()
+        };
+        let batch: Vec<(i64, String, i64)> = self.db.with(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, track_json, started_at FROM lastfm_outbox \
+                 WHERE state = 'pending' AND account = ?1 ORDER BY id LIMIT 50",
+            )?;
+            let rows = stmt
+                .query_map([&account], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(rows)
+        })?;
+        for (id, raw, started_at) in batch {
             let _operation = self.operation.lock().unwrap();
             let credentials = self.config.lock().unwrap().credentials.clone();
-            if !credentials.enabled || credentials.session.is_empty() {
+            // An account change while the batch ran clears or rebinds the
+            // rows fetched above.
+            if !credentials.enabled
+                || credentials.session.is_empty()
+                || credentials.username != account
+            {
                 return Ok(());
             }
-            let item: Option<(i64, String, i64)> = self.db.with(|conn| Ok(conn.query_row(
-                "SELECT id, track_json, started_at FROM lastfm_outbox WHERE state = 'pending' AND account = ?1 ORDER BY id LIMIT 1",
-                [&credentials.username], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?))?;
-            let Some((id, raw, started_at)) = item else {
-                return Ok(());
-            };
-            let track: Track = serde_json::from_str(&raw)?;
             if now() - started_at > 14 * 86400 {
                 self.mark(id, "skipped", Some("Too old for Last.fm"))?;
                 continue;
             }
+            let Ok(track) = serde_json::from_str::<Track>(&raw) else {
+                self.mark(id, "failed", Some("The queued play could not be read."))?;
+                continue;
+            };
             // The library deliberately fills absent titles from filenames. Verify
             // tagged metadata on the worker before making any write request.
             let tagged =
@@ -513,26 +570,45 @@ impl Scrobbler {
             match result {
                 Ok((state, message)) => {
                     self.mark(id, state, message.as_deref())?;
-                    self.config.lock().unwrap().error = message;
+                    let mut config = self.config.lock().unwrap();
+                    config.attempts.remove(&id);
+                    config.error = message;
+                }
+                // A local database error is no fault of the scrobble either.
+                Err(e) if is_outage(&e) || e.downcast_ref::<rusqlite::Error>().is_some() => {
+                    return Err(e)
                 }
                 Err(e) => {
                     if let Some(api) = e.downcast_ref::<ApiError>() {
-                        match api.code {
-                            9 | 10 | 13 | 26 => {
-                                let mut config = self.config.lock().unwrap();
-                                let mut c = config.credentials.clone();
-                                c.enabled = false;
-                                self.save(&c)?;
-                                config.credentials = c;
-                                config.generation += 1;
-                            }
-                            11 | 16 | 29 => {}
-                            _ => {
-                                self.mark(id, "failed", Some(&e.to_string()))?;
-                            }
+                        if matches!(api.code, 9 | 10 | 13 | 26) {
+                            let mut config = self.config.lock().unwrap();
+                            let mut c = config.credentials.clone();
+                            c.enabled = false;
+                            self.save(&c)?;
+                            config.credentials = c;
+                            config.generation += 1;
+                            return Err(e);
                         }
+                        self.mark(id, "failed", Some(&e.to_string()))?;
+                        self.config.lock().unwrap().error = Some(e.to_string());
+                        continue;
                     }
-                    return Err(e);
+                    // Not an outage and not a verdict from the API: retry on
+                    // later wakes, then give up on this one scrobble.
+                    let give_up = {
+                        let mut config = self.config.lock().unwrap();
+                        config.error = Some(e.to_string());
+                        let attempts = config.attempts.entry(id).or_insert(0);
+                        *attempts += 1;
+                        let give_up = *attempts >= MAX_ITEM_ATTEMPTS;
+                        if give_up {
+                            config.attempts.remove(&id);
+                        }
+                        give_up
+                    };
+                    if give_up {
+                        self.mark(id, "failed", Some(&e.to_string()))?;
+                    }
                 }
             }
         }
@@ -935,6 +1011,141 @@ mod tests {
                 .as_deref(),
             Some("false")
         );
+    }
+
+    /// Answer one request per response, in order, on the same address.
+    fn servers(responses: Vec<(u16, Value)>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            for (status, value) in responses {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    bytes.push(byte[0]);
+                }
+                let length = String::from_utf8_lossy(&bytes)
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|s| s.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; length];
+                socket.read_exact(&mut body).unwrap();
+                let body = value.to_string();
+                write!(socket, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        (url, thread)
+    }
+
+    fn outbox_states(service: &Scrobbler) -> Vec<String> {
+        service
+            .db
+            .with(|c| {
+                let mut stmt = c.prepare("SELECT state FROM lastfm_outbox ORDER BY id")?;
+                let states = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                Ok(states)
+            })
+            .unwrap()
+    }
+
+    /// A scrobble Last.fm keeps refusing used to be retried first, forever,
+    /// with every later play queued behind it until all were too old.
+    #[test]
+    fn a_failing_scrobble_does_not_hold_back_later_ones() {
+        let (dir, mut service, mut track) = fixture();
+        tagged_wav(dir.path(), &mut track);
+        let cache = format!(
+            "track:{}",
+            serde_json::to_string(&("歌手", "夜の歌")).unwrap()
+        );
+        service
+            .db
+            .lastfm_cache_put(&cache, r#""https://www.last.fm/music/Artist/_/Song""#)
+            .unwrap();
+        service
+            .enqueue(&track, now() - 10, service.generation())
+            .unwrap();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+
+        let unconfirmed = serde_json::json!({"scrobbles":{"@attr":{"accepted":"0","ignored":"0"}}});
+        let accepted = serde_json::json!({"scrobbles":{"@attr":{"accepted":"1","ignored":"0"}}});
+        let (endpoint, requests) = servers(vec![(200, unconfirmed.clone()), (200, accepted)]);
+        service.endpoint = endpoint;
+        service.deliver().unwrap();
+        requests.join().unwrap();
+        assert_eq!(outbox_states(&service), ["pending", "submitted"]);
+
+        // Each later wake retries it, until it is given up on.
+        for attempt in 2..=MAX_ITEM_ATTEMPTS {
+            let (endpoint, requests) = servers(vec![(200, unconfirmed.clone())]);
+            service.endpoint = endpoint;
+            service.deliver().unwrap();
+            requests.join().unwrap();
+            let expected = if attempt < MAX_ITEM_ATTEMPTS {
+                "pending"
+            } else {
+                "failed"
+            };
+            assert_eq!(outbox_states(&service)[0], expected);
+        }
+        assert_eq!(service.status().unwrap().pending, 0);
+    }
+
+    /// An outage is no fault of the first scrobble and never counts against it.
+    #[test]
+    fn outages_stop_the_batch_without_counting_against_a_scrobble() {
+        let (dir, mut service, mut track) = fixture();
+        tagged_wav(dir.path(), &mut track);
+        let cache = format!(
+            "track:{}",
+            serde_json::to_string(&("歌手", "夜の歌")).unwrap()
+        );
+        service
+            .db
+            .lastfm_cache_put(&cache, r#""https://www.last.fm/music/Artist/_/Song""#)
+            .unwrap();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+        for _ in 0..MAX_ITEM_ATTEMPTS + 1 {
+            let (endpoint, requests) = servers(vec![(502, serde_json::json!("bad gateway"))]);
+            service.endpoint = endpoint;
+            assert!(service.deliver().is_err());
+            requests.join().unwrap();
+        }
+        assert_eq!(outbox_states(&service), ["pending"]);
+    }
+
+    #[test]
+    fn rows_too_old_or_unreadable_are_settled_before_parsing() {
+        let (_dir, service, _track) = fixture();
+        service
+            .db
+            .with(|c| {
+                c.execute(
+                    "INSERT INTO lastfm_outbox(account, track_json, started_at) VALUES \
+                     ('alice', '{\"older format\": true}', ?1), \
+                     ('alice', '{\"older format\": true}', ?2)",
+                    params![now() - 15 * 86400, now()],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        service.deliver().unwrap();
+        assert_eq!(outbox_states(&service), ["skipped", "failed"]);
     }
 
     #[test]
