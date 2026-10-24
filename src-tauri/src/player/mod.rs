@@ -164,6 +164,32 @@ fn advance_for_transition(queue: &mut PlayQueue, gapless_pending: bool) -> Optio
     }
 }
 
+/// Manual Next. Under repeat-one the callback's reservation is the current
+/// track again, which a skip must leave rather than restart.
+fn skip_for_transition(queue: &mut PlayQueue, gapless_pending: bool) -> Option<i64> {
+    if gapless_pending && queue.repeat != RepeatMode::One {
+        queue.current()
+    } else {
+        queue.skip()
+    }
+}
+
+/// Stop rather than keep skipping once this many tracks in a row failed to
+/// play: past that, the music folder is most likely unmounted.
+const MAX_CONSECUTIVE_FAILURES: usize = 20;
+
+/// Where a playback error moves to: the next track, or None to stop because
+/// every track the walk can reach next has just failed. Without this,
+/// repeat-one retried a broken file forever and repeat-all cycled the whole
+/// context while the drive was unmounted.
+fn after_failure(queue: &mut PlayQueue, gapless_pending: bool, failures: usize) -> Option<i64> {
+    let limit = queue.cycle_len().clamp(1, MAX_CONSECUTIVE_FAILURES);
+    if failures >= limit {
+        return None;
+    }
+    advance_for_transition(queue, gapless_pending)
+}
+
 #[derive(Clone)]
 pub struct PlayerHandle {
     tx: Sender<Cmd>,
@@ -356,6 +382,9 @@ struct Engine {
     /// fires, then the EOS handler stops and clears it. Shared with the
     /// about-to-finish callback (streaming thread), hence atomic.
     stop_after_current: Arc<AtomicBool>,
+    /// Playback errors since a track last played for a second or the user
+    /// last picked a track; see `after_failure`.
+    consecutive_failures: usize,
 }
 
 fn run_player(
@@ -499,6 +528,7 @@ fn run_player(
         gapless_pending,
         handoff,
         stop_after_current,
+        consecutive_failures: 0,
     };
     engine.apply_volume();
 
@@ -536,8 +566,9 @@ fn run_player(
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_for_transition, enqueue_projectm_pcm, seek_clock_time, Cmd, HandoffCoordinator,
-        PlayerHandle, PlayerState, Status, MAX_PROJECTM_PCM_BYTES, MAX_SEEK_MS,
+        advance_for_transition, after_failure, enqueue_projectm_pcm, seek_clock_time,
+        skip_for_transition, Cmd, HandoffCoordinator, PlayerHandle, PlayerState, Status,
+        MAX_CONSECUTIVE_FAILURES, MAX_PROJECTM_PCM_BYTES, MAX_SEEK_MS,
     };
     use crescendo_core::playqueue::{PlayQueue, RepeatMode};
     use std::collections::VecDeque;
@@ -648,6 +679,41 @@ mod tests {
         assert_eq!(queue.current(), Some(20));
         assert_eq!(advance_for_transition(&mut queue, false), Some(30));
     }
+
+    #[test]
+    fn next_under_repeat_one_leaves_the_track() {
+        let mut queue = PlayQueue::default();
+        queue.set_context(vec![10, 20, 30], 0);
+        queue.repeat = RepeatMode::One;
+        // The callback reserves the same track again under repeat-one.
+        assert_eq!(queue.advance(), Some(10));
+        assert_eq!(skip_for_transition(&mut queue, true), Some(20));
+        assert_eq!(skip_for_transition(&mut queue, false), Some(30));
+    }
+
+    #[test]
+    fn a_failing_track_is_not_retried_forever() {
+        let mut queue = PlayQueue::default();
+        queue.set_context(vec![10, 20, 30], 0);
+        queue.repeat = RepeatMode::One;
+        assert_eq!(after_failure(&mut queue, false, 1), None);
+
+        queue.repeat = RepeatMode::All;
+        assert_eq!(after_failure(&mut queue, false, 1), Some(20));
+        assert_eq!(after_failure(&mut queue, false, 2), Some(30));
+        // Every track has now failed once; wrapping would start the loop over.
+        assert_eq!(after_failure(&mut queue, false, 3), None);
+
+        queue.set_context((0..1000).collect(), 0);
+        assert_eq!(
+            after_failure(&mut queue, false, MAX_CONSECUTIVE_FAILURES - 1),
+            Some(1)
+        );
+        assert_eq!(
+            after_failure(&mut queue, false, MAX_CONSECUTIVE_FAILURES),
+            None
+        );
+    }
 }
 
 impl Engine {
@@ -681,6 +747,17 @@ impl Engine {
 
     fn handle_cmd(&mut self, cmd: Cmd) {
         self.sample_listening();
+        if matches!(
+            cmd,
+            Cmd::PlayResolvedContext { .. }
+                | Cmd::JumpTo(_)
+                | Cmd::TogglePause
+                | Cmd::Next
+                | Cmd::Prev
+        ) {
+            // A track the user picks gets tried even after a run of failures.
+            self.consecutive_failures = 0;
+        }
         match cmd {
             Cmd::RefreshMetadata => self.publish_state(),
             Cmd::PlayResolvedContext { ids, start_index } => {
@@ -733,7 +810,7 @@ impl Engine {
                 // The callback may already have queued the next URI while the
                 // outgoing track is still audible. In that case its queue entry
                 // is the track Next should start, not one to skip over again.
-                let id = self.begin_manual_transition(advance_for_transition);
+                let id = self.begin_manual_transition(skip_for_transition);
                 self.sync_queue_shared();
                 match id {
                     Some(id) => self.start_track(id),
@@ -850,11 +927,17 @@ impl Engine {
                 );
                 let _ = self.app.emit("player:error", err.error().to_string());
                 // Skip to the next track rather than going silent.
-                let id = self.begin_manual_transition(advance_for_transition);
+                self.consecutive_failures += 1;
+                let failures = self.consecutive_failures;
+                let id =
+                    self.begin_manual_transition(|q, gapless| after_failure(q, gapless, failures));
                 self.sync_queue_shared();
                 match id {
                     Some(id) => self.start_track(id),
-                    None => self.stop(),
+                    None => {
+                        log::warn!("stopping after {failures} playback errors in a row");
+                        self.stop();
+                    }
                 }
             }
             MessageView::Element(el) => {
@@ -927,6 +1010,14 @@ impl Engine {
             return;
         };
         let _ = self.playbin.set_state(gstreamer::State::Ready);
+        // READY stops the old stream's threads but, unlike NULL, keeps what
+        // they already posted. A decoder usually posts two errors for one bad
+        // file, and an EOS can be waiting behind a user command; read after
+        // this point, either would be taken as the new track's and skip it.
+        if let Some(bus) = self.playbin.bus() {
+            bus.set_flushing(true);
+            bus.set_flushing(false);
+        }
         {
             // about-to-finish performs its queue decision and URI write under
             // this lock, so neither side can land a stale URI after the other.
@@ -981,6 +1072,9 @@ impl Engine {
         let position = self.position_ms();
         let playing = self.status == Status::Playing
             && self.playbin.current_state() == gstreamer::State::Playing;
+        if playing && position >= 1000 {
+            self.consecutive_failures = 0;
+        }
         let Some(session) = &mut self.listening else {
             return;
         };

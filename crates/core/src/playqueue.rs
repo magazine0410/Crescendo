@@ -185,6 +185,29 @@ impl PlayQueue {
         Some(self.context[self.order[next]])
     }
 
+    /// The track a manual Next goes to. Like [`advance`](Self::advance), except
+    /// that repeat-one holds only a song that ends on its own, not one the user
+    /// skips: the queue and context then walk as if repeat were off.
+    pub fn skip(&mut self) -> Option<i64> {
+        if self.repeat != RepeatMode::One {
+            return self.advance();
+        }
+        self.repeat = RepeatMode::Off;
+        let next = self.advance();
+        self.repeat = RepeatMode::One;
+        next
+    }
+
+    /// How many advances it takes before the walk reaches a track it already
+    /// returned: one under repeat-one, otherwise every queued and context track.
+    pub fn cycle_len(&self) -> usize {
+        if self.repeat == RepeatMode::One {
+            1
+        } else {
+            self.adhoc.len() + self.order.len()
+        }
+    }
+
     /// Previous track in the walk order (queue is not re-entered).
     pub fn previous(&mut self) -> Option<i64> {
         self.playing_adhoc = None;
@@ -254,6 +277,31 @@ mod tests {
         q.repeat = RepeatMode::One;
         assert_eq!(q.advance(), Some(1));
         assert_eq!(q.advance(), Some(1));
+    }
+
+    #[test]
+    fn skip_leaves_a_repeated_track_and_reaches_the_queue() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![1, 2], 0);
+        q.repeat = RepeatMode::One;
+        q.queue_add(&[99]);
+        assert_eq!(q.skip(), Some(99));
+        assert_eq!(q.skip(), Some(2));
+        // Repeat-one still holds the track the skip landed on.
+        assert_eq!(q.advance(), Some(2));
+        assert_eq!(q.repeat, RepeatMode::One);
+        // At the end of the context a skip stops, as with repeat off.
+        assert_eq!(q.skip(), None);
+    }
+
+    #[test]
+    fn cycle_len_counts_queue_and_context_but_one_under_repeat_one() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![1, 2, 3], 0);
+        q.queue_add(&[99]);
+        assert_eq!(q.cycle_len(), 4);
+        q.repeat = RepeatMode::One;
+        assert_eq!(q.cycle_len(), 1);
     }
 
     #[test]
