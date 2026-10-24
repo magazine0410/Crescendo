@@ -2,8 +2,12 @@
 //!
 //! The app deliberately ships `.deb` and `.rpm` packages, so Tauri's
 //! AppImage updater is not applicable. Downloads are kept in Crescendo's
-//! cache and verified against GitHub's SHA-256 release-asset digest before
-//! they are passed to the system package manager through PolicyKit.
+//! cache and must pass two checks before they are passed to the system
+//! package manager through PolicyKit: GitHub's SHA-256 release-asset digest,
+//! which proves the download is intact, and a minisign signature made with
+//! Crescendo's offline release key, which proves who published it. GitHub
+//! recomputes the digest for whatever is uploaded, so on its own it would let
+//! anyone with write access to the releases install code as root.
 
 use anyhow::{anyhow, bail, Context, Result};
 use semver::Version;
@@ -108,8 +112,18 @@ struct SelectedUpdate {
     version: Version,
     kind: PackageKind,
     asset: GithubAsset,
+    /// `<package>.sig`, as `tauri signer sign` writes it.
+    signature: GithubAsset,
     path: PathBuf,
 }
+
+/// The public half of Crescendo's release-signing key, as
+/// `tauri signer generate` writes it. The secret half never leaves the
+/// release machine; every package is signed with it before upload.
+const UPDATE_PUBLIC_KEY: &str = include_str!("../update-signing.pub");
+
+/// A real signature file is about 400 bytes.
+const MAX_SIGNATURE_BYTES: u64 = 4096;
 
 /// Query the latest published (non-draft, non-prerelease) GitHub Release and
 /// compare it with the running app's version.
@@ -190,6 +204,21 @@ pub fn install(
     if !cached_package_is_valid(&selected.path, &selected.asset)? {
         bail!("The downloaded package failed its GitHub SHA-256 integrity check");
     }
+
+    let signature = download_signature(
+        &selected.signature,
+        &selected.path,
+        selected.release.access,
+        &selected.release.tag_name,
+        &agent,
+    )?;
+    verify_package_signature(
+        UPDATE_PUBLIC_KEY,
+        &selected.path,
+        &selected.asset,
+        &signature,
+    )
+    .context("The update is not signed by Crescendo's release key. Nothing was installed.")?;
 
     run_installer(selected.kind, &selected.path, &selected.asset)?;
     let package_removed = match fs::remove_file(&selected.path) {
@@ -290,6 +319,26 @@ fn select_update(
             )
         })?;
     validate_asset(&asset)?;
+    let signature_name = format!("{}.sig", asset.name);
+    let signature = release
+        .assets
+        .iter()
+        .find(|candidate| candidate.name == signature_name)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "Crescendo {version} has no signature for {}, so it cannot be verified. The update was not installed.",
+                asset.name
+            )
+        })?;
+    if signature.size == 0
+        || signature.size > MAX_SIGNATURE_BYTES
+        || !signature
+            .browser_download_url
+            .starts_with("https://github.com/")
+    {
+        bail!("GitHub returned an unusable signature for {}", asset.name);
+    }
 
     let file_name = Path::new(&asset.name)
         .file_name()
@@ -303,6 +352,7 @@ fn select_update(
         version,
         kind,
         asset,
+        signature,
         path,
     })
 }
@@ -420,6 +470,101 @@ fn cached_package_is_valid(path: &Path, asset: &GithubAsset) -> Result<bool> {
         return Ok(false);
     }
     Ok(file_sha256(path)? == expected_sha256(asset)?.to_ascii_lowercase())
+}
+
+/// The minisign text inside a key or signature file. `tauri signer` wraps it
+/// in base64; plain minisign files are accepted as they are.
+fn minisign_text(raw: &str) -> Result<String> {
+    use base64::Engine as _;
+    let raw = raw.trim();
+    if raw.starts_with("untrusted comment:") {
+        return Ok(raw.to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw)
+        .context("not a minisign key or signature")?;
+    String::from_utf8(bytes).context("not a minisign key or signature")
+}
+
+/// Check `signature` over the package with `public_key`, and that it was made
+/// for this asset: the trusted comment, which the signature covers, names the
+/// file, and the file name carries the version, so a signature cannot be
+/// moved to another package. The SHA-256 is taken in the same pass and must
+/// equal GitHub's digest, which the elevated script checks again on its own
+/// copy, so the bytes installed as root are the bytes that were verified.
+fn verify_package_signature(
+    public_key: &str,
+    package: &Path,
+    asset: &GithubAsset,
+    signature: &str,
+) -> Result<()> {
+    let key = minisign_verify::PublicKey::decode(&minisign_text(public_key)?)
+        .map_err(|error| anyhow!("the release public key is invalid: {error}"))?;
+    let signature = minisign_verify::Signature::decode(&minisign_text(signature)?)
+        .map_err(|error| anyhow!("the signature is malformed: {error}"))?;
+    let expected = format!("file:{}", asset.name);
+    if !signature
+        .trusted_comment()
+        .split('\t')
+        .any(|field| field == expected)
+    {
+        bail!("the signature was made for a different file");
+    }
+    let mut verifier = key
+        .verify_stream(&signature)
+        .map_err(|error| anyhow!("the signature cannot be checked: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut reader =
+        BufReader::new(File::open(package).context("could not open the cached update package")?);
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .context("could not read the cached update package")?;
+        if read == 0 {
+            break;
+        }
+        verifier.update(&buffer[..read]);
+        hasher.update(&buffer[..read]);
+    }
+    verifier
+        .finalize()
+        .map_err(|error| anyhow!("the signature does not match: {error}"))?;
+    if format!("{:x}", hasher.finalize()) != expected_sha256(asset)?.to_ascii_lowercase() {
+        bail!("the signed package does not match GitHub's digest");
+    }
+    Ok(())
+}
+
+/// Fetch `<package>.sig` the same way as the package, into the same private
+/// cache directory, and return its text.
+fn download_signature(
+    signature: &GithubAsset,
+    package_path: &Path,
+    access: ReleaseAccess,
+    release_tag: &str,
+    user_agent: &str,
+) -> Result<String> {
+    let dir = package_path
+        .parent()
+        .ok_or_else(|| anyhow!("the update cache path has no parent directory"))?;
+    ensure_private_dir(dir)?;
+    let partial = dir.join(format!("{}.part", signature.name));
+    let _ = fs::remove_file(&partial);
+    let result = (|| -> Result<String> {
+        let bytes = match access {
+            ReleaseAccess::Anonymous => {
+                download_package_anonymously(signature, &partial, user_agent)?
+            }
+            ReleaseAccess::GithubCli => download_package_with_gh(signature, &partial, release_tag)?,
+        };
+        if bytes != signature.size || bytes > MAX_SIGNATURE_BYTES {
+            bail!("the update signature download was incomplete");
+        }
+        String::from_utf8(fs::read(&partial)?).context("the update signature is not text")
+    })();
+    let _ = fs::remove_file(&partial);
+    result
 }
 
 fn file_sha256(path: &Path) -> Result<String> {
@@ -861,6 +1006,71 @@ mod tests {
         assert_eq!(version_from_tag("v0.8.0").unwrap(), Version::new(0, 8, 0));
         assert_eq!(version_from_tag("0.7.3").unwrap(), Version::new(0, 7, 3));
         assert!(version_from_tag("release-eight").is_err());
+    }
+
+    /// A throwaway key made with `tauri signer generate` for these tests only;
+    /// its secret half was discarded. The signatures below were made with
+    /// `tauri signer sign` over [`SIGNED_BYTES`].
+    const TEST_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE0N0E3QjMwMjE0MDAzMzUKUldRMUEwQWhNSHQ2cEdJcGR5MEtnVEFDNlBzcXNKUmcvT081cWVWbTVBN2gzdkViOWdhK0xvMlUK";
+    const SIGNED_BYTES: &[u8] = b"pretend package bytes\n";
+    const SIGNED_NAME: &str = "Crescendo_9.9.9_amd64.deb";
+    /// The same bytes, signed by the test key as `Crescendo_9.9.8_amd64.deb`.
+    const SIGNED_FOR_OTHER_NAME: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRMUEwQWhNSHQ2cERuNnBaUmRGV2VRelNRWjNZSlFybURPRjh2Z0RrbTF4NEllaDlQdldicitTbmNPNWNtNE1wTHhieW85RkhyYmdQUWt0SzhJcnkxQkpRMjVLZTV4NXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODM4NzQxCWZpbGU6Q3Jlc2NlbmRvXzkuOS44X2FtZDY0LmRlYgoyL2ZuZGtTWmRXSUNiU0dCd3lzZXdGOXJ6UVpaOWgxU1ZDZ0h3ZDdlOFFWcHJ1OUhTaE45WGJPSGowR1ZQRnhHZDEvNW90Qzh0TG8xSjhVejRQZy9CUT09Cg==";
+    /// The same bytes and name, signed by a different throwaway key.
+    const SIGNED_BY_OTHER_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUVVQ0R2FIdWFQS2l6alhzdi9VWkU1a0QwK2toTVBKWGxzMUtIVm1JcDZXbHVKaWpWMmMvbVhhaHlZTkNNQkFzMVYyNnpSMTUzbmNvZXBydTlqUEcwaDBpU3c0TzNOTEFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODM4NzQxCWZpbGU6Q3Jlc2NlbmRvXzkuOS45X2FtZDY0LmRlYgpYaklyQkUxaGF4RllBSjR3cWxGTU9VSC9GTzdzNGt2Qk1XaGwyRWVFSkNVbVliQ09DMi95WGNUMVNWakJJMHpOWklCR1FBaldSalBiKzJmclYvYlNBUT09Cg==";
+    const SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRMUEwQWhNSHQ2cEtEYWtXbmNBNTArS3Z4ZUNuc2plaHMyRlFXaGZoYlJmSCtXQ2RyV3ZIb2IxalhSeFhDaHZ5aGFNK2lEeVFOTklIN3lHQTF6a0x4ZWdQbXRWajZQUXdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyODM4NjgwCWZpbGU6Q3Jlc2NlbmRvXzkuOS45X2FtZDY0LmRlYgovZ1dHRjUzaWh3YkV3eDdmMVc3cDJRSW9yZlREWG5oZjl1eWlRVEhTaExXZVBCcHc3T1F5andmZDc0SHovaVM5MjV5WFRiTGlvRXpGc1ZKbXkrejdBQT09Cg==";
+
+    fn signed_asset(name: &str, bytes: &[u8]) -> GithubAsset {
+        let mut asset = asset(name);
+        asset.size = bytes.len() as u64;
+        asset.digest = Some(format!("sha256:{:x}", Sha256::digest(bytes)));
+        asset
+    }
+
+    fn verify(bytes: &[u8], asset: &GithubAsset, signature: &str) -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join(&asset.name);
+        fs::write(&package, bytes).unwrap();
+        verify_package_signature(TEST_PUBLIC_KEY, &package, asset, signature)
+    }
+
+    #[test]
+    fn a_package_signed_by_the_release_key_verifies() {
+        verify(
+            SIGNED_BYTES,
+            &signed_asset(SIGNED_NAME, SIGNED_BYTES),
+            SIGNATURE,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn signatures_bind_the_bytes_the_file_and_the_key() {
+        let tampered = b"pretend package bytes!\n";
+        assert!(verify(tampered, &signed_asset(SIGNED_NAME, tampered), SIGNATURE).is_err());
+
+        // A validly signed older package uploaded under the new name.
+        let renamed = signed_asset(SIGNED_NAME, SIGNED_BYTES);
+        let error = verify(SIGNED_BYTES, &renamed, SIGNED_FOR_OTHER_NAME).unwrap_err();
+        assert!(error.to_string().contains("different file"), "{error}");
+
+        let asset = signed_asset(SIGNED_NAME, SIGNED_BYTES);
+        assert!(verify(SIGNED_BYTES, &asset, SIGNED_BY_OTHER_KEY).is_err());
+
+        // GitHub's digest, which root checks again, must name the same bytes.
+        let mut wrong_digest = signed_asset(SIGNED_NAME, SIGNED_BYTES);
+        wrong_digest.digest = Some(format!("sha256:{}", "0".repeat(64)));
+        assert!(verify(SIGNED_BYTES, &wrong_digest, SIGNATURE).is_err());
+
+        assert!(verify(SIGNED_BYTES, &asset, "not a signature").is_err());
+    }
+
+    /// The key in `update-signing.pub` must be the real release key.
+    #[test]
+    fn the_shipped_key_is_not_the_test_key() {
+        let shipped = minisign_text(UPDATE_PUBLIC_KEY).unwrap();
+        assert!(minisign_verify::PublicKey::decode(&shipped).is_ok());
+        assert_ne!(shipped, minisign_text(TEST_PUBLIC_KEY).unwrap());
     }
 
     #[test]
