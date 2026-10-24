@@ -340,15 +340,28 @@ impl PluginManager {
             // thread does not find that out until long after this point. So
             // compile and link the replacement here, synchronously, and roll
             // back a package that this build cannot run.
-            let unloadable = if operation.row.operation == "update" {
+            //
+            // Not in safe mode, though. That compile runs before the window
+            // opens, and a component that takes it too long or crashes it is
+            // exactly what safe mode has to get the user past.
+            let is_update = operation.row.operation == "update";
+            let skipped =
+                is_update && safe_mode && is_wasm_package(&inventory, &operation.row.plugin_id);
+            let unloadable = if is_update && !skipped {
                 wasm_update_error(&installed_root, &inventory, &operation.row.plugin_id)
             } else {
                 None
             };
-            if operation.row.operation == "update"
-                && (invalid_ids.contains(&operation.row.plugin_id) || unloadable.is_some())
+            if is_update
+                && (skipped
+                    || invalid_ids.contains(&operation.row.plugin_id)
+                    || unloadable.is_some())
             {
                 let message = match &unloadable {
+                    _ if skipped => format!(
+                        "The update for {} was not applied because plugins are disabled for this run; the previous version was kept. Install the update again.",
+                        operation.row.plugin_id
+                    ),
                     Some(reason) => format!(
                         "Updated package for {} could not be loaded ({reason}); the previous version was restored.",
                         operation.row.plugin_id
@@ -1543,6 +1556,14 @@ fn wasm_update_error(
         return None;
     }
     super::wasm::preflight_component(&installed_root.join(plugin_id).join("module.wasm")).err()
+}
+
+fn is_wasm_package(inventory: &[InstalledRecord], plugin_id: &str) -> bool {
+    inventory
+        .iter()
+        .find(|record| record.id == plugin_id)
+        .and_then(|record| record.package.as_ref())
+        .is_some_and(|package| package.manifest.kind == PluginKind::Wasm)
 }
 
 fn apply_pending_operation(

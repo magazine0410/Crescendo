@@ -53,6 +53,12 @@ CRESCENDO_DISABLE_PLUGINS=1 crescendo
 Remove the variable on the next run. This is an escape hatch, not a persistent
 setting.
 
+A normal startup compiles a pending Wasm update before committing it, so it
+can restore the previous version if the new component does not load. Safe
+mode, for any of the three reasons above, skips that compile: the pending
+update is rolled back unchecked, the previous version is kept, and the plugin
+records that the update must be installed again.
+
 Plugin diagnostics in Settings show malformed or incompatible installed
 packages without preventing the rest of Crescendo from starting. When an
 interrupted update is incomplete or fails installed-package validation,

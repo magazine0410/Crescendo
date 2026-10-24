@@ -292,6 +292,43 @@ fn an_update_carrying_an_unloadable_component_is_rolled_back() {
     );
 }
 
+/// The pre-commit compile runs before the window opens. Safe mode exists to
+/// get past a plugin that hangs or crashes startup, so it must not compile a
+/// pending update; that update is rolled back unchecked instead.
+#[test]
+fn safe_mode_rolls_back_a_pending_update_without_compiling_it() {
+    let (dir, db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &[]));
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    let update = dir.path().join("update.crescendo-plugin");
+    // Never compiled: if it were, the rollback message would say so.
+    write_package(&update, &wasm_manifest("2.0.0", &[]), b"not a component");
+    manager.install(&update).unwrap();
+    drop(manager);
+
+    // A startup that never finished, e.g. killed while compiling.
+    std::fs::File::create(dir.path().join("plugins").join("startup-in-progress")).unwrap();
+    let manager = restart(&dir, db.clone());
+    assert!(manager.snapshot().unwrap().safe_mode);
+    let info = plugin_info(&manager);
+    assert_eq!(info.version.as_deref(), Some("1.0.0"));
+    assert!(info.pending.is_none());
+    let error = info.error.unwrap_or_default();
+    assert!(
+        error.contains("plugins are disabled for this run"),
+        "{error}"
+    );
+    drop(manager);
+
+    // The next normal run loads the kept version.
+    let manager = restart(&dir, db);
+    assert!(!manager.snapshot().unwrap().safe_mode);
+    assert_eq!(
+        invoke_once_ready(&manager, "identity", serde_json::json!({"n": 2}))["n"],
+        2
+    );
+}
+
 #[test]
 fn a_component_built_against_a_breaking_api_is_refused_before_it_runs() {
     let (dir, _db, manager) = setup();
