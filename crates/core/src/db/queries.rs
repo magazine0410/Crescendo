@@ -1197,7 +1197,8 @@ fn collect_playlist_ids(
          WHERE pt.playlist_id = ?1 AND (\
            ucontains(t.title, ?2) OR ucontains(t.artist, ?2) OR \
            ucontains(t.album, ?2) OR ucontains(t.albumartist, ?2) OR \
-           ucontains(t.genre, ?2)\
+           ucontains(t.genre, ?2) OR ucontains(t.titlesort, ?2) OR \
+           ucontains(t.artistsort, ?2) OR ucontains(t.albumartistsort, ?2)\
          ) ORDER BY pt.position";
 
     let query = query.map(str::trim).filter(|query| !query.is_empty());
@@ -1241,7 +1242,8 @@ fn collect_playlist_paths(
          WHERE pt.playlist_id = ?1 AND t.missing = 0 AND (\
            ucontains(t.title, ?2) OR ucontains(t.artist, ?2) OR \
            ucontains(t.album, ?2) OR ucontains(t.albumartist, ?2) OR \
-           ucontains(t.genre, ?2)\
+           ucontains(t.genre, ?2) OR ucontains(t.titlesort, ?2) OR \
+           ucontains(t.artistsort, ?2) OR ucontains(t.albumartistsort, ?2)\
          ) ORDER BY pt.position LIMIT ?3";
 
     let query = query.map(str::trim).filter(|query| !query.is_empty());

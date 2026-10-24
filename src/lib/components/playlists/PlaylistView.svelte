@@ -67,7 +67,19 @@
     let index = 0;
     for (const g of playlists.groups) {
       g.tracks.forEach((track, position) => {
-        const searchBlob = [track.title, track.artist, track.album, track.albumartist, track.genre]
+        // The romaji sort tags are what rows display for Japanese names, so
+        // they must match too. Keep these fields in step with the backend's
+        // FILTERED queries, or a filtered play context starts on the wrong row.
+        const searchBlob = [
+          track.title,
+          track.artist,
+          track.album,
+          track.albumartist,
+          track.genre,
+          track.titlesort,
+          track.artistsort,
+          track.albumartistsort,
+        ]
           .filter((field): field is string => Boolean(field))
           .join("\u001f")
           .toLowerCase();

@@ -352,7 +352,16 @@ function build() {
 function matches(t: Track, query: string | null | undefined): boolean {
   if (!query || !query.trim()) return true;
   const q = query.toLowerCase();
-  return [t.title, t.artist, t.album, t.albumartist, t.genre].some((f) =>
+  return [
+    t.title,
+    t.artist,
+    t.album,
+    t.albumartist,
+    t.genre,
+    t.titlesort,
+    t.artistsort,
+    t.albumartistsort,
+  ].some((f) =>
     f?.toLowerCase().includes(q),
   );
 }
@@ -1094,7 +1103,8 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           const ids = "ids" in ctx ? ctx.ids : [ctx.id];
           const track = tracks.find((track) => track.id === id);
           present = ids.some((pid) => playlistTracks.get(pid)?.includes(id)) &&
-            !!track && (!("query" in ctx) || [track.title, track.artist, track.album, track.albumartist, track.genre]
+            !!track && (!("query" in ctx) || [track.title, track.artist, track.album, track.albumartist, track.genre,
+              track.titlesort, track.artistsort, track.albumartistsort]
               .filter(Boolean).join("\u001f").toLowerCase().includes(ctx.query.trim().toLowerCase()));
         }
         if (!present) throw { kind: "operation", message: "the selected track is no longer in this view" };

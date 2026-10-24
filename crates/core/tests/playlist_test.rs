@@ -164,6 +164,34 @@ fn filtered_playlist_playback_matches_visible_rows() {
         .unwrap();
     assert_eq!(genre, vec![4]);
 
+    // Rows show the romaji sort tag for a Japanese name, so it filters too.
+    db.with(|conn| {
+        conn.execute(
+            "UPDATE tracks SET title = '時の過ぎゆくままに', \
+             titlesort = 'Toki no Sugiyuku Mama ni' WHERE id = 5",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE tracks SET artist = '上海アリス幻樂団', artistsort = 'ZUN' WHERE id = 4",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    for (query, expected) in [
+        ("sugiyuku", vec![5]),
+        ("zun", vec![4]),
+        ("過ぎゆく", vec![5]),
+    ] {
+        let romaji = db
+            .resolve_context_exact(&PlayContext::FilteredPlaylist {
+                id: b,
+                query: query.into(),
+            })
+            .unwrap();
+        assert_eq!(romaji, expected, "{query}");
+    }
+
     let blank = db
         .resolve_context_exact(&PlayContext::FilteredPlaylist {
             id: a,
