@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { prefs, type CollectionsPlacement } from "$lib/stores/prefs.svelte";
+  import { clampScanThreads, prefs, type CollectionsPlacement } from "$lib/stores/prefs.svelte";
   import { library } from "$lib/stores/library.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { call, isTauri } from "$lib/api";
@@ -335,7 +335,12 @@
           min="1"
           max="16"
           value={prefs.values.scan_threads}
-          onchange={(e) => prefs.set("scan_threads", parseInt(e.currentTarget.value, 10) || 4)}
+          onchange={(e) => {
+            // min/max do not stop a typed value; show what is saved.
+            const threads = clampScanThreads(parseInt(e.currentTarget.value, 10));
+            e.currentTarget.value = String(threads);
+            prefs.set("scan_threads", threads);
+          }}
         />
 
         <label for="libview">Library view</label>

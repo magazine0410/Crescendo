@@ -411,6 +411,10 @@ class LibraryStore {
     const norm = q && q.trim() ? q : null;
     if (norm === this.query) return;
     this.query = norm;
+    // Before any await: the query change starts the track list reload, which
+    // may reveal the playing track. Resetting after loadValues() (a GROUP BY
+    // over the library) used to land later and throw that reveal away.
+    this.resetScroll();
     await this.loadValues();
     // Drop the parts of the selection the new search filtered away.
     if (this.selectedValues.length > 0) {
@@ -425,7 +429,6 @@ class LibraryStore {
         }
       }
     }
-    this.resetScroll();
     await this.loadAlbums();
   }
 

@@ -19,10 +19,28 @@
   let wheelTip = $state(false);
   let wheelTipTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // A mouse notch (a delta of 40 px or more) is one 5% step. A touchpad
+  // sends a stream of small deltas per flick, and one step per event let a
+  // single gesture jump the volume to full, so those add up to a step per
+  // 100 px instead. Horizontal scrolling is ignored.
+  let smoothDistance = 0;
+
   function onWheel(e: WheelEvent) {
     e.preventDefault();
-    const step = e.deltaY < 0 ? 0.05 : -0.05;
-    player.setVolume(player.volume + step);
+    if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    const px = e.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? e.deltaY : e.deltaY * 40;
+    let steps: number;
+    if (Math.abs(px) >= 40) {
+      steps = Math.sign(px);
+      smoothDistance = 0;
+    } else {
+      if (Math.sign(px) !== Math.sign(smoothDistance)) smoothDistance = 0;
+      smoothDistance += px;
+      steps = Math.trunc(smoothDistance / 100);
+      smoothDistance -= steps * 100;
+      if (steps === 0) return;
+    }
+    player.setVolume(player.volume - steps * 0.05);
     // The open popover already shows the number.
     if (open) return;
     wheelTip = true;

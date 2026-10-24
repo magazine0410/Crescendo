@@ -115,6 +115,11 @@ const DEFAULTS: Prefs = {
 };
 
 /** `%title_display%` -> `%title%` for the three retired _display tags. */
+/** The tag-reader thread count's allowed range; the backend clamps it too. */
+export function clampScanThreads(n: number): number {
+  return Number.isFinite(n) ? Math.min(16, Math.max(1, Math.trunc(n))) : 4;
+}
+
 function foldDisplayTags(pattern: string): string {
   return pattern.replace(/%(title|artist|albumartist)_display%/gi, "%$1%");
 }
@@ -148,7 +153,7 @@ class PrefsStore {
       v[key] = folded;
       if (folded !== raw[key]) await call("prefs_set", { key, value: folded });
     }
-    if (raw.scan_threads) v.scan_threads = parseInt(raw.scan_threads, 10) || 4;
+    if (raw.scan_threads) v.scan_threads = clampScanThreads(parseInt(raw.scan_threads, 10));
     if (raw.show_waveform) v.show_waveform = raw.show_waveform === "true";
     if (raw.replaygain_enabled) v.replaygain_enabled = raw.replaygain_enabled === "true";
     if (raw.library_view === "track_list" || raw.library_view === "album_wall")
@@ -197,10 +202,19 @@ class PrefsStore {
   }
 
   async set<K extends keyof Prefs>(key: K, value: Prefs[K]): Promise<PreferenceMutationResult> {
+    const previous = this.values[key];
     this.values[key] = value;
     // Also in the browser: mock.ts mirrors the prefs the dev backend needs
     // (prefer_romanized decides its ordering), and ignores the rest.
-    return call<PreferenceMutationResult>("prefs_set", { key, value: String(value) });
+    try {
+      return await call<PreferenceMutationResult>("prefs_set", { key, value: String(value) });
+    } catch (e) {
+      // Show what is actually saved. For prefer_romanized this also keeps the
+      // display helpers in step with the backend's ordering. A newer set of
+      // the same key wins over this rollback.
+      if (this.values[key] === value) this.values[key] = previous;
+      throw e;
+    }
   }
 
   /** UI layout numbers, persisted with a shared prefix. */

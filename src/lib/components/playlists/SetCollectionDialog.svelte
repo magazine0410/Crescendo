@@ -47,7 +47,10 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") close();
-    else if (e.key === "Enter") save();
+    else if (e.key === "Enter" && !e.isComposing && !(e.target as Element | null)?.closest?.("button, [role='option']"))
+      // Enter on a focused button (Cancel, ✕, a chip) belongs to that button,
+      // and Enter that ends a Japanese IME composition is not a save.
+      save();
   }
 </script>
 

@@ -324,7 +324,8 @@
             bind:value={renameValue}
             onblur={commitCollectionRename}
             onkeydown={(e) => {
-              if (e.key === "Enter") commitCollectionRename();
+              // isComposing: Enter that ends an IME composition is not a commit.
+              if (e.key === "Enter" && !e.isComposing) commitCollectionRename();
               if (e.key === "Escape") renamingCollectionId = null;
             }}
             {@attach (el) => el.focus()}
@@ -372,7 +373,7 @@
       bind:value={renameValue}
       onblur={commitRename}
       onkeydown={(e) => {
-        if (e.key === "Enter") commitRename();
+        if (e.key === "Enter" && !e.isComposing) commitRename();
         if (e.key === "Escape") renamingId = null;
       }}
       {@attach (el) => el.focus()}

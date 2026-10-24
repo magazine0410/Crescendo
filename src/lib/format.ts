@@ -163,6 +163,13 @@ const TAG_GETTERS: Record<string, (t: Track) => string | number | null> = {
   codec: (t) => t.format,
 };
 
+/** A getter for a `%tag%` name the user typed. Own keys only: `%__proto__%`
+    or `%constructor%` would otherwise reach Object.prototype and throw while
+    rendering every row. */
+function tagGetter(tag: string): ((t: Track) => string | number | null) | undefined {
+  return Object.hasOwn(TAG_GETTERS, tag) ? TAG_GETTERS[tag] : undefined;
+}
+
 function fileStem(path: string): string {
   const base = path.slice(path.lastIndexOf("/") + 1);
   const dot = base.lastIndexOf(".");
@@ -192,7 +199,7 @@ function renderSection(src: string, track: Track): { text: string; any: boolean 
         break;
       }
       const tag = src.slice(i + 1, end).toLowerCase();
-      const val = TAG_GETTERS[tag]?.(track);
+      const val = tagGetter(tag)?.(track);
       if (val !== null && val !== undefined && val !== "") {
         out += String(val);
         any = true;

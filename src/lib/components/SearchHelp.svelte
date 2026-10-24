@@ -103,7 +103,7 @@
 
 {#if open}
   <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose()}>
-    <div class="dialog" role="dialog" aria-label="Search syntax help">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="Search syntax help">
       <header>
         <span>Searching the library</span>
         <button class="x" onclick={onclose}>✕</button>

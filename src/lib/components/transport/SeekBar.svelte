@@ -22,9 +22,14 @@
   let cssW = $state(0);
   let cssH = $state(0);
 
+  // Every player:state event (volume, pause, shuffle, …) hands out a new
+  // Track object. A derived id changes only with the track, so the effect
+  // below does not cancel and restart the first decode on each of those.
+  const trackId = $derived(player.track?.id ?? null);
+
   // Fetch peaks whenever the track changes or the feature is toggled on.
   $effect(() => {
-    const id = player.track?.id;
+    const id = trackId;
     if (!prefs.values.show_waveform || id == null) {
       peaks = [];
       return;
