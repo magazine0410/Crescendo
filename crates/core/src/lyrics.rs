@@ -170,6 +170,9 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
 /// remembered, because another source may still answer.
 fn take(result: OnlineResult, found: &mut Option<(String, String)>, any_failed: &mut bool) -> bool {
     match result {
+        // An oversized answer is not lyrics; another source may have some.
+        // Rejected before caching, so it is not stored for a month either.
+        OnlineResult::Found { raw, .. } if raw.len() > MAX_LYRICS_BYTES => false,
         OnlineResult::Found { raw, source } => {
             *found = Some((raw, source));
             true
@@ -244,7 +247,17 @@ fn cache_ttl(source: &str) -> i64 {
 }
 
 fn read_lyrics_file(path: &Path) -> Option<String> {
-    std::fs::read_to_string(path)
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_LYRICS_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_LYRICS_BYTES {
+        return None;
+    }
+    String::from_utf8(bytes)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -271,7 +284,7 @@ fn embedded_lyrics(audio_path: &str) -> Option<String> {
 
 fn non_empty(s: &str) -> Option<String> {
     let trimmed = s.trim().to_string();
-    (!trimmed.is_empty()).then_some(trimmed)
+    (!trimmed.is_empty() && trimmed.len() <= MAX_LYRICS_BYTES).then_some(trimmed)
 }
 
 /// One VocaDB-family database. `root` is its API base, `name` the label that
@@ -677,6 +690,9 @@ fn norm(s: &str) -> String {
 /// timestamps, the timed lines behind it. Text with no timestamps parses to
 /// itself and no lines, so plain lyrics need no separate path.
 fn parse_lyrics(raw: &str, source: &str) -> Option<LyricsResult> {
+    if raw.len() > MAX_LYRICS_BYTES {
+        return None;
+    }
     let (text, lines) = parse_lrc(raw);
     (!text.is_empty()).then(|| LyricsResult {
         text,
@@ -687,6 +703,18 @@ fn parse_lyrics(raw: &str, source: &str) -> Option<LyricsResult> {
 
 const MAX_LRC_OFFSET_MS: i64 = 3_600_000;
 
+/// Lyrics larger than this are not lyrics. Real ones, even with word timing,
+/// are a few tens of KB. Applied wherever text comes in: sidecar files, tags,
+/// online answers, and cache rows from older versions.
+const MAX_LYRICS_BYTES: usize = 256 * 1024;
+/// A line may repeat at several times (a chorus), but each repeat copies the
+/// text: without these bounds, 20,000 `[0:0]` tags in front of 100 KB of text
+/// made the parser allocate about 2 GB, and a lyrics site anyone can edit
+/// would hand that to every listener of the song.
+const MAX_STAMPS_PER_LINE: usize = 64;
+const MAX_TIMED_LINES: usize = 10_000;
+const MAX_TIMED_TEXT_BYTES: usize = 2 * 1024 * 1024;
+
 /// The LRC format: `[mm:ss.xx]` line tags, `[ar:…]`-style ID tags, enhanced
 /// `<mm:ss.xx>` word tags, and a line repeated at several times by carrying
 /// several tags at once.
@@ -694,6 +722,7 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
     let mut lines: Vec<LyricLine> = Vec::new();
     let mut plain = String::with_capacity(s.len());
     let mut offset_ms = 0i64;
+    let mut timed_bytes = 0usize;
 
     for raw in s.lines() {
         let mut rest = raw.trim_start();
@@ -712,7 +741,9 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
                         _ => n,
                     }
                 });
-                stamps.push(min * 60_000 + sec * 1000 + frac);
+                if stamps.len() < MAX_STAMPS_PER_LINE {
+                    stamps.push(min * 60_000 + sec * 1000 + frac);
+                }
                 c[0].len()
             }) {
                 rest = &rest[end..];
@@ -742,6 +773,10 @@ fn parse_lrc(s: &str) -> (String, Vec<LyricLine>) {
         let text = WORD_TAG.replace_all(rest, "");
         let text = text.trim();
         for ms in stamps {
+            if lines.len() >= MAX_TIMED_LINES || timed_bytes + text.len() > MAX_TIMED_TEXT_BYTES {
+                break;
+            }
+            timed_bytes += text.len();
             lines.push(LyricLine {
                 ms,
                 text: text.to_string(),
@@ -873,6 +908,28 @@ mod tests {
             3_601_000
         );
         assert_eq!(timed("[offset:9223372036854775807]\n[00:01.00]a")[0].0, 0);
+    }
+
+    /// 20,000 stamps in front of one long line used to become 20,000 copies
+    /// of it. The stamps per line, the timed lines, and their total text are
+    /// all bounded now, and oversized text is refused before parsing.
+    #[test]
+    fn repeated_timestamps_cannot_multiply_memory() {
+        let text = "x".repeat(4000);
+        let raw = format!("{}{text}", "[0:0]".repeat(20_000));
+        let lines = parse_lrc(&raw).1;
+        assert_eq!(lines.len(), super::MAX_STAMPS_PER_LINE);
+
+        let many: String = (0..20_000)
+            .map(|i| format!("[{}:00]{text}\n", i % 999))
+            .collect();
+        let (_, lines) = parse_lrc(&many);
+        let bytes: usize = lines.iter().map(|l| l.text.len()).sum();
+        assert!(lines.len() <= super::MAX_TIMED_LINES);
+        assert!(bytes <= super::MAX_TIMED_TEXT_BYTES);
+
+        let huge = "[00:01.00]a\n".repeat(super::MAX_LYRICS_BYTES / 10);
+        assert!(super::parse_lyrics(&huge, "Sidecar").is_none());
     }
 
     #[test]
