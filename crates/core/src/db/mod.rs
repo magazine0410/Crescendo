@@ -49,6 +49,13 @@ impl Db {
              PRAGMA busy_timeout = 10000;
              PRAGMA cache_size = -64000;",
         )?;
+        // Every transaction in this crate writes, and most read first. A
+        // deferred one that reads and then finds the scanner's connection
+        // holding the write lock fails at once with "database is locked":
+        // SQLite does not run the busy handler when upgrading a read
+        // transaction. IMMEDIATE takes the write lock at BEGIN, where
+        // busy_timeout applies.
+        conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         schema::migrate(&mut conn)?;
         register_udfs(&conn)?;
         Ok(conn)

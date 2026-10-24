@@ -4,16 +4,26 @@ pub mod tags;
 use crate::db::Db;
 use crate::model::ScanProgress;
 use anyhow::Result;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tags::TrackMeta;
 
 pub const AUDIO_EXTS: &[&str] = &["flac", "mp3", "wav", "opus", "ogg", "m4a", "aac", "aiff"];
 const BATCH_SIZE: usize = 1000;
 const PROGRESS_EVERY: u64 = 500;
+/// Longest the writer holds the database write lock in one transaction. Play
+/// history, playlist edits and prefs on the main connection wait this long at
+/// most.
+const TXN_BUDGET: Duration = Duration::from_millis(200);
+/// How long the writer waits for the next file before committing what it has.
+const IDLE_COMMIT: Duration = Duration::from_millis(50);
+/// Pause after a commit forced by `BATCH_SIZE` or `TXN_BUDGET`. SQLite's busy
+/// handler polls every 100 ms once it has waited a while, so the gap has to be
+/// longer than that to let a waiting writer in.
+const WRITER_YIELD: Duration = Duration::from_millis(120);
 
 struct KnownFile {
     mtime: i64,
@@ -277,7 +287,7 @@ pub fn scan(
     let mut removed = 0u64;
     if !cancel.load(Ordering::Relaxed) && !leftover.is_empty() {
         let mut mark = conn.prepare("UPDATE tracks SET missing = 1 WHERE path = ?1")?;
-        conn.execute_batch("BEGIN")?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
         for path in leftover.keys() {
             mark.execute([path])?;
             removed += 1;
@@ -395,10 +405,35 @@ fn write_loop(
 
     let mut in_batch = 0usize;
     let mut existed_check = conn.prepare("SELECT 1 FROM tracks WHERE path = ?1")?;
-    conn.execute_batch("BEGIN")?;
+    // When the open transaction began. The write lock is held only while it
+    // is Some, so the main connection can write whenever the readers are
+    // slower than this loop, which on an HDD is most of the time.
+    let mut opened: Option<Instant> = None;
     let mut last_emit = 0u64;
 
-    for job in write_rx.iter() {
+    loop {
+        let job = if opened.is_some() {
+            match write_rx.recv_timeout(IDLE_COMMIT) {
+                Ok(job) => job,
+                Err(RecvTimeoutError::Timeout) => {
+                    // No work queued: commit rather than wait holding the lock.
+                    conn.execute_batch("COMMIT")?;
+                    opened = None;
+                    in_batch = 0;
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match write_rx.recv() {
+                Ok(job) => job,
+                Err(_) => break,
+            }
+        };
+        if opened.is_none() {
+            conn.execute_batch("BEGIN IMMEDIATE")?;
+            opened = Some(Instant::now());
+        }
         counters.scanned.fetch_add(1, Ordering::Relaxed);
         let file = &job.file;
         // Files with unreadable tags still enter the library under their
@@ -431,16 +466,144 @@ fn write_loop(
         }
 
         in_batch += 1;
-        if in_batch >= BATCH_SIZE {
-            conn.execute_batch("COMMIT; BEGIN")?;
-            in_batch = 0;
-        }
         let total = counters.scanned.load(Ordering::Relaxed);
         if total - last_emit >= PROGRESS_EVERY {
             last_emit = total;
             progress(counters.snapshot(file.path.clone(), false));
         }
+        if in_batch >= BATCH_SIZE || opened.is_some_and(|t| t.elapsed() >= TXN_BUDGET) {
+            conn.execute_batch("COMMIT")?;
+            opened = None;
+            in_batch = 0;
+            // Work is still queued, so the next BEGIN would follow at once and
+            // a writer polling from the main connection's busy handler could
+            // miss every gap.
+            std::thread::sleep(WRITER_YIELD);
+        }
     }
-    conn.execute_batch("COMMIT")?;
+    if opened.is_some() {
+        conn.execute_batch("COMMIT")?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    fn job(i: usize) -> WriteJob {
+        let path = format!("/music/{i:05}.flac");
+        WriteJob {
+            meta: Ok(tags::fallback_meta(Path::new(&path))),
+            file: FileJob {
+                filename: format!("{i:05}.flac"),
+                dir: "/music".into(),
+                path,
+                mtime: 0,
+                size: 0,
+            },
+        }
+    }
+
+    fn counters(c: &[AtomicU64; 4]) -> Counters<'_> {
+        Counters {
+            scanned: &c[0],
+            added: &c[1],
+            updated: &c[2],
+            errors: &c[3],
+        }
+    }
+
+    /// An incremental scan sends a changed file early and then walks for a
+    /// long time. The writer must not sit on the write lock meanwhile, or play
+    /// history and playlist edits on the main connection fail.
+    #[test]
+    fn idle_writer_releases_the_write_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("library.db")).unwrap();
+        let conn = db.side_connection().unwrap();
+        let playlist = db.playlist_create("Test").unwrap();
+        let c: [AtomicU64; 4] = Default::default();
+        let (tx, rx) = bounded::<WriteJob>(4);
+
+        std::thread::scope(|s| {
+            let cs = counters(&c);
+            let writer = s.spawn(move || write_loop(&conn, rx, cs, &|_| {}));
+            tx.send(job(0)).unwrap();
+
+            // The sender stays open, as it does mid-walk. The row must still
+            // be committed and visible to another connection.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let id = loop {
+                let id: Option<i64> = db
+                    .with(|conn| {
+                        Ok(conn
+                            .query_row(
+                                "SELECT id FROM tracks WHERE path = '/music/00000.flac'",
+                                [],
+                                |r| r.get(0),
+                            )
+                            .ok())
+                    })
+                    .unwrap();
+                if let Some(id) = id {
+                    break id;
+                }
+                assert!(Instant::now() < deadline, "the writer never committed");
+                std::thread::sleep(Duration::from_millis(10));
+            };
+
+            // Reads the playlist, then inserts: the path that used to fail at
+            // once with "database is locked".
+            db.playlist_add_tracks(playlist, &[id]).unwrap();
+            let other = db.side_connection().unwrap();
+            other
+                .execute_batch("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; COMMIT")
+                .expect("the idle writer still holds the write lock");
+
+            drop(tx);
+            writer.join().unwrap().unwrap();
+        });
+        assert_eq!(c[1].load(Ordering::Relaxed), 1);
+    }
+
+    /// During a full scan work is always queued. A main-connection write must
+    /// still get in within a few transaction budgets, not wait out its whole
+    /// busy timeout.
+    #[test]
+    fn busy_writer_lets_the_main_connection_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("library.db")).unwrap();
+        let conn = db.side_connection().unwrap();
+        let c: [AtomicU64; 4] = Default::default();
+        let (tx, rx) = bounded::<WriteJob>(1024);
+        let stop = AtomicBool::new(false);
+
+        std::thread::scope(|s| {
+            let cs = counters(&c);
+            let writer = s.spawn(move || write_loop(&conn, rx, cs, &|_| {}));
+            s.spawn(|| {
+                let mut i = 0;
+                while !stop.load(Ordering::Relaxed) && tx.send(job(i)).is_ok() {
+                    i += 1;
+                }
+                drop(tx);
+            });
+            // Let the writer reach a steady state with the queue full.
+            while c[0].load(Ordering::Relaxed) < 100 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            let started = Instant::now();
+            db.playlist_create("During scan").unwrap();
+            let waited = started.elapsed();
+            stop.store(true, Ordering::Relaxed);
+            writer.join().unwrap().unwrap();
+            assert!(
+                waited < Duration::from_secs(2),
+                "main-connection write waited {waited:?}"
+            );
+        });
+    }
 }
