@@ -577,7 +577,7 @@ fn guest_work_is_bounded_by_the_epoch_deadline_and_failures_mark_it_unhealthy() 
 /// of a working event path.
 #[test]
 fn events_reach_a_healthy_plugin() {
-    let harness = Harness::new(&[]);
+    let harness = Harness::new(&["library.read"]);
     let before = harness.handle.runtime_info(PLUGIN_ID).diagnostics.len();
     harness.handle.notify_event(HostEvent::LibraryChanged);
     let _ = harness.handle.invoke(PLUGIN_ID, "identity", "{}");
@@ -585,6 +585,31 @@ fn events_reach_a_healthy_plugin() {
         harness.handle.runtime_info(PLUGIN_ID).diagnostics.len() > before,
         "a healthy plugin should have handled the event"
     );
+}
+
+/// The id in a track event is what `player.read` guards; with `library.read`
+/// a plugin could turn it into a title. Without the capability the event must
+/// not arrive at all, and likewise for library and playlist events.
+#[test]
+fn events_need_the_capability_whose_data_they_carry() {
+    let delivered = |harness: &Harness, event: HostEvent| {
+        let before = harness.handle.runtime_info(PLUGIN_ID).diagnostics.len();
+        harness.handle.notify_event(event);
+        // The runtime handles messages in order, so once this answers the
+        // event has been delivered or skipped.
+        let _ = harness.handle.invoke(PLUGIN_ID, "identity", "{}");
+        harness.handle.runtime_info(PLUGIN_ID).diagnostics.len() > before
+    };
+
+    let without = Harness::new(&["library.read"]);
+    assert!(!delivered(&without, HostEvent::TrackChanged(Some(1))));
+    assert!(!delivered(&without, HostEvent::PlayerStateChanged));
+    assert!(!delivered(&without, HostEvent::PlaylistChanged(Some(1))));
+
+    let with = Harness::new(&["player.read", "playlists.read"]);
+    assert!(delivered(&with, HostEvent::TrackChanged(Some(1))));
+    assert!(delivered(&with, HostEvent::PlaylistChanged(Some(1))));
+    assert!(!delivered(&with, HostEvent::LibraryChanged));
 }
 
 #[test]

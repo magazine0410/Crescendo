@@ -262,6 +262,12 @@ stream: the host drops duplicates under load and may drop an event entirely if
 the runtime queue is full, so re-read what you need instead of accumulating
 state from the callbacks.
 
+An event is delivered only to a plugin granted the capability whose data it
+carries: `on-player-state-changed` and `on-track-changed` need `player.read`,
+`on-playlist-changed` needs `playlists.read`, and `on-library-changed` needs
+`library.read`. `on-ready` reaches every plugin. A handler for an event the
+plugin has no capability for is never called, so export it as a no-op.
+
 Playlist mutations a plugin makes through `crescendo:host/playlists` refresh
 the app's own playlist views: the host emits the same change notification a
 mutation made through the UI does, so the sidebar updates and every plugin

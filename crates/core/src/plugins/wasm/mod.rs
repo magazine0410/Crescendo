@@ -1092,6 +1092,22 @@ struct RuntimeThread<'a> {
     paths: RuntimePaths,
 }
 
+/// Whether a plugin may see an event. An event is data: the id in
+/// `on-track-changed` is exactly what `player.read` guards, and a plugin with
+/// `library.read` can turn it into a title and artist, so delivering it to
+/// everyone handed out a live listening history. Each event therefore needs
+/// the capability whose data it reveals; `ready` reveals nothing.
+fn event_permitted(event: &HostEvent, permissions: &BTreeSet<PluginPermission>) -> bool {
+    match event {
+        HostEvent::Ready => true,
+        HostEvent::PlayerStateChanged | HostEvent::TrackChanged(_) => {
+            permissions.contains(&PluginPermission::PlayerRead)
+        }
+        HostEvent::LibraryChanged => permissions.contains(&PluginPermission::LibraryRead),
+        HostEvent::PlaylistChanged(_) => permissions.contains(&PluginPermission::PlaylistsRead),
+    }
+}
+
 /// Keep a message drained from the channel while coalescing. Without a bound
 /// here the channel's own bound meant nothing: every drain moved its contents
 /// into this queue, and a slow guest let player-state bursts pile up. So a
@@ -1188,6 +1204,9 @@ impl RuntimeThread<'_> {
             let Some(plugin) = self.plugins.get_mut(&plugin_id) else {
                 continue;
             };
+            if !event_permitted(event, &plugin.store.data().permissions) {
+                continue;
+            }
             if let Err(error) = plugin.store.set_fuel(self.limits.fuel) {
                 self.states
                     .record_failure(&plugin_id, &format!("could not arm fuel: {error:#}"));

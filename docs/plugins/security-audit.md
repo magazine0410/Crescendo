@@ -140,7 +140,12 @@ build when the two lists diverge.
   write nonsense playlists, and one with `network.http` can talk to its
   approved domain as much as its rate limits allow. Capabilities bound *what*,
   not *how much*.
-- **Event delivery is not gated per plugin.** Every loaded plugin receives the
-  five notifications. They carry no data beyond an id, and a plugin without
-  the matching capability cannot act on them; gating would only hide that
-  something happened, which the plugin can already observe by polling.
+- **Event delivery is gated by capability.** An event is data: the id in
+  `on-track-changed` is exactly what `player.read` guards, and with
+  `library.read` a plugin can turn it into a title and artist. So
+  `on-player-state-changed` and `on-track-changed` reach only plugins granted
+  `player.read`, `on-playlist-changed` only `playlists.read`, and
+  `on-library-changed` only `library.read`. `on-ready` reveals nothing and
+  reaches every loaded plugin. Earlier hosts delivered all five to every
+  plugin, which let a plugin with `library.read` and `network.http` upload a
+  live listening history it was never granted.
