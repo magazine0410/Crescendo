@@ -176,10 +176,9 @@ fn parse_meta(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
             .album()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        meta.genre = tag
-            .genre()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        // Every GENRE field, not just the first: lofty gives each Vorbis field
+        // and each value of a multi-value ID3v2 TCON its own item.
+        meta.genre = crate::genre::join_fields(tag.get_strings(ItemKey::Genre));
         meta.albumartist = get_str(tag, ItemKey::AlbumArtist);
         meta.titlesort = get_str(tag, ItemKey::TrackTitleSortOrder);
         meta.artistsort = get_str(tag, ItemKey::TrackArtistSortOrder);

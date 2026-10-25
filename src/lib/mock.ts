@@ -460,15 +460,32 @@ function browseKey(t: Track, mode: WireMode): string {
   return v;
 }
 
+/** Separators inside one genre value, as in crescendo_core::genre. */
+const GENRE_SEPARATORS = /[,，/／⧸;；]/;
+
+/** The rows a track counts under: one per genre its value lists for the genre
+    facet (the combined value never shows), otherwise just its browse key. */
+function browseKeys(t: Track, mode: WireMode): string[] {
+  const v = browseKey(t, mode);
+  const genre =
+    mode === "genre" || (typeof mode === "object" && mode.custom.trim().toLowerCase() === "genre");
+  if (!genre) return [v];
+  const parts: string[] = [];
+  for (const p of v.split(GENRE_SEPARATORS).map((s) => s.trim())) {
+    if (p && !parts.includes(p)) parts.push(p);
+  }
+  return parts.length > 0 ? parts : [""];
+}
+
 /** Track-list filter: search query AND optional left-panel mode values (a
-    track matches when its value is any of the multi-selected ones). */
+    track matches when any of its values is one of the multi-selected ones). */
 function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
   if (!matches(t, args.query as string | null | undefined)) return false;
   const values = args.values as string[] | null | undefined;
   return (
     values == null ||
     values.length === 0 ||
-    values.includes(browseKey(t, args.mode as WireMode))
+    browseKeys(t, args.mode as WireMode).some((v) => values.includes(v))
   );
 }
 
@@ -593,8 +610,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       const counts = new Map<string, number>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
-        const v = browseKey(t, mode);
-        counts.set(v, (counts.get(v) ?? 0) + 1);
+        for (const v of browseKeys(t, mode)) counts.set(v, (counts.get(v) ?? 0) + 1);
       }
       // Duration buckets order numerically ("10" after "3") and play counts do
       // the same in reverse (most played first), like the backend.
@@ -620,7 +636,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       const ids = new Set<number>();
       for (const t of tracks) {
         if (!matches(t, query)) continue;
-        if (values.length > 0 && !values.includes(browseKey(t, mode))) continue;
+        if (values.length > 0 && !browseKeys(t, mode).some((v) => values.includes(v))) continue;
         if (t.album_id != null) ids.add(t.album_id);
       }
       return albums.filter((a) => ids.has(a.id)) as T;

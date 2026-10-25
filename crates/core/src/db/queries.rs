@@ -229,6 +229,11 @@ pub struct FacetPlan {
     selection_expr: String,
     sort_value_expr: Option<String>,
     presentation: FacetPresentation,
+    /// The genre facet: each genre a value lists (`crate::genre::split`, via
+    /// the `genre_split` UDF) is its own row, counting the track once, and
+    /// selecting it matches every track that lists it. The combined value
+    /// itself never appears as a row.
+    split_genres: bool,
 }
 
 impl FacetPlan {
@@ -286,6 +291,8 @@ impl FacetPlan {
             // slot explicit rather than sending the old dead empty string.
             sort_value_expr: None,
             presentation,
+            // Applies after a contributed transform, to the label it projects.
+            split_genres: target_column == "genre",
         })
     }
 
@@ -296,6 +303,18 @@ impl FacetPlan {
     fn values_sql(&self, where_sql: &str) -> String {
         let sort_value = self.sort_value_expr.as_deref().unwrap_or("NULL");
         let order = self.presentation.order_sql(&self.group_expr);
+        if self.split_genres {
+            // The filter runs in its own subquery: json_each's columns (`id`,
+            // `path`, `value`, …) would otherwise make the search filter's
+            // bare column names ambiguous.
+            return format!(
+                "SELECT g.value, COUNT(*), {sort_value} \
+                 FROM (SELECT {} AS v FROM tracks WHERE {where_sql}) AS t, \
+                      json_each(genre_split(t.v)) AS g \
+                 GROUP BY g.value ORDER BY {order}",
+                self.value_expr
+            );
+        }
         format!(
             "SELECT {}, COUNT(*), {sort_value} FROM tracks WHERE {where_sql} \
              GROUP BY {} ORDER BY {order}",
@@ -328,7 +347,8 @@ fn transform_expr(input_expr: &str, transform: &FacetTransform) -> String {
 }
 
 /// Append a facet selection to a `track_where` fragment. A track matches when
-/// its projected value is one of the selected rows. Empty values mean "All";
+/// its projected value — for the genre facet, any genre it lists — is one of
+/// the selected rows. Empty values mean "All";
 /// an unresolved custom tag with a non-empty selection deliberately matches
 /// nothing. This clause is shared by albums, counts, pages, indexes, groups,
 /// and playback resolution.
@@ -348,11 +368,20 @@ fn push_values_clause(
             // limit of 32766 bound parameters.
             let list = serde_json::to_string(values).expect("strings serialize");
             params.push(Value::from(list));
-            *where_sql = format!(
-                "{where_sql} AND {} IN (SELECT value FROM json_each(?{}))",
-                plan.selection_expr,
-                params.len()
-            );
+            *where_sql = if plan.split_genres {
+                format!(
+                    "{where_sql} AND EXISTS (SELECT 1 FROM json_each(genre_split({})) AS g \
+                     WHERE g.value IN (SELECT value FROM json_each(?{})))",
+                    plan.selection_expr,
+                    params.len()
+                )
+            } else {
+                format!(
+                    "{where_sql} AND {} IN (SELECT value FROM json_each(?{}))",
+                    plan.selection_expr,
+                    params.len()
+                )
+            };
         }
         // Custom tag that resolves to no real column: select nothing.
         None => where_sql.push_str(" AND 0"),
