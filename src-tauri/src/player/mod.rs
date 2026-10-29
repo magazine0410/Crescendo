@@ -69,6 +69,8 @@ pub enum Cmd {
     RefreshMetadata,
     SetShuffle(bool),
     CycleRepeat,
+    /// Set the repeat mode outright; MPRIS clients name a mode rather than cycling.
+    SetRepeat(RepeatMode),
     SetStopAfterCurrent(bool),
     /// Toggle spectrum-analysis messages on the audio-filter; the frontend
     /// enables this only while the Visualizer tab is visible.
@@ -910,6 +912,10 @@ impl Engine {
                 self.mutate_queue(|q| {
                     q.cycle_repeat();
                 });
+                self.publish_state();
+            }
+            Cmd::SetRepeat(mode) => {
+                self.mutate_queue(|q| q.repeat = mode);
                 self.publish_state();
             }
             Cmd::SetStopAfterCurrent(on) => {

@@ -1,5 +1,6 @@
 mod art_protocol;
 mod commands;
+mod mpris;
 mod player;
 pub mod plugin_bridge;
 mod state;
@@ -78,6 +79,14 @@ pub fn run() {
                 player.clone(),
                 position_mirror.clone(),
             )));
+            mpris::start(
+                app.handle().clone(),
+                player.clone(),
+                position_mirror.clone(),
+                plugins.clone(),
+                db.clone(),
+                art.clone(),
+            );
             // The track currently being reported, shared by the two listeners
             // below: `player:position` carries no track id, so the mirror has
             // to be told which song the tick belongs to.

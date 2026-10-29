@@ -70,7 +70,7 @@ impl Db {
 /// Kana, CJK ideographs (+ ext. A and compatibility), halfwidth katakana and
 /// Hangul: the frontend's CJK_RE, which decides when a sort tag stands in for
 /// a name.
-pub(crate) fn has_cjk(s: &str) -> bool {
+pub fn has_cjk(s: &str) -> bool {
     s.chars().any(|c| {
         matches!(
             c,

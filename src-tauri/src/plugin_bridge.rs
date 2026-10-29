@@ -54,7 +54,7 @@ impl PositionMirror {
 
     /// The mirrored progress of `track_id`, or zeroes when the newest sample
     /// belongs to a different track.
-    fn get(&self, track_id: Option<i64>) -> (u64, u64) {
+    pub fn get(&self, track_id: Option<i64>) -> (u64, u64) {
         self.sample
             .lock()
             .ok()
