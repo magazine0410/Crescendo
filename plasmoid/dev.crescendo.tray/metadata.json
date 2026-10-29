@@ -1,0 +1,27 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Magazine"
+            }
+        ],
+        "Category": "Multimedia",
+        "Description": "Now playing and transport controls for Crescendo",
+        "EnabledByDefault": true,
+        "FormFactors": [
+            "desktop",
+            "tablet"
+        ],
+        "Icon": "crescendo",
+        "Id": "dev.crescendo.tray",
+        "License": "MIT",
+        "Name": "Crescendo",
+        "Version": "1.0.3"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-DBusActivationService": "org.mpris.MediaPlayer2.crescendo",
+    "X-Plasma-NotificationAreaCategory": "ApplicationStatus",
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-MainScript": "ui/main.qml"
+}

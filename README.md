@@ -12,6 +12,7 @@ Built with **Tauri 2**, **Svelte 5**, and **GStreamer**.
 - library view with two main versions: album wall or a track list view
 - powerful searching & filtering capabilities
 - last.fm support for additional artist details
+- MPRIS media controls, and a KDE Plasma system-tray widget with cover art, song info and transport controls
 - designed for large libraries; the player is tested with a library containing 100k+ songs
 
 ## Stack
@@ -76,6 +77,22 @@ loaded-set changes apply after restart, and setting values apply live.
 The [plugin SDK](plugin-sdk/README.md) contains manifest schema version 1, the
 supported deterministic validator/packer, the canonical Primary Grouping
 example, compatibility rules, and installation/safe-mode documentation.
+
+## Plasma system-tray widget
+
+Crescendo publishes itself over MPRIS, so media keys, the lock screen and
+Plasma's own Media Player applet work out of the box. The `plasmoid/` folder
+also holds a dedicated KDE Plasma 6 widget: cover art as the background, the
+album artist and title, a seek bar, previous / stop / play-pause / next, and a
+right-click "Stop after this song" on the stop button. The deb and rpm
+packages install it under `/usr/share/plasma/plasmoids/`; from a checkout:
+
+```bash
+kpackagetool6 --type Plasma/Applet --install plasmoid/dev.crescendo.tray
+```
+
+It appears in the system tray while Crescendo is running (log out and back in,
+or restart `plasmashell`, after the first install).
 
 ## Keyboard shortcuts
 

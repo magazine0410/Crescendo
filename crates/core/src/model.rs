@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// core so every host boundary can reject invalid positions before dispatch.
 pub const MAX_SEEK_MS: u64 = i64::MAX as u64 / 1_000_000;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub id: i64,
     pub path: String,

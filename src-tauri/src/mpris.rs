@@ -23,13 +23,14 @@ use mpris_server::{
     LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property, RootInterface,
     Server, Signal, Time, TrackId, Volume,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Listener, Manager};
 use tokio::sync::mpsc;
 
 const BUS_NAME_SUFFIX: &str = "crescendo";
+const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const NO_TRACK: &str = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
 /// A position tick this far from where steady playback would have put it is
 /// reported to clients as a seek.
@@ -60,19 +61,6 @@ impl Mpris {
 
     fn send(&self, cmd: Cmd) -> fdo::Result<()> {
         self.player.send(cmd).map_err(fdo::Error::Failed)
-    }
-
-    /// Wait, briefly, until the player thread has applied a setting. zbus
-    /// answers a property write by re-reading the property and signalling it,
-    /// so without this clients would be told the old value and only learn the
-    /// new one from the state event a moment later.
-    async fn settle(&self, applied: impl Fn(&PlayerState) -> bool) {
-        for _ in 0..40 {
-            if self.state().is_some_and(|state| applied(&state)) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
     }
 
     fn progress(&self) -> (Option<i64>, u64, u64) {
@@ -224,7 +212,7 @@ impl PlayerInterface for Mpris {
             LoopStatus::Playlist => RepeatMode::All,
         };
         self.send(Cmd::SetRepeat(mode))?;
-        self.settle(|state| state.repeat == mode).await;
+        settle(&self.player, |state| state.repeat == mode).await;
         Ok(())
     }
 
@@ -242,7 +230,7 @@ impl PlayerInterface for Mpris {
 
     async fn set_shuffle(&self, shuffle: bool) -> zbus::Result<()> {
         self.send(Cmd::SetShuffle(shuffle))?;
-        self.settle(|state| state.shuffle == shuffle).await;
+        settle(&self.player, |state| state.shuffle == shuffle).await;
         Ok(())
     }
 
@@ -264,7 +252,7 @@ impl PlayerInterface for Mpris {
         }
         let volume = volume.clamp(0.0, 1.0);
         self.send(Cmd::SetVolume(volume))?;
-        self.settle(|state| state.volume == volume).await;
+        settle(&self.player, |state| state.volume == volume).await;
         Ok(())
     }
 
@@ -303,6 +291,59 @@ impl PlayerInterface for Mpris {
 
     async fn can_control(&self) -> fdo::Result<bool> {
         Ok(true)
+    }
+}
+
+/// Wait, briefly, until the player thread has applied a setting. zbus
+/// answers a property write by re-reading the property and signalling it,
+/// so without this clients would be told the old value and only learn the
+/// new one from the state event a moment later.
+async fn settle(player: &PlayerHandle, applied: impl Fn(&PlayerState) -> bool) {
+    for _ in 0..40 {
+        if player.state().ok().is_some_and(|state| applied(&state)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// What MPRIS has no word for, served on the same object as the MPRIS
+/// interfaces so a client already talking to the player finds it there.
+/// The Plasma widget uses it for "Stop after this song".
+struct CrescendoPlayer {
+    player: PlayerHandle,
+}
+
+impl CrescendoPlayer {
+    async fn arm(&self, on: bool) -> fdo::Result<()> {
+        self.player
+            .send(Cmd::SetStopAfterCurrent(on))
+            .map_err(fdo::Error::Failed)?;
+        settle(&self.player, |state| state.stop_after_current == on).await;
+        Ok(())
+    }
+}
+
+#[zbus::interface(name = "dev.crescendo.Player")]
+impl CrescendoPlayer {
+    /// One-shot: stop when the current song ends, then clear itself.
+    #[zbus(property)]
+    async fn stop_after_current(&self) -> bool {
+        self.player
+            .state()
+            .is_ok_and(|state| state.stop_after_current)
+    }
+
+    #[zbus(property)]
+    async fn set_stop_after_current(&self, on: bool) -> zbus::Result<()> {
+        self.arm(on).await.map_err(Into::into)
+    }
+
+    /// The property write as a plain method, for clients whose bindings
+    /// cannot build a variant: Plasma's QML D-Bus module sends a bare `b`.
+    #[zbus(name = "SetStopAfterCurrent")]
+    async fn set_stop_after_current_method(&self, on: bool) -> fdo::Result<()> {
+        self.arm(on).await
     }
 }
 
@@ -360,17 +401,23 @@ fn file_stem(path: &str) -> String {
         .unwrap_or_else(|| path.to_owned())
 }
 
-/// A `file://` URL for the cover: the album folder's image when that is the
-/// source, otherwise the cached thumbnail (embedded art has no file of its own).
+/// A `file://` URL for the cover. The cached resolution is trusted as is:
+/// the folder image's own path, or the cached thumbnail for embedded art,
+/// which has no file of its own. Only an album nothing has resolved yet
+/// pays for the full resolution, which decodes the image to validate it.
 fn art_url(db: &Db, art: &ArtStore, track: &Track) -> Option<String> {
-    let path = match track.album_id {
-        Some(album_id) => match art.album_full(db, album_id).ok()? {
+    let Some(album_id) = track.album_id else {
+        return match art.track_art(db, track.id).ok()? {
+            ArtData::File(path) => file_uri(&path),
+            ArtData::Bytes(_) => None,
+        };
+    };
+    let path = match art.cover_source(db, album_id).ok().flatten() {
+        Some(source) if source.starts_with("folder:") => PathBuf::from(&source["folder:".len()..]),
+        Some(_) => art.album_thumb(db, album_id).ok()?,
+        None => match art.album_full(db, album_id).ok()? {
             ArtData::File(path) => path,
             ArtData::Bytes(_) => art.album_thumb(db, album_id).ok()?,
-        },
-        None => match art.track_art(db, track.id).ok()? {
-            ArtData::File(path) => path,
-            ArtData::Bytes(_) => return None,
         },
     };
     file_uri(&path)
@@ -426,6 +473,10 @@ struct Published {
     shuffle: bool,
     volume: Volume,
     track_id: Option<i64>,
+    /// The track as last published, so a state event that changes nothing
+    /// about the song (pause, volume) does not rebuild its metadata.
+    track: Option<Track>,
+    stop_after_current: bool,
     metadata: Metadata,
 }
 
@@ -437,10 +488,14 @@ impl Published {
             shuffle: state.shuffle,
             volume: volume(state.clone()),
             track_id: state.track.as_ref().map(|track| track.id),
+            track: state.track.clone(),
+            stop_after_current: state.stop_after_current,
             metadata,
         }
     }
 
+    /// The cheap properties that differ from what was last published.
+    /// Metadata is announced separately, after it has been built.
     fn changes(&self, previous: Option<&Published>) -> Vec<Property> {
         let mut changed = Vec::new();
         let Some(previous) = previous else {
@@ -450,7 +505,6 @@ impl Published {
                 Property::LoopStatus(self.loop_status),
                 Property::Shuffle(self.shuffle),
                 Property::Volume(self.volume),
-                Property::Metadata(self.metadata.clone()),
                 Property::CanGoNext(has_track),
                 Property::CanGoPrevious(has_track),
                 Property::CanPause(has_track),
@@ -470,9 +524,6 @@ impl Published {
         if self.volume != previous.volume {
             changed.push(Property::Volume(self.volume));
         }
-        if self.metadata != previous.metadata {
-            changed.push(Property::Metadata(self.metadata.clone()));
-        }
         let has_track = self.track_id.is_some();
         if has_track != previous.track_id.is_some() {
             changed.extend([
@@ -483,6 +534,25 @@ impl Published {
             ]);
         }
         changed
+    }
+}
+
+async fn announce_stop_after_current(server: &Server<Mpris>) {
+    let Ok(iface) = server
+        .connection()
+        .object_server()
+        .interface::<_, CrescendoPlayer>(OBJECT_PATH)
+        .await
+    else {
+        return;
+    };
+    let extension = iface.get().await;
+    let result = extension
+        .stop_after_current_changed(iface.signal_emitter())
+        .await;
+    drop(extension);
+    if let Err(error) = result {
+        log::debug!("dev.crescendo.Player PropertiesChanged failed: {error}");
     }
 }
 
@@ -533,6 +603,17 @@ pub fn start(
                 return;
             }
         };
+        let extension = CrescendoPlayer {
+            player: server.imp().player.clone(),
+        };
+        if let Err(error) = server
+            .connection()
+            .object_server()
+            .at(OBJECT_PATH, extension)
+            .await
+        {
+            log::warn!("dev.crescendo.Player unavailable: {error}");
+        }
         run(server, rx, plugins, db, art).await;
     });
 }
@@ -553,25 +634,17 @@ async fn run(
                 let Some(state) = imp.state() else {
                     continue;
                 };
-                let prefer_romanized = plugins
-                    .projection(None)
-                    .map(|guard| guard.prefer_romanized())
-                    .unwrap_or(true);
-                let metadata = {
-                    let (state, db, art) = (state.clone(), db.clone(), art.clone());
-                    tauri::async_runtime::spawn_blocking(move || {
-                        build_metadata(&state, &db, &art, prefer_romanized)
-                    })
-                    .await
-                };
-                let Ok(metadata) = metadata else {
-                    continue;
-                };
-                let next = Published::from_state(&state, metadata);
+                // Pause, volume and the like must not wait behind cover-art
+                // resolution: announce them before touching the metadata.
+                let same_track = published
+                    .as_ref()
+                    .is_some_and(|previous| previous.track == state.track);
+                let previous_metadata = published
+                    .as_ref()
+                    .map(|previous| previous.metadata.clone())
+                    .unwrap_or_default();
+                let mut next = Published::from_state(&state, previous_metadata);
                 let changed = next.changes(published.as_ref());
-                if let Ok(mut cached) = imp.metadata.lock() {
-                    *cached = next.metadata.clone();
-                }
                 if published.as_ref().map(|p| p.track_id) != Some(next.track_id) {
                     // A new song starts near zero; that is not a seek.
                     last_tick = None;
@@ -579,6 +652,35 @@ async fn run(
                 if !changed.is_empty() {
                     if let Err(error) = server.properties_changed(changed).await {
                         log::debug!("MPRIS PropertiesChanged failed: {error}");
+                    }
+                }
+                if published.as_ref().map(|p| p.stop_after_current) != Some(next.stop_after_current)
+                {
+                    announce_stop_after_current(&server).await;
+                }
+                if !same_track {
+                    let prefer_romanized = plugins
+                        .projection(None)
+                        .map(|guard| guard.prefer_romanized())
+                        .unwrap_or(true);
+                    let metadata = {
+                        let (state, db, art) = (state.clone(), db.clone(), art.clone());
+                        tauri::async_runtime::spawn_blocking(move || {
+                            build_metadata(&state, &db, &art, prefer_romanized)
+                        })
+                        .await
+                    };
+                    if let Ok(metadata) = metadata {
+                        if metadata != next.metadata {
+                            if let Ok(mut cached) = imp.metadata.lock() {
+                                *cached = metadata.clone();
+                            }
+                            let announce = [Property::Metadata(metadata.clone())];
+                            if let Err(error) = server.properties_changed(announce).await {
+                                log::debug!("MPRIS PropertiesChanged failed: {error}");
+                            }
+                            next.metadata = metadata;
+                        }
                     }
                 }
                 published = Some(next);

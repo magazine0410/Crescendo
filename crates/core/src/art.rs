@@ -291,7 +291,9 @@ impl ArtStore {
         Err(anyhow!("no art for track {track_id}"))
     }
 
-    fn cover_source(&self, db: &Db, album_id: i64) -> Result<Option<String>> {
+    /// The cached resolution for an album (`folder:<path>` or
+    /// `embedded:<track_id>`), without re-checking or decoding anything.
+    pub fn cover_source(&self, db: &Db, album_id: i64) -> Result<Option<String>> {
         db.with(|conn| {
             Ok(conn
                 .query_row(
