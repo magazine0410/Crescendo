@@ -25,14 +25,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 gstreamer = "0.25"
 gstreamer-app = "0.25"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync"] }
 anyhow = "1"
 dirs = "6"
 drag = "2.1.1"
 log = "0.4"
 env_logger = "0.11"
 walkdir = "2"
-mpris-server = { version = "0.10", features = ["tokio", "unstable"] }
+# No "tokio" feature: it makes zbus::blocking call Runtime::block_on, which
+# panics inside Tauri's async commands (tauri-plugin-opener's reveal_item_in_dir).
+mpris-server = { version = "0.10", features = ["unstable"] }
+async-io = "2"
 zbus = "5"
 
 [target.'cfg(target_os = "linux")'.dependencies]

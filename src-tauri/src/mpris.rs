@@ -303,7 +303,7 @@ async fn settle(player: &PlayerHandle, applied: impl Fn(&PlayerState) -> bool) {
         if player.state().ok().is_some_and(|state| applied(&state)) {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        async_io::Timer::after(Duration::from_millis(5)).await;
     }
 }
 
