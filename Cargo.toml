@@ -2,6 +2,11 @@
 members = ["src-tauri", "crates/core"]
 resolver = "2"
 
+# Third-party crates build without debug info in dev: it made up ~96% of
+# each wasmtime-linked test binary. Workspace crates keep full debug info.
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
