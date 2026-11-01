@@ -1,4 +1,5 @@
 pub mod art;
+pub mod artist;
 pub mod db;
 pub mod forte;
 pub mod genre;

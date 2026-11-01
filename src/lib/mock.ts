@@ -34,6 +34,9 @@ const ARTISTS: [string, string | null][] = [
   ["上海アリス幻樂団", "Shanghai Alice Gengakudan"],
   ["幽閉サテライト", "Yuuhei Satellite"],
   ["Moby", null],
+  // Credit two artists, so the Artist panel's split is visible in mock mode.
+  ["Aphex Twin; Moby", null],
+  ["ZUN feat. Moby", null],
 ];
 
 const ALBUM_COUNT = 400;
@@ -463,15 +466,47 @@ function browseKey(t: Track, mode: WireMode): string {
 /** Separators inside one genre value, as in crescendo_core::genre. */
 const GENRE_SEPARATORS = /[,，/／⧸;；]/;
 
-/** The rows a track counts under: one per genre its value lists for the genre
-    facet (the combined value never shows), otherwise just its browse key. */
+/** Separators inside one artist value, as in crescendo_core::artist: these
+    characters, and "feat." in any case unless it ends a Latin word. */
+const ARTIST_SEPARATORS = ";；，、";
+
+/** An artist value cut at each separator outside ( ) and （ ）. */
+function splitArtists(v: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < v.length; i++) {
+    const c = v[i];
+    if (c === "(" || c === "（") depth++;
+    else if (c === ")" || c === "）") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && ARTIST_SEPARATORS.includes(c)) {
+      parts.push(v.slice(start, i));
+      start = i + 1;
+    } else if (
+      depth === 0 &&
+      v.slice(i, i + 5).toLowerCase() === "feat." &&
+      !/[A-Za-z0-9]/.test(v[i - 1] ?? "")
+    ) {
+      parts.push(v.slice(start, i));
+      start = i + 5;
+      i += 4;
+    }
+  }
+  parts.push(v.slice(start));
+  return parts;
+}
+
+/** The rows a track counts under: one per genre or artist its value lists for
+    the genre and artist facets (the combined value never shows), otherwise
+    just its browse key. */
 function browseKeys(t: Track, mode: WireMode): string[] {
   const v = browseKey(t, mode);
-  const genre =
-    mode === "genre" || (typeof mode === "object" && mode.custom.trim().toLowerCase() === "genre");
-  if (!genre) return [v];
+  const tag = typeof mode === "object" ? mode.custom.trim().toLowerCase() : mode;
+  const split =
+    tag === "genre" ? v.split(GENRE_SEPARATORS) : tag === "artist" ? splitArtists(v) : null;
+  if (!split) return [v];
   const parts: string[] = [];
-  for (const p of v.split(GENRE_SEPARATORS).map((s) => s.trim())) {
+  for (const p of split.map((s) => s.trim())) {
     if (p && !parts.includes(p)) parts.push(p);
   }
   return parts.length > 0 ? parts : [""];

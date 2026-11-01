@@ -87,8 +87,9 @@ pub fn has_cjk(s: &str) -> bool {
 /// Unicode-aware helpers SQLite lacks: `ulower(text)` supplies deterministic
 /// Unicode lowercasing for persisted identity keys, `ucontains(haystack,
 /// needle)` does a lowercased substring test, `has_cjk(text)` mirrors the
-/// frontend's romanized-display rule, `genre_split(text)` lists the genres a
-/// stored value names as a JSON array for `json_each` (the genre facet), and
+/// frontend's romanized-display rule, `genre_split(text)` and
+/// `artist_split(text)` list the genres or artists a value names as a JSON
+/// array for `json_each` (the genre and artist facets), and
 /// `regexp(pattern, text)` backs the `tag=/re/` query syntax.
 fn register_udfs(conn: &Connection) -> Result<()> {
     use rusqlite::functions::FunctionFlags;
@@ -144,24 +145,30 @@ fn register_udfs(conn: &Connection) -> Result<()> {
         },
     )?;
 
-    conn.create_scalar_function(
-        "genre_split",
-        1,
-        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        |ctx| {
-            let value = ctx
-                .get_raw(0)
-                .as_str_or_null()
-                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
-            let mut genres = crate::genre::split(value.unwrap_or(""));
-            // A track without genre text still has one facet row: "" (the
-            // UI's "?"), exactly like the unsplit facets.
-            if genres.is_empty() {
-                genres.push("");
-            }
-            Ok(serde_json::to_string(&genres).expect("strings serialize"))
-        },
-    )?;
+    let splits: [(&str, fn(&str) -> Vec<&str>); 2] = [
+        ("genre_split", crate::genre::split),
+        ("artist_split", crate::artist::split),
+    ];
+    for (name, split) in splits {
+        conn.create_scalar_function(
+            name,
+            1,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            move |ctx| {
+                let value = ctx
+                    .get_raw(0)
+                    .as_str_or_null()
+                    .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
+                let mut parts = split(value.unwrap_or(""));
+                // A track without text still has one facet row: "" (the UI's
+                // "?"), exactly like the unsplit facets.
+                if parts.is_empty() {
+                    parts.push("");
+                }
+                Ok(serde_json::to_string(&parts).expect("strings serialize"))
+            },
+        )?;
+    }
 
     // Cache compiled regexes per connection: queries run the same pattern
     // against every row. Search-as-you-type compiles a new pattern per edit
