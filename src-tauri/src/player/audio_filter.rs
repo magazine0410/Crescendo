@@ -45,5 +45,24 @@ pub fn build(
         &bin.by_name("replaygain").expect("ReplayGain volume"),
         replaygain_enabled,
     );
+    // A format change (e.g. a 44.1 kHz → 48 kHz gapless handoff) sends an
+    // ALLOCATION query, which tee forwards to every branch and which waits in
+    // each queue behind the buffers already there. The visualizer sinks render
+    // those buffers on the audio clock, and the clock stops once the audible
+    // branch runs dry waiting for that same query: a deadlock. The visualizers
+    // need nothing from allocation or drain, so answer serialized queries
+    // before they enter their queues.
+    for name in ["spectrum_queue", "projectm_queue"] {
+        bin.by_name(name)
+            .and_then(|queue| queue.static_pad("sink"))
+            .expect("visualizer queue sink pad")
+            .add_probe(
+                gstreamer::PadProbeType::QUERY_DOWNSTREAM,
+                |_pad, info| match info.query() {
+                    Some(query) if query.is_serialized() => gstreamer::PadProbeReturn::Handled,
+                    _ => gstreamer::PadProbeReturn::Ok,
+                },
+            );
+    }
     Ok(bin)
 }
