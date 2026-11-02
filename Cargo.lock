@@ -874,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "crescendo"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-io",
