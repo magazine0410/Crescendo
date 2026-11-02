@@ -154,7 +154,9 @@ pub async fn player_set_muted(state: State<'_, AppState>, muted: bool) -> Result
 #[tauri::command]
 pub async fn player_set_rate(state: State<'_, AppState>, rate: f64) -> Result<(), String> {
     if !rate.is_finite() || !(RATE_MIN..=RATE_MAX).contains(&rate) {
-        return Err(format!("speed must be a number from {RATE_MIN} to {RATE_MAX}"));
+        return Err(format!(
+            "speed must be a number from {RATE_MIN} to {RATE_MAX}"
+        ));
     }
     state.player.send(Cmd::SetRate(rate))
 }
