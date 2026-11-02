@@ -7,6 +7,7 @@
   import TransportButtons from "./TransportButtons.svelte";
   import SeekBar from "./SeekBar.svelte";
   import VolumeControl from "./VolumeControl.svelte";
+  import SpeedControl from "./SpeedControl.svelte";
   import SpriteButton from "../common/SpriteButton.svelte";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { jumpToNowPlaying, viewAlbum } from "$lib/navigate";
@@ -137,6 +138,7 @@
     </div>
   </div>
   <div class="right">
+    <SpeedControl />
     <VolumeControl />
     <span class="toggle" class:on={player.repeat !== "off"}>
       <SpriteButton

@@ -37,6 +37,7 @@ const COMMANDS: &[&str] = &[
     "player_seek",
     "player_set_volume",
     "player_set_muted",
+    "player_set_rate",
     "player_set_shuffle",
     "player_cycle_repeat",
     "player_set_stop_after_current",

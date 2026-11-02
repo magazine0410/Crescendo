@@ -11,7 +11,7 @@
 //! line is the album artist (what the transport bar shows), falling back to
 //! the track artist.
 
-use crate::player::{Cmd, PlayerHandle, PlayerState, Status};
+use crate::player::{Cmd, PlayerHandle, PlayerState, Status, RATE_MAX, RATE_MIN};
 use crate::plugin_bridge::PositionMirror;
 use crescendo_core::art::{ArtData, ArtStore};
 use crescendo_core::db::{has_cjk, Db};
@@ -217,10 +217,17 @@ impl PlayerInterface for Mpris {
     }
 
     async fn rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+        Ok(self.state().map_or(1.0, |state| state.rate))
     }
 
-    async fn set_rate(&self, _rate: PlaybackRate) -> zbus::Result<()> {
+    async fn set_rate(&self, rate: PlaybackRate) -> zbus::Result<()> {
+        // The spec has clients stay within MinimumRate..=MaximumRate and
+        // never send 0.0; anything else is left alone rather than clamped.
+        if !rate.is_finite() || !(RATE_MIN..=RATE_MAX).contains(&rate) {
+            return Ok(());
+        }
+        self.send(Cmd::SetRate(rate))?;
+        settle(&self.player, |state| state.rate == rate).await;
         Ok(())
     }
 
@@ -262,11 +269,11 @@ impl PlayerInterface for Mpris {
     }
 
     async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+        Ok(RATE_MIN)
     }
 
     async fn maximum_rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+        Ok(RATE_MAX)
     }
 
     async fn can_go_next(&self) -> fdo::Result<bool> {
@@ -472,6 +479,7 @@ struct Published {
     loop_status: LoopStatus,
     shuffle: bool,
     volume: Volume,
+    rate: PlaybackRate,
     track_id: Option<i64>,
     /// The track as last published, so a state event that changes nothing
     /// about the song (pause, volume) does not rebuild its metadata.
@@ -487,6 +495,7 @@ impl Published {
             loop_status: loop_status(state.repeat),
             shuffle: state.shuffle,
             volume: volume(state.clone()),
+            rate: state.rate,
             track_id: state.track.as_ref().map(|track| track.id),
             track: state.track.clone(),
             stop_after_current: state.stop_after_current,
@@ -505,6 +514,7 @@ impl Published {
                 Property::LoopStatus(self.loop_status),
                 Property::Shuffle(self.shuffle),
                 Property::Volume(self.volume),
+                Property::Rate(self.rate),
                 Property::CanGoNext(has_track),
                 Property::CanGoPrevious(has_track),
                 Property::CanPause(has_track),
@@ -523,6 +533,9 @@ impl Published {
         }
         if self.volume != previous.volume {
             changed.push(Property::Volume(self.volume));
+        }
+        if self.rate != previous.rate {
+            changed.push(Property::Rate(self.rate));
         }
         let has_track = self.track_id.is_some();
         if has_track != previous.track_id.is_some() {
@@ -762,6 +775,7 @@ mod tests {
             volume: 0.5,
             muted: false,
             stop_after_current: false,
+            rate: 1.0,
         }
     }
 

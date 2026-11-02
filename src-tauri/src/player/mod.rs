@@ -64,6 +64,8 @@ pub enum Cmd {
     Seek(u64),
     SetVolume(f64),
     SetMuted(bool),
+    /// Playback speed within RATE_MIN..=RATE_MAX; the pitch is kept.
+    SetRate(f64),
     SetReplayGain(bool),
     /// Publish current database metadata after Forte saves without interrupting audio.
     RefreshMetadata,
@@ -104,7 +106,13 @@ pub struct PlayerState {
     pub muted: bool,
     /// One-shot: stop playback when the current track finishes, then reset.
     pub stop_after_current: bool,
+    /// Playback speed, 1.0 = normal (see RATE_MIN / RATE_MAX).
+    pub rate: f64,
 }
+
+/// Bounds of the playback speed. scaletempo keeps the pitch across this range.
+pub const RATE_MIN: f64 = 0.5;
+pub const RATE_MAX: f64 = 2.0;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PositionEvent {
@@ -303,6 +311,7 @@ pub fn spawn(
         volume: 0.8,
         muted: false,
         stop_after_current: false,
+        rate: 1.0,
     }));
     let queue_shared = Arc::new(Mutex::new(Vec::new()));
     let projectm_pcm = Arc::new(Mutex::new(VecDeque::new()));
@@ -372,6 +381,11 @@ struct Engine {
     /// UI volume 0..1 (perceptual); playbin gets volume^3.
     volume: f64,
     muted: bool,
+    /// Playback speed. Every new stream starts at 1.0, so it is re-applied
+    /// once a started track has prerolled (`rate_pending`) and at the stream
+    /// start of a gapless handoff.
+    rate: f64,
+    rate_pending: bool,
     status: Status,
     current_duration_ms: u64,
     /// The track currently loaded in playbin, tracked so its play can be
@@ -532,6 +546,8 @@ fn run_player(
         queue_shared,
         volume: 0.8,
         muted: false,
+        rate: 1.0,
+        rate_pending: false,
         status: Status::Stopped,
         current_duration_ms: 0,
         current_track_id: None,
@@ -599,6 +615,7 @@ mod tests {
                 volume: 0.8,
                 muted: false,
                 stop_after_current: false,
+                rate: 1.0,
             })),
             failure: Arc::new(Mutex::new(None)),
             queue_shared: Arc::new(Mutex::new(Vec::new())),
@@ -632,6 +649,7 @@ mod tests {
                 volume: 0.8,
                 muted: false,
                 stop_after_current: false,
+                rate: 1.0,
             })),
             failure: Arc::new(Mutex::new(None)),
             queue_shared: Arc::new(Mutex::new(Vec::new())),
@@ -877,11 +895,28 @@ impl Engine {
                 if let Some(session) = &mut self.listening {
                     session.progress.reset_position();
                 }
-                let _ = self.playbin.seek_simple(
+                // Not seek_simple: that would put the speed back to normal.
+                let _ = self.playbin.seek(
+                    self.rate,
                     gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
+                    gstreamer::SeekType::Set,
                     position,
+                    gstreamer::SeekType::None,
+                    gstreamer::ClockTime::NONE,
                 );
                 self.emit_position();
+            }
+            Cmd::SetRate(rate) => {
+                if !rate.is_finite() {
+                    log::warn!("ignoring a non-finite playback rate");
+                    return;
+                }
+                self.rate = rate.clamp(RATE_MIN, RATE_MAX);
+                if self.status != Status::Stopped {
+                    self.apply_rate();
+                    self.emit_position();
+                }
+                self.publish_state();
             }
             Cmd::SetReplayGain(enabled) => {
                 self.replaygain_enabled.store(enabled, Ordering::Relaxed);
@@ -1022,6 +1057,12 @@ impl Engine {
                     }
                 }
             }
+            MessageView::AsyncDone(_) => {
+                if self.rate_pending {
+                    self.rate_pending = false;
+                    self.apply_rate();
+                }
+            }
             MessageView::StreamStart(_) => {
                 // Fires on every new stream; after a gapless handoff this is
                 // the moment the queue's current track is actually audible.
@@ -1049,6 +1090,10 @@ impl Engine {
                     self.refresh_current_duration();
                     self.current_track_id = self.queue.lock().expect("queue poisoned").current();
                     self.publish_state();
+                    // The handed-over stream plays at normal speed on its own.
+                    if self.rate != 1.0 {
+                        self.apply_rate();
+                    }
                 }
                 if was_gapless || self.listening.is_none() {
                     self.begin_listening();
@@ -1093,6 +1138,8 @@ impl Engine {
             handoff.finish_manual();
         }
         let _ = self.playbin.set_state(gstreamer::State::Playing);
+        // A rate seek needs a prerolled pipeline: wait for its async-done.
+        self.rate_pending = self.rate != 1.0;
         self.status = Status::Playing;
         self.current_duration_ms = track.duration_ms.max(0) as u64;
         self.current_track_id = Some(track_id);
@@ -1189,6 +1236,29 @@ impl Engine {
         self.current_track_id = None;
     }
 
+    /// Seek to where playback is, carrying the playback rate. Speed is a
+    /// property of the seek segment, so this is how it is set and how a
+    /// fresh stream, which starts at 1.0, is brought back to it.
+    fn apply_rate(&mut self) {
+        let position = self
+            .playbin
+            .query_position::<gstreamer::ClockTime>()
+            .unwrap_or(gstreamer::ClockTime::ZERO);
+        if let Some(session) = &mut self.listening {
+            session.progress.reset_position();
+        }
+        if let Err(error) = self.playbin.seek(
+            self.rate,
+            gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
+            gstreamer::SeekType::Set,
+            position,
+            gstreamer::SeekType::None,
+            gstreamer::ClockTime::NONE,
+        ) {
+            log::warn!("cannot set the playback rate to {}: {error}", self.rate);
+        }
+    }
+
     fn apply_volume(&self) {
         let effective = if self.muted { 0.0 } else { self.volume.powi(3) };
         self.playbin.set_property("volume", effective);
@@ -1255,6 +1325,7 @@ impl Engine {
             volume: self.volume,
             muted: self.muted,
             stop_after_current: self.stop_after_current.load(Ordering::SeqCst),
+            rate: self.rate,
             track,
         };
         *self.shared.lock().expect("player state poisoned") = state.clone();

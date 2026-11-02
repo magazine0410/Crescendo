@@ -350,7 +350,10 @@
           <div
             class="collection-children"
             transition:slide={{
-              duration: collectionTransitionsReady && !reduceMotion ? 180 : 0,
+              duration:
+                collectionTransitionsReady && !reduceMotion && !prefs.values.disable_animations
+                  ? 180
+                  : 0,
             }}
           >
             {#each row.children as p (p.id)}

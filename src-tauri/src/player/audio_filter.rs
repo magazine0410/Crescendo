@@ -23,6 +23,7 @@ pub fn build(
          visualizer_tee. ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 \
            ! identity name=audio_passthrough \
            ! audioconvert ! audio/x-raw,format=F64LE \
+           ! scaletempo \
            ! volume name=replaygain \
          visualizer_tee. ! queue name=spectrum_queue leaky=downstream \
              max-size-buffers=0 max-size-bytes=0 max-size-time=3000000000 \
@@ -38,6 +39,9 @@ pub fn build(
            ! appsink name=projectm_pcm sync=true async=false max-buffers=2 drop=true",
         true,
     )?;
+    // scaletempo keeps the pitch when the playback rate is not 1.0, and passes
+    // samples through untouched at normal speed, so the fidelity path below
+    // is unchanged unless a speed is set.
     // Float64 represents every 24/32-bit source sample exactly and gives
     // gain processing ample precision. Never negotiate a 16-bit RG path.
     // Unity gain (disabled or untagged) preserves the original sample values.

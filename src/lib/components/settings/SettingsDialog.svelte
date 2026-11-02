@@ -235,6 +235,19 @@
         <label class="check">
           <input
             type="checkbox"
+            checked={prefs.values.disable_animations}
+            onchange={(e) => prefs.set("disable_animations", e.currentTarget.checked)}
+          />
+          Disable animations
+        </label>
+        <p class="hint">
+          Jumps to the playing song land at once instead of gliding, and the
+          filter and queue panels open and close without sliding.
+        </p>
+
+        <label class="check">
+          <input
+            type="checkbox"
             checked={prefs.values.replaygain_enabled}
             disabled={replayGainSaving}
             onchange={(e) => setReplayGain(e.currentTarget.checked)}

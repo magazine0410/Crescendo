@@ -1180,6 +1180,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return ids.length as T;
     }
     case "player_jump_to":
+    case "player_set_rate":
       return undefined as T;
     default:
       console.warn(`mockCall: unhandled command ${cmd}`, args);

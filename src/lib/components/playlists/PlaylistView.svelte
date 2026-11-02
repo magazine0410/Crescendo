@@ -237,7 +237,15 @@
     const id = player.track?.id;
     untrack(() => (playlists.pendingJump = false));
     const i = all.findIndex((r) => r.type === "track" && r.track.id === id);
-    if (i >= 0) void tick().then(() => list?.scrollToIndex(i));
+    if (i < 0) return;
+    // Put the song second: under the track above it, and under that track's
+    // playlist header when it is the first of its playlist.
+    let top = i;
+    do top--;
+    while (top > 0 && all[top].type !== "track");
+    if (top > 0 && all[top - 1].type !== "track") top--;
+    const animate = !prefs.values.disable_animations;
+    void tick().then(() => list?.scrollToIndex(i, Math.max(0, top), animate));
   });
 
   function onImgError(e: Event) {

@@ -112,13 +112,70 @@
     if (onNearEnd && scrollTop + viewportH > totalH - 2000) onNearEnd();
   }
 
-  export function scrollToIndex(i: number) {
+  /**
+   * Scroll row `i` into view when it is not fully visible, placing row `top`
+   * (the row above it, unless the caller picks another) at the top of the
+   * viewport. `animate` glides there with an ease-in-out motion instead of
+   * jumping.
+   */
+  export function scrollToIndex(i: number, top = i - 1, animate = false) {
     if (!viewport) return;
-    const y = offsetOf(Math.max(0, Math.min(count - 1, i)));
-    if (y < viewport.scrollTop || y > viewport.scrollTop + viewportH - 40) {
-      viewport.scrollTop = Math.max(0, y - viewportH / 3);
-    }
+    const clamp = (n: number) => Math.max(0, Math.min(count - 1, n));
+    i = clamp(i);
+    const y = offsetOf(i);
+    const visible =
+      y >= viewport.scrollTop && y + heightOf(i) <= viewport.scrollTop + viewportH;
+    if (visible) return;
+    const target = Math.max(
+      0,
+      Math.min(offsetOf(clamp(top)), totalH + padBottom - viewportH),
+    );
+    cancelGlide();
+    if (animate) glideTo(target);
+    else viewport.scrollTop = target;
   }
+
+  let glide: number | null = null;
+
+  function cancelGlide() {
+    if (glide != null) cancelAnimationFrame(glide);
+    glide = null;
+  }
+
+  // Cubic ease-in-out over a fixed time. A far jump would blur thousands of
+  // rows past, so it starts at most three screens away from the target: every
+  // jump then reads as the same short glide.
+  function glideTo(target: number) {
+    const el = viewport!;
+    const span = 3 * viewportH;
+    let from = el.scrollTop;
+    if (Math.abs(target - from) > span) {
+      from = target + Math.sign(from - target) * span;
+      el.scrollTop = from;
+    }
+    const start = performance.now();
+    const duration = 450;
+    const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      el.scrollTop = from + (target - from) * ease(t);
+      glide = t < 1 ? requestAnimationFrame(step) : null;
+    };
+    glide = requestAnimationFrame(step);
+  }
+
+  // The user taking the wheel or the scrollbar ends a glide at once.
+  $effect(() => {
+    const el = viewport;
+    if (!el) return;
+    el.addEventListener("wheel", cancelGlide, { passive: true });
+    el.addEventListener("pointerdown", cancelGlide);
+    return () => {
+      el.removeEventListener("wheel", cancelGlide);
+      el.removeEventListener("pointerdown", cancelGlide);
+      cancelGlide();
+    };
+  });
 </script>
 
 <div

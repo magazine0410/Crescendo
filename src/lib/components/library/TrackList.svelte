@@ -71,15 +71,26 @@
     if (!library.pendingJump || library.trackCount === 0) return;
     const id = player.track?.id;
     untrack(() => (library.pendingJump = null));
-    if (id != null) void revealTrack(id);
+    if (id != null) void revealTrack(id, !prefs.values.disable_animations);
   });
 
-  async function revealTrack(id: number) {
+  async function revealTrack(id: number, animate = false) {
     const idx = await library.indexOfTrack(id);
     if (idx == null) return;
     const row = library.rowForTrackIndex(idx);
     await tick(); // let VirtualList render with the new row count first
-    list?.scrollToIndex(row);
+    list?.scrollToIndex(row, anchorRow(row), animate);
+  }
+
+  /** The row to put at the top so the song shows as the second song: the
+      track above it, together with its album header when that track opens
+      an album. */
+  function anchorRow(row: number): number {
+    let top = row;
+    do top--;
+    while (top > 0 && !("trackIndex" in library.rowAt(top)));
+    if (top > 0 && !("trackIndex" in library.rowAt(top - 1))) top--;
+    return Math.max(0, top);
   }
 
   /** Play order matches the visible track order (both use the same sort), so

@@ -1,5 +1,5 @@
 use crate::commands::library::{projection_error, resolve_context, ProjectionCommandError};
-use crate::player::{Cmd, PlayerState};
+use crate::player::{Cmd, PlayerState, RATE_MAX, RATE_MIN};
 use crate::state::{AppState, ProjectMGrants};
 use crescendo_core::model::{PlayContext, Track};
 use serde::Serialize;
@@ -149,6 +149,14 @@ pub async fn player_set_volume(state: State<'_, AppState>, volume: f64) -> Resul
 #[tauri::command]
 pub async fn player_set_muted(state: State<'_, AppState>, muted: bool) -> Result<(), String> {
     state.player.send(Cmd::SetMuted(muted))
+}
+
+#[tauri::command]
+pub async fn player_set_rate(state: State<'_, AppState>, rate: f64) -> Result<(), String> {
+    if !rate.is_finite() || !(RATE_MIN..=RATE_MAX).contains(&rate) {
+        return Err(format!("speed must be a number from {RATE_MIN} to {RATE_MAX}"));
+    }
+    state.player.send(Cmd::SetRate(rate))
 }
 
 #[tauri::command]

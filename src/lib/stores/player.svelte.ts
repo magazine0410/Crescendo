@@ -1,4 +1,13 @@
-import { isTauri, call, type PlayerState, type Track, type RepeatMode, type PlayContext } from "../api";
+import {
+  isTauri,
+  call,
+  RATE_MAX,
+  RATE_MIN,
+  type PlayerState,
+  type Track,
+  type RepeatMode,
+  type PlayContext,
+} from "../api";
 import { mockNowPlaying } from "../mock";
 
 class PlayerStore {
@@ -11,6 +20,8 @@ class PlayerStore {
   shuffle = $state(false);
   repeat = $state<RepeatMode>("off");
   stopAfterCurrent = $state(false);
+  /** Playback speed, 1 = normal. Pitch is kept; only the tempo changes. */
+  rate = $state(1);
   contextIndex = $state<number | null>(null);
   contextLen = $state(0);
   error = $state<string | null>(null);
@@ -26,6 +37,7 @@ class PlayerStore {
     this.stopAfterCurrent = s.stop_after_current;
     this.volume = s.volume;
     this.muted = s.muted;
+    this.rate = s.rate;
     this.contextIndex = s.context_index;
     this.contextLen = s.context_len;
     if (s.track) this.durationMs = s.track.duration_ms;
@@ -120,6 +132,12 @@ class PlayerStore {
     const order: RepeatMode[] = ["off", "all", "one"];
     this.repeat = order[(order.indexOf(this.repeat) + 1) % 3];
     if (isTauri) await call("player_cycle_repeat");
+  }
+
+  async setRate(rate: number) {
+    if (!Number.isFinite(rate)) return;
+    this.rate = Math.min(RATE_MAX, Math.max(RATE_MIN, rate));
+    if (isTauri) await call("player_set_rate", { rate: this.rate });
   }
 
   async toggleStopAfterCurrent() {

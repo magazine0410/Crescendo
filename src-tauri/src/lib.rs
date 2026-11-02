@@ -203,6 +203,7 @@ pub fn run() {
             commands::player::player_seek,
             commands::player::player_set_volume,
             commands::player::player_set_muted,
+            commands::player::player_set_rate,
             commands::player::player_set_shuffle,
             commands::player::player_cycle_repeat,
             commands::player::player_set_stop_after_current,

@@ -270,7 +270,13 @@ export interface PlayerState {
   volume: number;
   muted: boolean;
   stop_after_current: boolean;
+  /** Playback speed, 1 = normal; see RATE_MIN / RATE_MAX. */
+  rate: number;
 }
+
+/** Bounds of the playback speed the player accepts. */
+export const RATE_MIN = 0.5;
+export const RATE_MAX = 2;
 
 export interface ArtistInfo {
   name: string;

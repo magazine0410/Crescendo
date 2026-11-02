@@ -66,6 +66,9 @@ export interface Prefs {
       as it starts (right-click the shuffle button to set it). Off = the views
       stay where they were put. */
   auto_jump_now_playing: boolean;
+  /** Skip the glide of a jump to the playing song and the slide of the side
+      panels: every such change lands at once. */
+  disable_animations: boolean;
   /** Settings > Appearance font, e.g. `Noto Sans` (a comma list is allowed).
       Blank = the Eole stack; a custom font goes in front of it (appearance.ts). */
   font_family: string;
@@ -116,7 +119,8 @@ const DEFAULTS: Prefs = {
   playlist_sort: "manual",
   playlist_sort_locked: false,
   collections_placement: "above",
-  auto_jump_now_playing: false,
+  auto_jump_now_playing: true,
+  disable_animations: false,
   font_family: "",
   color_bg_main: "",
   color_bg_panel: "",
@@ -222,6 +226,7 @@ class PrefsStore {
       v.collections_placement = placement;
     if (raw.auto_jump_now_playing)
       v.auto_jump_now_playing = raw.auto_jump_now_playing === "true";
+    if (raw.disable_animations) v.disable_animations = raw.disable_animations === "true";
     if (raw.font_family) v.font_family = raw.font_family;
     for (const { pref } of THEME_COLORS) {
       if (/^#[0-9a-f]{6}$/i.test(raw[pref] ?? "")) v[pref] = raw[pref];
