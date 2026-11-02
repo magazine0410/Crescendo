@@ -11,6 +11,11 @@ export type CollectionsPlacement = "above" | "within" | "below";
 
 export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "projectm_import";
 
+/** How many past searches the search field's history keeps. */
+export const SEARCH_HISTORY_MAX = 5;
+/** How many searches can be saved as favorites. */
+export const SEARCH_FAVORITES_MAX = 100;
+
 /** Keys mirrored into the backend `prefs` table. */
 export interface Prefs {
   library_path: string;
@@ -74,6 +79,15 @@ export interface Prefs {
   color_txt_faded: string;
   color_accent: string;
   color_selection: string;
+  /** The last searches run from the search field, most recent first
+      (SEARCH_HISTORY_MAX of them). Stored as one JSON list. */
+  search_history: string[];
+  /** Searches saved through the star in the search field, in the order they
+      were saved (up to SEARCH_FAVORITES_MAX). Stored as one JSON list. */
+  search_favorites: string[];
+  /** Suggest a favorite that starts with the typed search, completed with
+      Tab. Off leaves the search field alone while typing. */
+  search_autocomplete: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -112,6 +126,9 @@ const DEFAULTS: Prefs = {
   color_txt_faded: "",
   color_accent: "",
   color_selection: "",
+  search_history: [],
+  search_favorites: [],
+  search_autocomplete: true,
 };
 
 /** `%title_display%` -> `%title%` for the three retired _display tags. */
@@ -122,6 +139,18 @@ export function clampScanThreads(n: number): number {
 
 function foldDisplayTags(pattern: string): string {
   return pattern.replace(/%(title|artist|albumartist)_display%/gi, "%$1%");
+}
+
+/** A list of search queries stored as JSON in one prefs row. Anything that is
+    not a JSON list of strings reads as empty rather than failing the load. */
+function parseQueryList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((q): q is string => typeof q === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 class PrefsStore {
@@ -197,6 +226,9 @@ class PrefsStore {
     for (const { pref } of THEME_COLORS) {
       if (/^#[0-9a-f]{6}$/i.test(raw[pref] ?? "")) v[pref] = raw[pref];
     }
+    v.search_history = parseQueryList(raw.search_history);
+    v.search_favorites = parseQueryList(raw.search_favorites);
+    if (raw.search_autocomplete) v.search_autocomplete = raw.search_autocomplete === "true";
     this.values = v;
     this.loaded = true;
   }
@@ -207,7 +239,10 @@ class PrefsStore {
     // Also in the browser: mock.ts mirrors the prefs the dev backend needs
     // (prefer_romanized decides its ordering), and ignores the rest.
     try {
-      return await call<PreferenceMutationResult>("prefs_set", { key, value: String(value) });
+      return await call<PreferenceMutationResult>("prefs_set", {
+        key,
+        value: Array.isArray(value) ? JSON.stringify(value) : String(value),
+      });
     } catch (e) {
       // Show what is actually saved. For prefer_romanized this also keeps the
       // display helpers in step with the backend's ordering. A newer set of

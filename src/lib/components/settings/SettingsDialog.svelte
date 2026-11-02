@@ -221,6 +221,20 @@
         <label class="check">
           <input
             type="checkbox"
+            checked={prefs.values.search_autocomplete}
+            onchange={(e) => prefs.set("search_autocomplete", e.currentTarget.checked)}
+          />
+          Complete searches from favorites
+        </label>
+        <p class="hint">
+          While typing a search, a favorite search that starts with the typed
+          text is shown in grey after it. Tab fills it in, and Tab again switches
+          between several matching favorites.
+        </p>
+
+        <label class="check">
+          <input
+            type="checkbox"
             checked={prefs.values.replaygain_enabled}
             disabled={replayGainSaving}
             onchange={(e) => setReplayGain(e.currentTarget.checked)}
