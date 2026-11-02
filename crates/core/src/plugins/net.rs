@@ -600,6 +600,8 @@ mod tests {
             NextTimeout {
                 after: ureq::unversioned::transport::time::Duration::from(Duration::from_secs(5)),
                 reason: ureq::Timeout::Global,
+                per_read: None,
+                per_write: None,
             },
         );
         assert!(
