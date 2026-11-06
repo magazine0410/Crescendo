@@ -11,6 +11,11 @@ export type CollectionsPlacement = "above" | "within" | "below";
 
 export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "projectm_import";
 
+/** Settings > General > Animations. "full" keeps everything, "partial" keeps
+    only smooth scrolling, "disabled" drops that too. The visualizer is not
+    affected. */
+export type AnimationLevel = "disabled" | "partial" | "full";
+
 /** How many past searches the search field's history keeps. */
 export const SEARCH_HISTORY_MAX = 5;
 /** How many searches can be saved as favorites. */
@@ -66,9 +71,8 @@ export interface Prefs {
       as it starts (right-click the shuffle button to set it). Off = the views
       stay where they were put. */
   auto_jump_now_playing: boolean;
-  /** Skip the glide of a jump to the playing song and the slide of the side
-      panels: every such change lands at once. */
-  disable_animations: boolean;
+  /** Read it through `prefs.transitions` and `prefs.smoothScrolling`. */
+  animations: AnimationLevel;
   /** Settings > Appearance font, e.g. `Noto Sans` (a comma list is allowed).
       Blank = the Eole stack; a custom font goes in front of it (appearance.ts). */
   font_family: string;
@@ -120,7 +124,7 @@ const DEFAULTS: Prefs = {
   playlist_sort_locked: false,
   collections_placement: "above",
   auto_jump_now_playing: true,
-  disable_animations: false,
+  animations: "full",
   font_family: "",
   color_bg_main: "",
   color_bg_panel: "",
@@ -160,6 +164,17 @@ function parseQueryList(raw: string | undefined): string[] {
 class PrefsStore {
   values = $state<Prefs>({ ...DEFAULTS });
   loaded = $state(false);
+
+  /** Menu expansion, panel slides, the glide to the playing song and every CSS
+      transition or animation. Below "full" they all change at once. */
+  get transitions(): boolean {
+    return this.values.animations === "full";
+  }
+
+  /** Eased wheel scrolling and the lyrics following the song. */
+  get smoothScrolling(): boolean {
+    return this.values.animations !== "disabled";
+  }
 
   async load() {
     if (!isTauri) {
@@ -226,7 +241,10 @@ class PrefsStore {
       v.collections_placement = placement;
     if (raw.auto_jump_now_playing)
       v.auto_jump_now_playing = raw.auto_jump_now_playing === "true";
-    if (raw.disable_animations) v.disable_animations = raw.disable_animations === "true";
+    if (raw.animations === "disabled" || raw.animations === "partial" || raw.animations === "full")
+      v.animations = raw.animations;
+    // The checkbox this setting replaced: ticked meant no motion at all.
+    else if (raw.disable_animations === "true") v.animations = "disabled";
     if (raw.font_family) v.font_family = raw.font_family;
     for (const { pref } of THEME_COLORS) {
       if (/^#[0-9a-f]{6}$/i.test(raw[pref] ?? "")) v[pref] = raw[pref];

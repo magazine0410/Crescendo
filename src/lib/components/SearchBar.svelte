@@ -2,6 +2,7 @@
   import { ui, type SearchSpan } from "$lib/stores/ui.svelte";
   import { prefs, SEARCH_FAVORITES_MAX, SEARCH_HISTORY_MAX } from "$lib/stores/prefs.svelte";
   import { call } from "$lib/api";
+  import { menuTransition } from "$lib/motion";
   import Icon from "./common/Icon.svelte";
 
   let inputEl: HTMLInputElement | null = $state(null);
@@ -237,7 +238,12 @@
 
   {#if historyOpen && prefs.values.search_history.length > 0}
     <!-- Pressing inside must not blur the input, which would close this. -->
-    <div class="popup" role="presentation" onmousedown={(e) => e.preventDefault()}>
+    <div
+      class="popup"
+      role="presentation"
+      onmousedown={(e) => e.preventDefault()}
+      transition:menuTransition
+    >
       <div class="head">Recent searches</div>
       {#each prefs.values.search_history as q (q)}
         <button class="row" onclick={() => search(q)}>{q}</button>
@@ -246,7 +252,7 @@
   {/if}
 
   {#if favoritesOpen}
-    <div class="popup">
+    <div class="popup" transition:menuTransition>
       <div class="head">
         <span>Favorites</span>
         <span>{favorites.length}/{SEARCH_FAVORITES_MAX}</span>
@@ -371,11 +377,13 @@
   }
 
   /* Both lists hang under the field, growing leftwards past it for long
-     queries: the field sits at the window's right edge. */
+     queries: the field sits at the window's right edge. They expand out of the
+     star, a fixed distance from that right edge. */
   .popup {
     position: absolute;
     top: calc(100% + 3px);
     right: 0;
+    transform-origin: calc(100% - 234px) 0;
     min-width: 100%;
     max-width: 480px;
     padding: 4px 0;

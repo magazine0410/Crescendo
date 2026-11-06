@@ -48,7 +48,7 @@
   <div
     id={panelId}
     class="panel {side}"
-    class:animate={transitionsReady && !resizing && !prefs.values.disable_animations}
+    class:animate={transitionsReady && !resizing && prefs.transitions}
     style:width={`${collapsed ? 0 : size}px`}
     style:--expanded-width={`${size}px`}
     role="region"
@@ -72,7 +72,7 @@
     {collapsed}
     {panelId}
     panelLabel={label}
-    animate={transitionsReady && !resizing && !prefs.values.disable_animations}
+    animate={transitionsReady && !resizing && prefs.transitions}
     {onresize}
     ontoggle={toggle}
     ondragchange={(active) => (resizing = active)}

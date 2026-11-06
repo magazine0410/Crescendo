@@ -24,6 +24,8 @@
 </script>
 
 <script lang="ts">
+  import { animateMenu, menuTransition } from "$lib/motion";
+
   function pick(item: MenuItem) {
     if (item.disabled || item.separator || item.submenu) return;
     closeContextMenu();
@@ -37,14 +39,9 @@
   /** Gap kept between a menu and the window edges. */
   const MARGIN = 6;
 
-  let rootEl = $state<HTMLElement | null>(null);
-
   // Put the root menu fully inside the window. The size is measured, not
   // guessed from the item count: separators and wrapped labels are not 26px.
-  $effect(() => {
-    const el = rootEl;
-    const m = menu;
-    if (!el || !m) return;
+  function placeMenu(el: HTMLElement, m: { x: number; y: number }) {
     // Measure from the corner. Left at the pointer, a menu opened near an edge
     // is squeezed into the space that is left there — it wraps, and reads both
     // narrower and taller than it will be drawn once moved, which is the very
@@ -63,7 +60,9 @@
       m.y + height > window.innerHeight - MARGIN ? Math.max(MARGIN, m.y - height) : m.y;
     el.style.left = `${left}px`;
     el.style.top = `${top}px`;
-  });
+    // Expand out of the pointer, wherever the menu landed relative to it.
+    el.style.transformOrigin = `${m.x - left}px ${m.y - top}px`;
+  }
 
   /**
    * Position a submenu against the window instead of against its parent item.
@@ -74,8 +73,10 @@
    */
   function placeSubmenu(el: HTMLElement) {
     const wrap = el.parentElement as HTMLElement;
+    let collapsing: Animation | undefined;
 
     function place() {
+      collapsing?.cancel();
       // Show and unclamp first, so the natural height can be measured. The
       // inline value must be "none": an empty value lets the stylesheet limit
       // (60vh) apply again, and the measurement stays clamped.
@@ -100,10 +101,16 @@
       el.style.left = flip ? "auto" : "100%";
       el.style.right = flip ? "100%" : "auto";
       el.scrollTop = 0;
+      // Expand out of the item that opened it.
+      el.style.transformOrigin = `${flip ? "100%" : "0"} ${wrapRect.top - top}px`;
+      animateMenu(el, "expand");
     }
 
     function hide() {
-      el.style.display = "";
+      // Stays displayed through the collapse: the stylesheet would hide it.
+      collapsing = animateMenu(el, "collapse");
+      if (collapsing) collapsing.onfinish = () => (el.style.display = "");
+      else el.style.display = "";
     }
 
     wrap.addEventListener("pointerenter", place);
@@ -119,13 +126,18 @@
 
 <svelte:window onpointerdown={onWindowDown} onblur={closeContextMenu} />
 
-{#if menu}
-  <div class="ctx-menu" bind:this={rootEl} style:left={`${menu.x}px`} style:top={`${menu.y}px`}>
-    {#each menu.items as item, i (i)}
-      {@render renderItem(item)}
-    {/each}
-  </div>
-{/if}
+<!-- Keyed: right-clicking elsewhere with a menu open collapses that menu where
+     it is and expands a new one at the pointer. `global` because the block the
+     transition belongs to is the key, not this #if. -->
+{#key menu}
+  {#if menu}
+    <div class="ctx-menu" use:placeMenu={menu} transition:menuTransition|global>
+      {#each menu.items as item, i (i)}
+        {@render renderItem(item)}
+      {/each}
+    </div>
+  {/if}
+{/key}
 
 {#snippet renderItem(item: MenuItem)}
   {#if item.separator}

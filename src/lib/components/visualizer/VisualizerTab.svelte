@@ -12,6 +12,7 @@
   import { player } from "$lib/stores/player.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
+  import Select from "../common/Select.svelte";
   import BarsVisualizer from "./BarsVisualizer.svelte";
   import ProjectMVisualizer from "./ProjectMVisualizer.svelte";
 
@@ -242,8 +243,7 @@
 
   /** Every option is a mode the app can already be in, so selecting one only
       has to switch to it — no option needs undoing after the fact. */
-  async function selectVisualizer(event: Event) {
-    const value = (event.currentTarget as HTMLSelectElement).value;
+  async function selectVisualizer(value: string) {
     if (value === "bars") {
       error = "";
       notice = "";
@@ -369,22 +369,23 @@
 <div class="vis" style:padding-bottom={`${ui.bottombarH}px`}>
   <div class="surface">
     <div class="toolbar">
-      <select
-        aria-label="Visualizer"
+      <Select
+        ariaLabel="Visualizer"
         title="Visualizer"
         value={selectorValue}
         disabled={busy}
+        options={[
+          { value: "bars", label: "Bars" },
+          { value: "en-d", label: "MilkDrop: En D" },
+          ...(prefs.values.visualizer_mode === "projectm_preset"
+            ? [{ value: "current-preset", label: "MilkDrop: Selected preset" }]
+            : []),
+          ...(prefs.values.visualizer_mode === "projectm_import"
+            ? [{ value: "current-import", label: "MilkDrop: Imported folder" }]
+            : []),
+        ]}
         onchange={selectVisualizer}
-      >
-        <option value="bars">Bars</option>
-        <option value="en-d">MilkDrop: En D</option>
-        {#if prefs.values.visualizer_mode === "projectm_preset"}
-          <option value="current-preset">MilkDrop: Selected preset</option>
-        {/if}
-        {#if prefs.values.visualizer_mode === "projectm_import"}
-          <option value="current-import">MilkDrop: Imported folder</option>
-        {/if}
-      </select>
+      />
       <button class="action" disabled={busy} onclick={openChooser}>Choose preset...</button>
       <button class="action" disabled={busy} onclick={importFolder}>Import folder...</button>
       {#if activePreset && prefs.values.visualizer_mode !== "bars"}
@@ -497,6 +498,12 @@
     display: block;
   }
   .toolbar {
+    --select-width: 171px;
+    --select-height: 32px;
+    --select-padding: 0 25px 0 8px;
+    --select-arrow-size: 10px;
+    --select-arrow-inset: 7px;
+    --select-radius: 2px;
     display: flex;
     flex: 0 0 52px;
     align-items: center;
@@ -506,29 +513,6 @@
     background: var(--bg-panel);
     border-bottom: 1px solid var(--hairline);
     box-sizing: border-box;
-  }
-  select {
-    flex: 0 0 171px;
-    height: 32px;
-    padding: 0 25px 0 8px;
-    color: var(--txt);
-    appearance: none;
-    -webkit-appearance: none;
-    background-color: var(--bg-panel);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 7px center;
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    cursor: pointer;
-  }
-  select:disabled {
-    color: var(--txt-faded);
-    cursor: default;
-  }
-  select option {
-    color: var(--txt);
-    background: var(--bg-main);
   }
   /* The two actions sit beside the mode list rather than inside it, so every
      option in the list is a state the visualizer can actually be left in. */

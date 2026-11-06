@@ -1,5 +1,6 @@
 <script lang="ts">
   import { player } from "$lib/stores/player.svelte";
+  import { prefs } from "$lib/stores/prefs.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import {
     call,
@@ -171,7 +172,7 @@
     if (!el) return;
     box.scrollTo({
       top: Math.max(0, el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2),
-      behavior: "smooth",
+      behavior: prefs.smoothScrolling ? "smooth" : "auto",
     });
   });
 

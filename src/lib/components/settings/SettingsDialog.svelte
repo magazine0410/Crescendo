@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { clampScanThreads, prefs, type CollectionsPlacement } from "$lib/stores/prefs.svelte";
+  import {
+    clampScanThreads,
+    prefs,
+    type AnimationLevel,
+    type CollectionsPlacement,
+  } from "$lib/stores/prefs.svelte";
   import { library } from "$lib/stores/library.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { call, isTauri } from "$lib/api";
@@ -8,6 +13,7 @@
   import SongHistory from "./SongHistory.svelte";
   import PluginsSettings from "./PluginsSettings.svelte";
   import ColorPicker from "../common/ColorPicker.svelte";
+  import Select from "../common/Select.svelte";
   import { applyAppearance, DEFAULT_FONT, THEME_COLORS, type ThemeColor } from "$lib/appearance";
 
   interface Props {
@@ -207,15 +213,15 @@
         </label>
 
         <label for="deftab">Default tab</label>
-        <select
+        <Select
           id="deftab"
           value={prefs.values.default_tab}
-          onchange={(e) =>
-            prefs.set("default_tab", e.currentTarget.value as "library" | "playlists")}
-        >
-          <option value="library">Library</option>
-          <option value="playlists">Playlists</option>
-        </select>
+          options={[
+            { value: "library", label: "Library" },
+            { value: "playlists", label: "Playlists" },
+          ]}
+          onchange={(value) => prefs.set("default_tab", value as "library" | "playlists")}
+        />
         <p class="hint">Which tab opens when Crescendo starts.</p>
 
         <label class="check">
@@ -232,17 +238,22 @@
           between several matching favorites.
         </p>
 
-        <label class="check">
-          <input
-            type="checkbox"
-            checked={prefs.values.disable_animations}
-            onchange={(e) => prefs.set("disable_animations", e.currentTarget.checked)}
-          />
-          Disable animations
-        </label>
+        <label for="animations">Animations</label>
+        <Select
+          id="animations"
+          value={prefs.values.animations}
+          options={[
+            { value: "disabled", label: "Disabled" },
+            { value: "partial", label: "Partial" },
+            { value: "full", label: "Full" },
+          ]}
+          onchange={(value) => prefs.set("animations", value as AnimationLevel)}
+        />
         <p class="hint">
-          Jumps to the playing song land at once instead of gliding, and the
-          filter and queue panels open and close without sliding.
+          Full animates everything. Partial keeps only smooth scrolling: menus,
+          panels and jumps to the playing song change at once. Disabled also
+          turns off smooth scrolling. The visualizer keeps moving at every
+          setting.
         </p>
 
         <label class="check">
@@ -371,15 +382,15 @@
         />
 
         <label for="libview">Library view</label>
-        <select
+        <Select
           id="libview"
           value={prefs.values.library_view}
-          onchange={(e) =>
-            prefs.set("library_view", e.currentTarget.value as "album_wall" | "track_list")}
-        >
-          <option value="album_wall">Album wall</option>
-          <option value="track_list">Track list</option>
-        </select>
+          options={[
+            { value: "album_wall", label: "Album wall" },
+            { value: "track_list", label: "Track list" },
+          ]}
+          onchange={(value) => prefs.set("library_view", value as "album_wall" | "track_list")}
+        />
         <p class="hint">
           Album wall shows a grid of album covers; Track list shows every track as a
           flat, scrollable list. Both respect the left panel and search.
@@ -403,16 +414,16 @@
         aria-labelledby="settings-tab-playlists"
       >
         <label for="collplacement">Collections</label>
-        <select
+        <Select
           id="collplacement"
           value={prefs.values.collections_placement}
-          onchange={(e) =>
-            prefs.set("collections_placement", e.currentTarget.value as CollectionsPlacement)}
-        >
-          <option value="above">Above the playlist list, with a separator</option>
-          <option value="within">Within the playlist list</option>
-          <option value="below">Below the playlist list, with a separator</option>
-        </select>
+          options={[
+            { value: "above", label: "Above the playlist list, with a separator" },
+            { value: "within", label: "Within the playlist list" },
+            { value: "below", label: "Below the playlist list, with a separator" },
+          ]}
+          onchange={(value) => prefs.set("collections_placement", value as CollectionsPlacement)}
+        />
         <p class="hint">
           Where grouped playlists appear in the sidebar. Group playlists by
           right-clicking them and choosing "Set collection…".
@@ -650,6 +661,7 @@
     overflow-y: auto;
   }
   .settings-panel {
+    --select-margin: 0 0 8px;
     padding: 18px;
   }
   label,
@@ -666,25 +678,6 @@
     padding: 6px 8px;
     color: var(--txt);
     margin-bottom: 8px;
-  }
-  select {
-    width: 100%;
-    background-color: var(--bg-panel);
-    border: 1px solid var(--border);
-    padding: 6px 26px 6px 8px;
-    color: var(--txt);
-    margin-bottom: 8px;
-    /* WebKitGTK renders a native (light) combobox unless appearance is cleared */
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    cursor: pointer;
-  }
-  select option {
-    background: var(--bg-main);
-    color: var(--txt);
   }
   input::placeholder {
     color: var(--txt-faded);

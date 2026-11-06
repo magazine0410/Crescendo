@@ -9,6 +9,7 @@
 
 <script lang="ts">
   import { customTagLabel, library, parseCustomTag } from "$lib/stores/library.svelte";
+  import { dropdownTransition } from "$lib/motion";
 
   /** Tags offered in the dropdown — each resolves through the backend's
       browse_column whitelist, so every pick is guaranteed to work. Kept
@@ -137,7 +138,7 @@
             </svg>
           </button>
           {#if menuOpen}
-            <ul class="menu" role="listbox">
+            <ul class="menu" role="listbox" transition:dropdownTransition>
               {#each TAGS as t (t)}
                 <li>
                   <button

@@ -244,7 +244,7 @@
     do top--;
     while (top > 0 && all[top].type !== "track");
     if (top > 0 && all[top - 1].type !== "track") top--;
-    const animate = !prefs.values.disable_animations;
+    const animate = prefs.transitions;
     void tick().then(() => list?.scrollToIndex(i, Math.max(0, top), animate));
   });
 

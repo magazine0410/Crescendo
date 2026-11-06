@@ -5,6 +5,7 @@
   import { displayAlbumartist, displayTitle } from "$lib/format";
   import { historyDate, historyAgo, type HistoryEntry } from "$lib/history";
   import Icon from "../common/Icon.svelte";
+  import Select from "../common/Select.svelte";
   import { openContextMenu, closeContextMenu } from "../common/ContextMenu.svelte";
 
   let rows = $state<HistoryEntry[]>([]);
@@ -76,11 +77,15 @@
 <section aria-label="Song history">
   <div class="heading"><h3>Song history</h3><button class="btn" disabled={loading} onclick={() => load([null])}>Refresh</button></div>
   <label for="history-time">History timestamps</label>
-  <select id="history-time" value={prefs.values.history_time_format}
-    onchange={(e) => prefs.set("history_time_format", e.currentTarget.value as "absolute" | "relative").catch(e => error = String(e))}>
-    <option value="absolute">Date and time · 05-09-26, 13:37</option>
-    <option value="relative">Time ago · 1 week ago</option>
-  </select>
+  <Select
+    id="history-time"
+    value={prefs.values.history_time_format}
+    options={[
+      { value: "absolute", label: "Date and time · 05-09-26, 13:37" },
+      { value: "relative", label: "Time ago · 1 week ago" },
+    ]}
+    onchange={(value) => prefs.set("history_time_format", value as "absolute" | "relative").catch(e => error = String(e))}
+  />
   <p class="hint">Songs appear after listening to more than half, whether or not scrobbling is enabled. Times show when playback started. Hover over a time for the exact date.</p>
   {#if !prefs.values.lastfm_api_key}<p class="hint">Add a Last.fm API key above to check song availability.</p>{/if}
   <div class="history" bind:this={box} aria-busy={loading}>
@@ -115,21 +120,6 @@
   .heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   h3 { font-size: 13px; font-weight: 500; }
   label { display: block; color: var(--txt-faded); font-size: 12px; margin-bottom: 4px; }
-  select {
-    width: 100%;
-    background-color: var(--bg-panel);
-    border: 1px solid var(--border);
-    padding: 6px 26px 6px 8px;
-    color: var(--txt);
-    /* WebKitGTK renders a native (light) combobox unless appearance is cleared */
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    cursor: pointer;
-  }
-  select option { background: var(--bg-main); color: var(--txt); }
   .hint { color: var(--txt-faded); font-size: 11px; line-height: 1.5; margin: 8px 0; }
   .history { max-height: 280px; overflow-y: auto; border: 1px solid var(--border); background: var(--bg-panel); }
   .history-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 5px 8px; text-align: left; }

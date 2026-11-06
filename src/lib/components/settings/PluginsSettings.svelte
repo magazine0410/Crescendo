@@ -8,6 +8,7 @@
   } from "$lib/api";
   import { library } from "$lib/stores/library.svelte";
   import { plugins } from "$lib/stores/plugins.svelte";
+  import Select from "../common/Select.svelte";
 
   const snapshot = $derived(plugins.snapshot);
   let selectedId = $state<string | null>(null);
@@ -305,16 +306,13 @@
                 </label>
               {:else if setting.type === "select"}
                 <label for={`plugin-${selected.id}-${setting.key}`}>{setting.label}</label>
-                <select
+                <Select
                   id={`plugin-${selected.id}-${setting.key}`}
                   value={setting.value}
+                  options={setting.options}
                   disabled={busy}
-                  onchange={(event) => setSetting(selected, setting, event.currentTarget.value)}
-                >
-                  {#each setting.options as option (option.value)}
-                    <option value={option.value}>{option.label}</option>
-                  {/each}
-                </select>
+                  onchange={(value) => setSetting(selected, setting, value)}
+                />
               {:else if setting.type === "number"}
                 <label for={`plugin-${selected.id}-${setting.key}`}>{setting.label}</label>
                 <input
@@ -372,15 +370,6 @@
     font-size: 12px;
   }
   input,
-  select {
-    width: 100%;
-    margin-bottom: 8px;
-    padding: 6px 8px;
-    color: var(--txt);
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-  }
-  select { appearance: none; }
   label.check {
     display: flex;
     align-items: center;

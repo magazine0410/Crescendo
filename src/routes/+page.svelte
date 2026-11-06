@@ -18,12 +18,21 @@
   import GroupingPluginMigration from "$lib/components/settings/GroupingPluginMigration.svelte";
   import FileDragNotice from "$lib/components/common/FileDragNotice.svelte";
   import { applyAppearance } from "$lib/appearance";
+  import { smoothWheel } from "$lib/motion";
 
   let settingsOpen = $state(false);
   let visualizerMounted = $state(false);
 
   $effect(() => {
     if (ui.activeTab === "visualizer") visualizerMounted = true;
+  });
+
+  $effect(() => {
+    document.documentElement.toggleAttribute("data-no-transitions", !prefs.transitions);
+  });
+
+  $effect(() => {
+    if (prefs.smoothScrolling) return smoothWheel();
   });
 
   onMount(async () => {

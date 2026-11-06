@@ -43,7 +43,6 @@ button {
 
 /* Form controls default to the system font; follow the UI font (and a custom
    one from Settings > Appearance) while keeping each control's own size. */
-select,
 textarea {
   font-family: inherit;
 }
@@ -59,4 +58,14 @@ input {
 ::selection {
   background: var(--selection);
   color: var(--txt-full);
+}
+
+/* Settings > Animations below Full (see +page.svelte). Everything written in
+   CSS stops here; Svelte transitions and script-driven motion read
+   prefs.transitions instead. */
+:root[data-no-transitions] *,
+:root[data-no-transitions] *::before,
+:root[data-no-transitions] *::after {
+  transition: none !important;
+  animation: none !important;
 }

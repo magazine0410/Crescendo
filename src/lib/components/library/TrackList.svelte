@@ -7,6 +7,7 @@
   import { call, type FileDragSource, type PlayContext, type SortKey, type Track } from "$lib/api";
   import { fileDrag, FILE_DRAG_LIMIT } from "$lib/fileDrag";
   import Icon from "../common/Icon.svelte";
+  import Select from "../common/Select.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import {
@@ -19,6 +20,8 @@
   import { tick, untrack } from "svelte";
 
   let list = $state<VirtualList | null>(null);
+
+  const sortOptions = SORT_KEYS.map(([value, label]) => ({ value, label }));
 
   // Rows are two-line so the play counter can sit under the title (and the
   // optional second detail under the first). Uniform height keeps VirtualList on
@@ -71,7 +74,7 @@
     if (!library.pendingJump || library.trackCount === 0) return;
     const id = player.track?.id;
     untrack(() => (library.pendingJump = null));
-    if (id != null) void revealTrack(id, !prefs.values.disable_animations);
+    if (id != null) void revealTrack(id, prefs.transitions);
   });
 
   async function revealTrack(id: number, animate = false) {
@@ -219,18 +222,13 @@
     <span class="title">Library {#if library.query}(Filtered){/if}</span>
     <div class="sortctl">
       <span class="sortlabel">Sort:</span>
-      <select
-        class="sortsel"
+      <Select
         title="Sort by"
         disabled={library.interactionBlocked}
         value={library.sort?.key ?? ""}
-        onchange={(e) => library.setSortKey((e.currentTarget.value || null) as SortKey | null)}
-      >
-        <option value="">Default</option>
-        {#each SORT_KEYS as [key, label] (key)}
-          <option value={key}>{label}</option>
-        {/each}
-      </select>
+        options={[{ value: "", label: "Default" }, ...sortOptions]}
+        onchange={(value) => library.setSortKey((value || null) as SortKey | null)}
+      />
       <button
         class="dirbtn"
         disabled={library.interactionBlocked || !library.sort}
@@ -239,21 +237,16 @@
       >
         <Icon name={library.sort?.descending ? "triangle-down" : "triangle-up"} size={9} />
       </button>
-      <select
-        class="sortsel"
+      <Select
         title="Then by"
         disabled={library.interactionBlocked || !library.sort}
         value={library.sort?.secondary ?? ""}
-        onchange={(e) =>
-          library.setSortSecondary((e.currentTarget.value || null) as SortKey | null)}
-      >
-        <option value="">Off</option>
-        {#each SORT_KEYS as [key, label] (key)}
-          {#if key !== library.sort?.key}
-            <option value={key}>{label}</option>
-          {/if}
-        {/each}
-      </select>
+        options={[
+          { value: "", label: "Off" },
+          ...sortOptions.filter((option) => option.value !== library.sort?.key),
+        ]}
+        onchange={(value) => library.setSortSecondary((value || null) as SortKey | null)}
+      />
       <button
         class="dirbtn"
         class:following={library.sort?.secondary_descending == null}
@@ -397,6 +390,11 @@
   }
   /* sort controls, sitting left of the track count */
   .sortctl {
+    --select-width: auto;
+    --select-padding: 2px 18px 2px 6px;
+    --select-font-size: 11px;
+    --select-arrow-size: 10px;
+    --select-arrow-inset: 5px;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -406,28 +404,6 @@
   .sortlabel {
     color: var(--txt-faded);
     font-size: 11px;
-  }
-  .sortsel {
-    background-color: var(--bg-panel);
-    border: 1px solid var(--border);
-    color: var(--txt);
-    font-size: 11px;
-    padding: 2px 18px 2px 6px;
-    /* WebKitGTK renders a native (light) combobox unless appearance is cleared */
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236e6e6e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 5px center;
-    cursor: pointer;
-  }
-  .sortsel:disabled {
-    color: var(--txt-faded);
-    cursor: default;
-  }
-  .sortsel option {
-    background: var(--bg-main);
-    color: var(--txt);
   }
   .dirbtn {
     display: flex;

@@ -351,7 +351,7 @@
             class="collection-children"
             transition:slide={{
               duration:
-                collectionTransitionsReady && !reduceMotion && !prefs.values.disable_animations
+                collectionTransitionsReady && !reduceMotion && prefs.transitions
                   ? 180
                   : 0,
             }}
