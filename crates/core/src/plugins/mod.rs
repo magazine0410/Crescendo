@@ -12,8 +12,9 @@ pub use bridge::{
     HostNotifierSlot, PlayerBridge, PlayerBridgeSlot,
 };
 pub use manager::{
-    PluginAsset, PluginInfo, PluginManager, PluginMenuControlInfo, PluginMutationResult,
-    PluginSnapshot, StaleProjection, GROUPING_PLUGIN_ID, GROUPING_PLUGIN_SETTING,
+    Enablement, PluginAsset, PluginInfo, PluginManager, PluginMenuControlInfo,
+    PluginMutationResult, PluginSnapshot, StaleProjection, GROUPING_PLUGIN_ID,
+    GROUPING_PLUGIN_SETTING,
 };
 pub use manifest::{
     PluginCommandDeclaration, PluginContributions, PluginFacetTransform,

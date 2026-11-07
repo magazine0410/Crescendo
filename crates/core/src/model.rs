@@ -90,6 +90,8 @@ pub struct ScanProgress {
     pub errors: u64,
     pub current_path: String,
     pub done: bool,
+    /// The scan stopped early on request, so nothing was marked missing.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

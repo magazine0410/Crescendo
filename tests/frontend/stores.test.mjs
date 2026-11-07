@@ -23,7 +23,7 @@ function preferences(overrides = {}) {
   } };
 }
 
-async function store(name, call, prefs = preferences()) {
+async function store(name, call, prefs = preferences(), services = {}) {
   const source = await readFile(path.join(root, `src/lib/stores/${name}.svelte.ts`), "utf8");
   let js = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
@@ -31,6 +31,7 @@ async function store(name, call, prefs = preferences()) {
   globalThis.__crescendoStoreServices = {
     call, prefs, isTauri: true, mockNowPlaying: null,
     staleProjectionRevision: () => null,
+    ...services,
   };
   js = "const {call, prefs, isTauri, mockNowPlaying, staleProjectionRevision} = globalThis.__crescendoStoreServices;\n" + js;
   const compiled = compileModule(js, { filename: `${name}.svelte.js`, generate: "client" });
@@ -282,4 +283,237 @@ test("old page failures cannot evict a new view's cached page", async () => {
   await library.ensureTrackRangeLoaded(0, 10);
   assert.equal(requests, 2);
   assert.equal(library.tracks[0].id, 42);
+});
+
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
+
+/** Answers every library query; `overrides` replaces single commands. */
+function libraryCalls(overrides = {}, log = []) {
+  return async (command, args) => {
+    log.push({ command, args });
+    if (overrides[command]) return overrides[command](args);
+    if (command === "browse_values") return { values: [], projection_revision: args?.revision ?? 0 };
+    if (command === "browse_albums") return [];
+    if (command === "track_count") return 400;
+    if (command === "tracks_range") return Array.from({ length: args.limit }, (_, i) => ({ id: args.offset + i + 1 }));
+    throw new Error(`unexpected ${command}`);
+  };
+}
+
+const staleError = { stale: 5 };
+const staleServices = { staleProjectionRevision: e => (e === staleError ? 5 : null) };
+
+test("a stale recovery waits for a projection change and the gate stays shut for both", async () => {
+  const write = deferred(), recoveryValues = deferred();
+  let values = 0;
+  const library = await store("library", libraryCalls({
+    browse_values: () => (++values === 2 ? recoveryValues.promise : { values: [], projection_revision: 3 }),
+  }), preferences(), staleServices);
+
+  const changing = library.changeProjection(() => write.promise);
+  const recovering = library.recoverStaleProjection(staleError);
+  await settle();
+  assert.equal(values, 0, "the recovery must not start beside the projection change");
+  write.resolve(3);
+  await changing;
+  await settle();
+  assert.equal(values, 2, "the recovery has started");
+  assert.equal(library.interactionBlocked, true, "the first to finish must not open the gate");
+  assert.equal(library.projectionRevision, 5);
+  recoveryValues.resolve({ values: [], projection_revision: 5 });
+  assert.equal(await recovering, true);
+  assert.equal(library.interactionBlocked, false);
+});
+
+test("a rejected projection write still rebuilds what it invalidated", async () => {
+  const log = [];
+  const library = await store("library", libraryCalls({}, log));
+  await library.reloadTrackView(false);
+  await library.ensureTrackRangeLoaded(0, 10);
+  assert.equal(library.tracks[0].id, 1);
+
+  log.length = 0;
+  await assert.rejects(library.changeProjection(async () => { throw new Error("refused"); }), /refused/);
+  assert.equal(library.interactionBlocked, false);
+  assert.ok(log.some(c => c.command === "track_count"), "the view reloaded");
+  await library.ensureTrackRangeLoaded(0, 10);
+  assert.equal(library.tracks[0].id, 1, "its pages load again");
+});
+
+test("a rebuild that hit a newer revision recovers instead of leaving the view empty", async () => {
+  let first = true, values = 0;
+  const library = await store("library", libraryCalls({
+    browse_values: () => ({ values: [], projection_revision: ++values === 1 ? 3 : 5 }),
+    track_count: () => { if (first) { first = false; throw staleError; } return 7; },
+  }), preferences(), staleServices);
+  await library.changeProjection(async () => 3);
+  await settle();
+  assert.equal(library.interactionBlocked, false);
+  assert.equal(library.projectionRevision, 5);
+  assert.equal(library.trackCount, 7);
+});
+
+test("a failed reload keeps the old list working, with an in-flight page included", async () => {
+  const inflight = deferred(), log = [];
+  const library = await store("library", libraryCalls({
+    tracks_range: args => (args.offset === 0 && !inflight.done ? (inflight.done = true, inflight.promise)
+      : [{ id: args.offset + 1, query: args.query }]),
+    track_count: args => { if (args.query === "broken(") throw new Error("invalid query"); return 400; },
+  }, log));
+  library.query = "good";
+  await library.reloadTrackView(false);
+  const page = library.ensureTrackRangeLoaded(0, 10);
+  await settle();
+
+  library.query = "broken(";
+  await library.reloadTrackView(false);
+  assert.equal(library.trackEpoch, 1, "nothing was replaced");
+  inflight.resolve([{ id: 1, query: "good" }]);
+  await page;
+  assert.equal(library.tracks[0].id, 1, "that page still belongs to the list on screen");
+
+  await library.ensureTrackRangeLoaded(200, 210);
+  assert.equal(library.tracks[200].query, "good", "later pages match the rows on screen");
+});
+
+test("a page requested during a reset fetches the rows of the list on screen", async () => {
+  const count = deferred(), pages = [];
+  const library = await store("library", libraryCalls({
+    track_count: args => (args.query === "new" ? count.promise : 400),
+    tracks_range: args => { pages.push(args.query); return [{ id: args.offset + 1, query: args.query }]; },
+  }));
+  library.query = "old";
+  await library.reloadTrackView(false);
+  library.query = "new";
+  const reloading = library.reloadTrackView(false);
+  await library.ensureTrackRangeLoaded(0, 10);
+  assert.deepEqual(pages, ["old"]);
+  assert.equal(library.tracks[0].query, "old");
+
+  count.resolve(50);
+  await reloading;
+  await library.ensureTrackRangeLoaded(0, 10);
+  assert.deepEqual(pages, ["old", "new"]);
+  assert.equal(library.tracks[0].query, "new");
+  assert.equal(library.tracks.length, 50);
+});
+
+test("a view change made during a rebuild applies when it ends, and only then", async () => {
+  const write = deferred(), counts = [];
+  const prefs = preferences();
+  const library = await store("library", libraryCalls({
+    track_count: args => { counts.push(args.query); return 1; },
+  }), prefs);
+  const changing = library.changeProjection(() => write.promise);
+  library.requestTrackView(false);
+  library.query = "typed meanwhile";
+  library.requestTrackView(false);
+  assert.deepEqual(counts, []);
+  write.resolve(1);
+  await changing;
+  await settle();
+  // The rebuild read the query when it ran, so nothing is left to apply.
+  assert.deepEqual(counts, ["typed meanwhile"]);
+
+  const second = deferred();
+  const again = library.changeProjection(() => second.promise);
+  library.requestTrackView(false);
+  second.resolve(2);
+  await settle();
+  await again;
+  library.query = "after";
+  assert.equal(counts.length, 2, "an unchanged view does not reload twice");
+});
+
+test("a view change made after a rebuild has read its inputs is not lost", async () => {
+  const count = deferred(), counts = [];
+  const library = await store("library", libraryCalls({
+    track_count: args => { counts.push(args.query); return counts.length === 1 ? count.promise : 1; },
+  }));
+  const changing = library.changeProjection(async () => 1);
+  await settle();
+  assert.deepEqual(counts, [null], "the rebuild is waiting on its count");
+  library.query = "typed meanwhile";
+  library.requestTrackView(false);
+  count.resolve(1);
+  await changing;
+  await settle();
+  assert.deepEqual(counts, [null, "typed meanwhile"]);
+});
+
+test("a failed or superseded value load does not prune the selection", async () => {
+  const library = await store("library", libraryCalls({
+    browse_values: () => { throw new Error("invalid query"); },
+  }));
+  library.values = [{ value: "a", count: 1 }];
+  library.selectedValues = ["a", "gone"];
+  await library.setQuery("broken(");
+  assert.deepEqual([...library.selectedValues], ["a", "gone"]);
+});
+
+const progress = (fields = {}) => ({ scanned: 1, added: 0, updated: 0, removed: 0, errors: 0, current_path: "", done: false, cancelled: false, ...fields });
+
+test("a scan moves through its phases from one state value", async () => {
+  const start = deferred();
+  const library = await store("library", async c => (c === "scan_start" ? start.promise : undefined));
+  assert.equal(library.scan.phase, "idle");
+  const starting = library.startScan(false);
+  assert.equal(library.scan.phase, "starting");
+  assert.equal(library.scanning, true);
+  start.resolve();
+  await starting;
+  library.onScanProgress(progress());
+  assert.equal(library.scan.phase, "running");
+  await library.cancelScan();
+  assert.equal(library.scan.phase, "cancelling");
+  library.onScanProgress(progress({ scanned: 2 }));
+  assert.equal(library.scan.phase, "cancelling", "a late progress event must not undo it");
+  assert.equal(library.scan.progress.scanned, 2);
+  library.onScanProgress(progress({ done: true, cancelled: true }));
+  assert.equal(library.scan.phase, "finished");
+  assert.equal(library.scanning, false);
+});
+
+test("dismissing a scan failure leaves nothing behind", async () => {
+  const library = await store("library", async () => undefined);
+  await library.startScan(true);
+  library.onScanProgress(progress());
+  library.onScanFailed("disk went away");
+  assert.deepEqual({ ...library.scan }, { phase: "failed", message: "disk went away" });
+  assert.equal(library.scanning, false);
+  library.dismissScanFailure();
+  assert.equal(library.scan.phase, "idle");
+});
+
+test("a finished scan's timer cannot clear the next scan", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const library = await store("library", async () => undefined);
+  library.onScanProgress(progress({ done: true }));
+  // The scanner's own final progress and scan:done both report the end.
+  library.onScanProgress(progress({ done: true }));
+  t.mock.timers.tick(3000);
+  await library.startScan(false);
+  library.onScanProgress(progress());
+  t.mock.timers.tick(4000);
+  assert.equal(library.scan.phase, "running");
+  library.onScanProgress(progress({ done: true }));
+  t.mock.timers.tick(4000);
+  assert.equal(library.scan.phase, "idle");
+});
+
+test("a scan refused at the start reports why", async () => {
+  const library = await store("library", async () => { throw "Finish the current tag edit first"; });
+  await library.startScan(false);
+  assert.equal(library.scan.phase, "failed");
+  assert.match(library.scan.message, /tag edit/);
+});
+
+test("a reload finds a scan that is still running", async () => {
+  const library = await store("library", libraryCalls({
+    library_stats: () => ({ tracks: 0, albums: 0, total_duration_ms: 0 }),
+    scan_running: () => true,
+  }));
+  await library.init();
+  assert.equal(library.scan.phase, "running");
+  assert.equal(library.scanning, true);
 });

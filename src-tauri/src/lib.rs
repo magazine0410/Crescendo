@@ -172,7 +172,7 @@ pub fn run() {
                 player,
                 scrobbler,
                 projectm_grants: Arc::new(std::sync::Mutex::new(Default::default())),
-                scanning: Arc::new(AtomicBool::new(false)),
+                library_lock: Default::default(),
                 scan_cancel: Arc::new(AtomicBool::new(false)),
                 dropped_paths: Default::default(),
             });
@@ -182,6 +182,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::library::scan_start,
             commands::library::scan_cancel,
+            commands::library::scan_running,
             commands::forte::tag_edit_open,
             commands::library::library_stats,
             commands::library::browse_values,
@@ -260,6 +261,7 @@ pub fn run() {
             commands::lastfm::lastfm_connect,
             commands::lastfm::lastfm_finish_connect,
             commands::lastfm::lastfm_set_enabled,
+            commands::lastfm::lastfm_cancel_connect,
             commands::lastfm::lastfm_disconnect,
             commands::lastfm::song_history,
             commands::lastfm::lastfm_track_url,

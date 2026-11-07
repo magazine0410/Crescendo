@@ -1,19 +1,12 @@
 use crate::state::AppState;
 use crescendo_core::forte::{refresh_files, refresh_pending, FileChange};
+use crescendo_core::library_lock::LibraryWriter;
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
-
-struct EditGuard(Arc<AtomicBool>);
-impl Drop for EditGuard {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
-    }
-}
 
 #[derive(Deserialize)]
 struct SavedFiles {
@@ -34,22 +27,16 @@ fn set_aside_message(set_aside: &[String]) -> Option<String> {
     ))
 }
 
-/// Pick up independent Forte saves while idle; the same latch prevents a
-/// scanner, companion window, and inbox refresh from changing paths at once.
+/// Pick up independent Forte saves while nothing else holds the library lock.
 pub fn start_listener(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_error = String::new();
         loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let state = app.state::<AppState>();
-            if state
-                .scanning
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
+            let Ok(_guard) = state.library_lock.try_acquire(LibraryWriter::FortePoll) else {
                 continue;
-            }
-            let _guard = EditGuard(state.scanning.clone());
+            };
             match refresh_pending(&state.db, &crate::state::data_dir().join("forte-inbox")) {
                 Ok(refresh) => {
                     last_error.clear();
@@ -111,10 +98,13 @@ pub async fn tag_edit_open(
         return Err("Select a song to edit".into());
     }
     // The scanner cannot race the path-preserving refresh after a rename.
-    if state.scanning.swap(true, Ordering::SeqCst) {
-        return Err("Finish the current library scan or tag edit first".into());
-    }
-    let guard = EditGuard(state.scanning.clone());
+    let lock = state.library_lock.clone();
+    let guard = tauri::async_runtime::spawn_blocking(move || {
+        lock.acquire_waiting(LibraryWriter::TagEditor, Duration::from_secs(10))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|holder| holder.busy_message().to_string())?;
     let tracks = state.db.tracks_by_ids(&ids).map_err(|e| e.to_string())?;
     let paths: Vec<_> = tracks
         .iter()

@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crescendo_core::library_lock::{LibraryLock, LibraryWriter};
 use crescendo_core::model::{
     Album, BrowseMode, BrowseValue, LibraryStats, PlayContext, Track, TrackGroup, TrackSort,
 };
@@ -6,20 +7,10 @@ use crescendo_core::plugins::StaleProjection;
 use crescendo_core::scanner::{scan, ScanOptions};
 use crescendo_core::search::SearchFilter;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
-
-/// Clears the process-wide scan latch on every exit path, including unwinding
-/// from a scanner panic and failure to create the scanner thread (which drops
-/// the still-captured closure).
-struct ScanningGuard(Arc<AtomicBool>);
-
-impl Drop for ScanningGuard {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
-    }
-}
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -138,13 +129,17 @@ pub async fn scan_start(
     state: State<'_, AppState>,
     full: bool,
 ) -> Result<(), String> {
-    if state.scanning.swap(true, Ordering::SeqCst) {
-        return Err("a scan is already running".into());
-    }
+    // The Forte poll holds the lock briefly and often; it must not refuse a scan.
+    let lock = state.library_lock.clone();
+    let scanning_guard = tauri::async_runtime::spawn_blocking(move || {
+        lock.acquire_waiting(LibraryWriter::Scan, Duration::from_secs(10))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|holder| holder.busy_message().to_string())?;
     state.scan_cancel.store(false, Ordering::SeqCst);
 
     let db = state.db.clone();
-    let scanning = state.scanning.clone();
     let art = state.art.clone();
     let cancel = state.scan_cancel.clone();
     let root = db
@@ -161,7 +156,6 @@ pub async fn scan_start(
         // The setting's own range. A typed 100000 made thread spawning panic
         // and left the scan latched on.
         .clamp(1, 16);
-    let scanning_guard = ScanningGuard(scanning);
 
     std::thread::Builder::new()
         .name("scanner".into())
@@ -173,14 +167,17 @@ pub async fn scan_start(
                 full,
             };
             let progress_app = app.clone();
-            let outcome = scan(
-                &db,
-                &opts,
-                &move |p| {
-                    let _ = progress_app.emit("scan:progress", &p);
-                },
-                &cancel,
-            );
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                scan(
+                    &db,
+                    &opts,
+                    &move |p| {
+                        let _ = progress_app.emit("scan:progress", &p);
+                    },
+                    &cancel,
+                )
+            }))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the scanner stopped unexpectedly")));
             if outcome.is_ok() {
                 if let Err(e) = art.invalidate_stale(&db) {
                     log::warn!("cover cache invalidation failed after scan: {e}");
@@ -210,19 +207,31 @@ pub async fn scan_cancel(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether a scan is running, for a webview that reloaded during one.
+#[tauri::command]
+pub async fn scan_running(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(is_scanning(&state.library_lock))
+}
+
+fn is_scanning(lock: &LibraryLock) -> bool {
+    lock.holder() == Some(LibraryWriter::Scan)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ProjectionCommandError, ScanningGuard};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::{is_scanning, LibraryLock, LibraryWriter, ProjectionCommandError};
     use std::sync::Arc;
 
     #[test]
-    fn scanning_guard_clears_the_latch_when_dropped() {
-        let scanning = Arc::new(AtomicBool::new(true));
+    fn only_a_scan_reads_as_scanning() {
+        let lock = Arc::new(LibraryLock::default());
+        assert!(!is_scanning(&lock));
         {
-            let _guard = ScanningGuard(scanning.clone());
+            let _editor = lock.try_acquire(LibraryWriter::TagEditor).unwrap();
+            assert!(!is_scanning(&lock));
         }
-        assert!(!scanning.load(Ordering::SeqCst));
+        let _scan = lock.try_acquire(LibraryWriter::Scan).unwrap();
+        assert!(is_scanning(&lock));
     }
 
     #[test]

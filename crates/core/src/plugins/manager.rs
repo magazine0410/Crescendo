@@ -9,7 +9,7 @@ use super::permissions::PluginGrant;
 use super::wasm::{WasmHandle, WasmPluginSpec};
 use super::PLUGIN_API_VERSION;
 use super::WASM_API_VERSION;
-use crate::db::plugins::PluginPendingRow;
+use crate::db::plugins::{PendingOperation, PluginPendingRow};
 use crate::db::queries::{FacetPlan, FacetTransform};
 use crate::model::BrowseMode;
 use crate::Db;
@@ -51,6 +51,8 @@ pub struct PluginSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginInfo {
+    /// Where this plugin stands, and so what a restart would change.
+    pub enablement: Enablement,
     pub id: String,
     pub name: String,
     pub version: Option<String>,
@@ -91,6 +93,100 @@ pub struct PluginInfo {
     pub runtime_unhealthy: bool,
     /// Tail of this session's bounded per-plugin diagnostic log.
     pub diagnostics: Vec<String>,
+}
+
+/// Why a plugin is or is not running. Derived from its stored desire, the loaded
+/// set and its package, so the reason is never stored apart from its cause: when
+/// an invalid package is repaired or a new Crescendo makes it compatible, the
+/// plugin the user left enabled comes back without being asked for twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Enablement {
+    Disabled,
+    Enabled,
+    /// Wanted and able to load, but the loaded set is fixed until a restart.
+    EnablePending,
+    DisablePending,
+    /// Wanted, but waits on the user's approval rather than on a restart.
+    AwaitingApproval,
+    /// Wanted, and held back for this run only.
+    SuppressedBySafeMode,
+    Incompatible,
+    InvalidPackage,
+    UninstallPending,
+}
+
+struct EnablementFacts {
+    uninstall_pending: bool,
+    valid_package: bool,
+    desired: bool,
+    loaded: bool,
+    compatible: bool,
+    grants_approved: bool,
+    safe_mode: bool,
+}
+
+impl Enablement {
+    fn of(facts: EnablementFacts) -> Self {
+        match facts {
+            EnablementFacts {
+                uninstall_pending: true,
+                ..
+            } => Enablement::UninstallPending,
+            EnablementFacts {
+                valid_package: false,
+                ..
+            } => Enablement::InvalidPackage,
+            EnablementFacts {
+                loaded: true,
+                desired,
+                ..
+            } => {
+                if desired {
+                    Enablement::Enabled
+                } else {
+                    Enablement::DisablePending
+                }
+            }
+            EnablementFacts { desired: false, .. } => Enablement::Disabled,
+            EnablementFacts {
+                compatible: false, ..
+            } => Enablement::Incompatible,
+            EnablementFacts {
+                grants_approved: false,
+                ..
+            } => Enablement::AwaitingApproval,
+            EnablementFacts {
+                safe_mode: true, ..
+            } => Enablement::SuppressedBySafeMode,
+            _ => Enablement::EnablePending,
+        }
+    }
+
+    /// Whether restarting Crescendo would change this plugin's state.
+    fn restart_helps(self) -> bool {
+        matches!(
+            self,
+            Enablement::EnablePending
+                | Enablement::DisablePending
+                | Enablement::SuppressedBySafeMode
+                | Enablement::UninstallPending
+        )
+    }
+}
+
+/// How this run of the plugin system is operating.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunMode {
+    Normal,
+    /// Nothing loads this run; installing and configuring still work.
+    Safe {
+        reason: String,
+    },
+    /// Startup failed, so nothing here can be trusted enough to change.
+    Unavailable {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -223,9 +319,7 @@ pub struct PluginManager {
     loaded: BTreeMap<String, PluginManifest>,
     registry: ContributionRegistry,
     projection: RwLock<ProjectionSnapshot>,
-    available: bool,
-    safe_mode: bool,
-    safe_mode_reason: Option<String>,
+    mode: RunMode,
     startup_errors: Vec<String>,
     operation_lock: Mutex<()>,
     wasm: Option<WasmHandle>,
@@ -268,19 +362,19 @@ impl PluginManager {
         }
         let env_disabled =
             std::env::var_os("CRESCENDO_DISABLE_PLUGINS").is_some_and(|value| value == "1");
-        let safe_mode = incomplete || env_disabled || requested;
-        let safe_mode_reason = if env_disabled {
-            Some("Plugins were disabled by CRESCENDO_DISABLE_PLUGINS=1.".into())
+        let safe_reason = if env_disabled {
+            Some("Plugins were disabled by CRESCENDO_DISABLE_PLUGINS=1.")
         } else if incomplete {
-            Some(
-                "The previous plugin startup did not finish; plugins are disabled for this run."
-                    .into(),
-            )
+            Some("The previous plugin startup did not finish; plugins are disabled for this run.")
         } else if requested {
-            Some("A plugin failed to start repeatedly; plugins are disabled for this run.".into())
+            Some("A plugin failed to start repeatedly; plugins are disabled for this run.")
         } else {
             None
         };
+        let safe_mode = safe_reason.is_some();
+        let mode = safe_reason.map_or(RunMode::Normal, |reason| RunMode::Safe {
+            reason: reason.to_string(),
+        });
 
         let mut startup_errors = Vec::new();
         // Filled by the shell once its player thread exists; player.* calls
@@ -297,7 +391,8 @@ impl PluginManager {
                 Err(error) => {
                     let message = format!(
                         "Could not apply pending {} for {}: {error:#}",
-                        row.operation, row.plugin_id
+                        row.operation.name(),
+                        row.plugin_id
                     );
                     startup_errors.push(message.clone());
                     if let Ok(operation_dir) = operation_dir(&staging_root, &row.staged_path) {
@@ -311,20 +406,21 @@ impl PluginManager {
                                 "Could not restore {} after the failed operation; its journal and backup were preserved: {rollback_error:#}",
                                 row.plugin_id
                             );
-                            let _ = db.plugin_record_error_preserving_state(
+                            let _ = db.plugin_record_error(
                                 &row.plugin_id,
-                                &format!("{message} {rollback_message}"),
+                                Some(&format!("{message} {rollback_message}")),
                             );
                             return Err(anyhow!("{message} {rollback_message}"));
                         }
                         let _ = fs::remove_dir_all(operation_dir);
                     }
-                    db.plugin_record_error_preserving_state(&row.plugin_id, &message)?;
+                    db.plugin_record_error(&row.plugin_id, Some(&message))?;
                     db.plugin_pending_delete(&row.plugin_id)?;
                 }
             }
         }
 
+        let any_applied = !applied.is_empty();
         let mut inventory = scan_installed(&installed_root)?;
         let invalid_ids: HashSet<String> = inventory
             .iter()
@@ -344,7 +440,7 @@ impl PluginManager {
             // Not in safe mode, though. That compile runs before the window
             // opens, and a component that takes it too long or crashes it is
             // exactly what safe mode has to get the user past.
-            let is_update = operation.row.operation == "update";
+            let is_update = matches!(operation.row.operation, PendingOperation::Update { .. });
             let skipped =
                 is_update && safe_mode && is_wasm_package(&inventory, &operation.row.plugin_id);
             let unloadable = if is_update && !skipped {
@@ -372,7 +468,7 @@ impl PluginManager {
                     ),
                 };
                 rollback_operation(&installed_root, &operation)?;
-                db.plugin_record_error_preserving_state(&operation.row.plugin_id, &message)?;
+                db.plugin_record_error(&operation.row.plugin_id, Some(&message))?;
                 db.plugin_pending_delete(&operation.row.plugin_id)?;
                 startup_errors.push(message);
                 let _ = fs::remove_dir_all(&operation.operation_dir);
@@ -380,12 +476,16 @@ impl PluginManager {
                 committed.push(operation);
             }
         }
-        if !committed.is_empty() || !invalid_ids.is_empty() {
+        // Rollbacks changed what is installed as much as commits did: everything
+        // below must judge the package now on disk, not the one just rejected.
+        if any_applied {
             inventory = scan_installed(&installed_root)?;
         }
 
         for record in &inventory {
             db.plugin_state_ensure(&record.id)?;
+            // Reported, not turned off: a package that could not be read today,
+            // perhaps through a passing I/O error, is still the one the user chose.
             if let Some(error) = &record.validation_error {
                 db.plugin_record_error(&record.id, Some(error))?;
             }
@@ -398,9 +498,7 @@ impl PluginManager {
             let Some(package) = &record.package else {
                 continue;
             };
-            let compatibility = compatibility_error(&package.manifest, &app_version);
-            if compatibility.is_some() {
-                db.plugin_set_desired_enabled(&record.id, false)?;
+            if compatibility_error(&package.manifest, &app_version).is_some() {
                 continue;
             }
             let state =
@@ -464,10 +562,14 @@ impl PluginManager {
         // error must not race the runtime thread recording that the new
         // version failed to start.
         for operation in committed {
-            if operation.row.operation == "update" {
-                db.plugin_record_error(&operation.row.plugin_id, None)?;
-            }
-            db.plugin_pending_commit(&operation.row.plugin_id, operation.row.remove_data)?;
+            let remove_data = match operation.row.operation {
+                PendingOperation::Uninstall { remove_data } => remove_data,
+                _ => {
+                    db.plugin_record_error(&operation.row.plugin_id, None)?;
+                    false
+                }
+            };
+            db.plugin_pending_commit(&operation.row.plugin_id, remove_data)?;
             if let Err(error) = fs::remove_dir_all(&operation.operation_dir) {
                 if error.kind() != std::io::ErrorKind::NotFound {
                     startup_errors.push(format!(
@@ -531,9 +633,7 @@ impl PluginManager {
             loaded,
             registry,
             projection: RwLock::new(projection),
-            available: true,
-            safe_mode,
-            safe_mode_reason,
+            mode,
             startup_errors,
             operation_lock: Mutex::new(()),
             wasm,
@@ -557,9 +657,9 @@ impl PluginManager {
                 settings: BTreeMap::new(),
                 prefer_romanized,
             }),
-            available: false,
-            safe_mode: true,
-            safe_mode_reason: Some("The plugin system could not initialize.".into()),
+            mode: RunMode::Unavailable {
+                reason: "The plugin system could not initialize.".into(),
+            },
             startup_errors: vec![error],
             operation_lock: Mutex::new(()),
             wasm: None,
@@ -762,11 +862,11 @@ impl PluginManager {
                 }
                 let pending = PluginPendingRow {
                     plugin_id: plugin_id.clone(),
-                    operation: "update".into(),
                     staged_path: staged.operation_id.clone(),
-                    target_version: Some(staged.manifest.version.clone()),
-                    package_hash: Some(staged.package_hash.clone()),
-                    remove_data: false,
+                    operation: PendingOperation::Update {
+                        target_version: staged.manifest.version.clone(),
+                        package_hash: staged.package_hash.clone(),
+                    },
                 };
                 self.db.plugin_schedule_pending(&pending, None)?;
                 // From this point the staging directory belongs to the
@@ -821,12 +921,10 @@ impl PluginManager {
             .lock()
             .map_err(|_| anyhow!("plugin manager lock poisoned"))?;
         let record = self.valid_installed(plugin_id)?;
-        if self
-            .db
-            .plugin_pending_all()?
-            .iter()
-            .any(|pending| pending.plugin_id == plugin_id && pending.operation == "uninstall")
-        {
+        if self.db.plugin_pending_all()?.iter().any(|pending| {
+            pending.plugin_id == plugin_id
+                && matches!(pending.operation, PendingOperation::Uninstall { .. })
+        }) {
             bail!("the plugin is pending uninstall");
         }
         if enabled {
@@ -848,6 +946,11 @@ impl PluginManager {
             .unwrap_or(false);
         let loaded = self.loaded.contains_key(plugin_id);
         self.db.plugin_set_desired_enabled(plugin_id, enabled)?;
+        // Turning a plugin back on is a request to try again, so it starts with a
+        // clean record: failures from before must not count against the next start.
+        if enabled && !old {
+            self.db.plugin_record_error(plugin_id, None)?;
+        }
         Ok(PluginMutationResult {
             changed: old != enabled,
             message: (old != enabled).then(|| {
@@ -933,32 +1036,37 @@ impl PluginManager {
             .map(|package| package.manifest.name)
             .unwrap_or_else(|_| plugin_id.to_string());
 
-        if let Some(existing) = self
+        let replaced = self
             .db
             .plugin_pending_all()?
             .into_iter()
-            .find(|pending| pending.plugin_id == plugin_id)
-        {
-            if existing.operation != "update" {
+            .find(|pending| pending.plugin_id == plugin_id);
+        if let Some(existing) = &replaced {
+            if !matches!(existing.operation, PendingOperation::Update { .. }) {
                 bail!("the plugin already has a pending operation");
             }
-            let operation_dir = operation_dir(&self.staging_root, &existing.staged_path)?;
-            self.db.plugin_pending_delete(plugin_id)?;
-            let _ = fs::remove_dir_all(operation_dir);
         }
+        let was_desired = self
+            .db
+            .plugin_state_get(plugin_id)?
+            .is_some_and(|state| state.desired_enabled);
 
         let (operation_id, operation_path) = create_operation_dir(&self.staging_root)?;
         let pending = PluginPendingRow {
             plugin_id: plugin_id.into(),
-            operation: "uninstall".into(),
             staged_path: operation_id,
-            target_version: None,
-            package_hash: None,
-            remove_data,
+            operation: PendingOperation::Uninstall { remove_data },
         };
+        // This one statement replaces a pending update, so there is no point at
+        // which a failure has dropped the update without scheduling the uninstall.
         if let Err(error) = self.db.plugin_schedule_pending(&pending, Some(false)) {
             let _ = fs::remove_dir_all(&operation_path);
             return Err(error);
+        }
+        if let Some(existing) = replaced {
+            if let Ok(directory) = operation_dir(&self.staging_root, &existing.staged_path) {
+                let _ = fs::remove_dir_all(directory);
+            }
         }
 
         if self.loaded.contains_key(plugin_id) {
@@ -975,7 +1083,19 @@ impl PluginManager {
             match apply_pending_operation(&self.installed_root, &self.staging_root, &pending) {
                 Ok(applied) => applied,
                 Err(error) => {
+                    // The package may already be in `old`. Put it back before the
+                    // journal goes; if that fails too, the journal and the copy
+                    // stay for startup to recover.
+                    let partial = AppliedOperation {
+                        row: pending.clone(),
+                        old_dir: operation_path.join("old"),
+                        operation_dir: operation_path.clone(),
+                    };
+                    rollback_operation(&self.installed_root, &partial).with_context(|| {
+                        format!("could not restore {plugin_id} after: {error:#}")
+                    })?;
                     self.db.plugin_pending_delete(plugin_id)?;
+                    self.db.plugin_set_desired_enabled(plugin_id, was_desired)?;
                     let _ = fs::remove_dir_all(&operation_path);
                     return Err(error);
                 }
@@ -1010,6 +1130,16 @@ impl PluginManager {
         let record = self.valid_installed(plugin_id)?;
         if record.manifest.kind != PluginKind::Wasm {
             bail!("only Wasm plugins request capabilities");
+        }
+        // A grant is pinned to one exact package, and this one is about to go.
+        if self.db.plugin_pending_all()?.iter().any(|pending| {
+            pending.plugin_id == plugin_id
+                && matches!(pending.operation, PendingOperation::Update { .. })
+        }) {
+            bail!(
+                "{} will update after Crescendo restarts; approve its capabilities then",
+                record.manifest.name
+            );
         }
         let permissions = super::permissions::parse_permissions(&record.manifest.permissions)?;
         if permissions.is_empty() {
@@ -1089,15 +1219,21 @@ impl PluginManager {
         let mut plugins = Vec::new();
         let mut errors = self.startup_errors.clone();
         let mut restart_required = !pending.is_empty();
+        let safe_mode = self.mode != RunMode::Normal;
 
         for record in inventory {
             let state = self.db.plugin_state_get(&record.id)?;
             let desired_enabled = state.as_ref().is_some_and(|state| state.desired_enabled);
             let loaded = self.loaded.contains_key(&record.id);
-            restart_required |= desired_enabled != loaded;
+            let uninstall_pending = pending
+                .get(&record.id)
+                .is_some_and(|row| matches!(row.operation, PendingOperation::Uninstall { .. }));
             let pending_status = pending.get(&record.id).map(|row| PluginPendingStatus {
-                operation: row.operation.clone(),
-                target_version: row.target_version.clone(),
+                operation: row.operation.name().to_string(),
+                target_version: match &row.operation {
+                    PendingOperation::Update { target_version, .. } => Some(target_version.clone()),
+                    _ => None,
+                },
             });
             let state_error = state.and_then(|state| state.last_error);
 
@@ -1132,7 +1268,19 @@ impl PluginManager {
                     .as_ref()
                     .map(|handle| handle.runtime_info(&record.id))
                     .unwrap_or_default();
+                let grants_approved = grants_satisfied(&self.db, &package)?;
+                let enablement = Enablement::of(EnablementFacts {
+                    uninstall_pending,
+                    valid_package: true,
+                    desired: desired_enabled,
+                    loaded,
+                    compatible,
+                    grants_approved,
+                    safe_mode,
+                });
+                restart_required |= enablement.restart_helps();
                 plugins.push(PluginInfo {
+                    enablement,
                     id: record.id.clone(),
                     name: package.manifest.name.clone(),
                     version: Some(package.manifest.version.clone()),
@@ -1153,7 +1301,7 @@ impl PluginManager {
                     settings,
                     permissions: package.manifest.permissions.clone(),
                     network_domains: package.manifest.network_domains.clone(),
-                    grants_approved: grants_satisfied(&self.db, &package)?,
+                    grants_approved,
                     commands: package
                         .manifest
                         .contributes
@@ -1171,7 +1319,18 @@ impl PluginManager {
                 if let Some(error) = &validation_error {
                     errors.push(format!("{}: {error}", record.id));
                 }
+                let enablement = Enablement::of(EnablementFacts {
+                    uninstall_pending,
+                    valid_package: false,
+                    desired: desired_enabled,
+                    loaded,
+                    compatible: false,
+                    grants_approved: true,
+                    safe_mode,
+                });
+                restart_required |= enablement.restart_helps();
                 plugins.push(PluginInfo {
+                    enablement,
                     id: record.id.clone(),
                     name: record.id,
                     version: None,
@@ -1210,8 +1369,11 @@ impl PluginManager {
         Ok(PluginSnapshot {
             plugins,
             loaded_plugin_ids: self.loaded.keys().cloned().collect(),
-            safe_mode: self.safe_mode,
-            safe_mode_reason: self.safe_mode_reason.clone(),
+            safe_mode,
+            safe_mode_reason: match &self.mode {
+                RunMode::Normal => None,
+                RunMode::Safe { reason } | RunMode::Unavailable { reason } => Some(reason.clone()),
+            },
             errors,
             restart_required,
             projection_revision: self
@@ -1238,7 +1400,7 @@ impl PluginManager {
     }
 
     fn ensure_available(&self) -> Result<()> {
-        if !self.available {
+        if matches!(self.mode, RunMode::Unavailable { .. }) {
             bail!("the plugin system is unavailable; restart Crescendo after resolving the startup error");
         }
         Ok(())
@@ -1314,7 +1476,7 @@ impl PluginManager {
     fn staged_update_manifests(&self) -> Result<HashMap<String, PluginManifest>> {
         let mut staged = HashMap::new();
         for pending in self.db.plugin_pending_all()? {
-            if pending.operation != "update" {
+            if !matches!(pending.operation, PendingOperation::Update { .. }) {
                 continue;
             }
             let Ok(directory) = operation_dir(&self.staging_root, &pending.staged_path) else {
@@ -1576,6 +1738,41 @@ fn is_wasm_package(inventory: &[InstalledRecord], plugin_id: &str) -> bool {
         .is_some_and(|package| package.manifest.kind == PluginKind::Wasm)
 }
 
+/// How far an update got, from which of its three directories exist. A crash can
+/// stop it between any two renames, so startup resumes from what it finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateStage {
+    /// Nothing has moved: the current package is installed and `new` waits.
+    Scheduled,
+    /// The current package is in `old`, and `new` is not installed yet.
+    Swapping,
+    /// `new` is installed and `old` is kept until the update is committed.
+    Applied,
+    /// A rollback was interrupted: the old copy is the only one left.
+    RollingBack,
+    /// A rollback finished and only its journal entry remained.
+    RolledBack,
+    /// Something outside Crescendo removed the current package.
+    InstalledMissing,
+    Conflicting,
+    Empty,
+}
+
+impl UpdateStage {
+    fn of(installed: bool, old: bool, new: bool) -> Self {
+        match (installed, old, new) {
+            (true, false, true) => UpdateStage::Scheduled,
+            (false, true, true) => UpdateStage::Swapping,
+            (true, true, false) => UpdateStage::Applied,
+            (false, true, false) => UpdateStage::RollingBack,
+            (true, false, false) => UpdateStage::RolledBack,
+            (false, false, true) => UpdateStage::InstalledMissing,
+            (true, true, true) => UpdateStage::Conflicting,
+            (false, false, false) => UpdateStage::Empty,
+        }
+    }
+}
+
 fn apply_pending_operation(
     installed_root: &Path,
     staging_root: &Path,
@@ -1588,51 +1785,59 @@ fn apply_pending_operation(
     let installed = installed_root.join(&row.plugin_id);
     let new = operation_dir.join("new");
     let old = operation_dir.join("old");
-    match row.operation.as_str() {
-        "update" => {
-            let candidate = if new.try_exists()? {
-                &new
-            } else if installed.try_exists()? {
-                &installed
-            } else {
-                bail!("update staging contains no replacement package");
+    let present = |path: &Path| path.try_exists();
+    match &row.operation {
+        PendingOperation::Update {
+            target_version,
+            package_hash,
+        } => {
+            let stage = UpdateStage::of(present(&installed)?, present(&old)?, present(&new)?);
+            let candidate = match stage {
+                UpdateStage::Scheduled | UpdateStage::Swapping => &new,
+                UpdateStage::Applied | UpdateStage::RolledBack => &installed,
+                UpdateStage::Conflicting => {
+                    bail!("update staging contains conflicting old, new, and installed copies")
+                }
+                UpdateStage::InstalledMissing | UpdateStage::RollingBack | UpdateStage::Empty => {
+                    bail!("update staging is incomplete ({stage:?})")
+                }
             };
             let candidate = load_installed(candidate, &row.plugin_id)
                 .context("the staged update is no longer valid")?;
-            if row.target_version.as_deref() != Some(candidate.manifest.version.as_str()) {
+            if target_version != &candidate.manifest.version {
                 bail!("the staged update version does not match its journal");
             }
-            if row.package_hash.as_deref() != Some(candidate.package_hash.as_str()) {
+            if package_hash != &candidate.package_hash {
                 bail!("the staged update source hash does not match its journal");
             }
-            if installed.try_exists()? && old.try_exists()? && new.try_exists()? {
-                bail!("update staging contains conflicting old, new, and installed copies");
+            match stage {
+                UpdateStage::Scheduled => {
+                    fs::rename(&installed, &old)?;
+                    sync_directory(installed_root)?;
+                    sync_directory(&operation_dir)?;
+                    fs::rename(&new, &installed)?;
+                    sync_directory(installed_root)?;
+                    sync_directory(&operation_dir)?;
+                }
+                UpdateStage::Swapping => {
+                    fs::rename(&new, &installed)?;
+                    sync_directory(installed_root)?;
+                    sync_directory(&operation_dir)?;
+                }
+                UpdateStage::Applied => {}
+                _ => bail!("update staging is incomplete ({stage:?})"),
             }
-            if installed.try_exists()? && !old.try_exists()? && new.try_exists()? {
+        }
+        PendingOperation::Uninstall { .. } => match (present(&installed)?, present(&old)?) {
+            (true, false) => {
                 fs::rename(&installed, &old)?;
                 sync_directory(installed_root)?;
                 sync_directory(&operation_dir)?;
             }
-            if !installed.try_exists()? && new.try_exists()? {
-                fs::rename(&new, &installed)?;
-                sync_directory(installed_root)?;
-                sync_directory(&operation_dir)?;
-            }
-            if !installed.try_exists()? || !old.try_exists()? || new.try_exists()? {
-                bail!("update staging is incomplete");
-            }
-        }
-        "uninstall" => {
-            if installed.try_exists()? && !old.try_exists()? {
-                fs::rename(&installed, &old)?;
-                sync_directory(installed_root)?;
-                sync_directory(&operation_dir)?;
-            }
-            if installed.try_exists()? || !old.try_exists()? {
-                bail!("uninstall staging is incomplete");
-            }
-        }
-        other => bail!("unknown pending plugin operation {other:?}"),
+            (false, true) => {}
+            _ => bail!("uninstall staging is incomplete"),
+        },
+        PendingOperation::Malformed { description } => bail!("{description}"),
     }
     Ok(AppliedOperation {
         row: row.clone(),
@@ -2484,6 +2689,170 @@ mod tests {
     }
 
     #[test]
+    fn every_combination_of_update_directories_names_one_stage() {
+        use UpdateStage::*;
+        for (installed, old, new, stage) in [
+            (true, false, true, Scheduled),
+            (false, true, true, Swapping),
+            (true, true, false, Applied),
+            (false, true, false, RollingBack),
+            (true, false, false, RolledBack),
+            (false, false, true, InstalledMissing),
+            (true, true, true, Conflicting),
+            (false, false, false, Empty),
+        ] {
+            assert_eq!(UpdateStage::of(installed, old, new), stage);
+        }
+    }
+
+    #[test]
+    fn an_update_whose_installed_copy_vanished_is_not_half_applied() {
+        let (dir, db, manager) = setup();
+        let package = dir.path().join("plugin.crescendo-plugin");
+        write_test_package(&package, &manifest("1.0.0"), &[]);
+        manager.install(&package).unwrap();
+        write_test_package(&package, &manifest("2.0.0"), &[]);
+        manager.install(&package).unwrap();
+        drop(manager);
+
+        let root = dir.path().join("plugins");
+        fs::remove_dir_all(root.join("installed/dev.crescendo.manager-test")).unwrap();
+        let recovered = PluginManager::start(root.clone(), db.clone(), "0.8.0").unwrap();
+        assert!(db.plugin_pending_all().unwrap().is_empty());
+        assert!(
+            !root.join("installed/dev.crescendo.manager-test").exists(),
+            "reporting a failure must mean nothing was installed"
+        );
+        assert!(recovered
+            .snapshot()
+            .unwrap()
+            .errors
+            .iter()
+            .any(|error| error.contains("could not apply") || error.contains("Could not apply")));
+    }
+
+    #[test]
+    fn an_uninstall_that_stops_after_moving_the_package_can_put_it_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed_root = dir.path().join("installed");
+        let operation_dir = dir.path().join("op-1");
+        fs::create_dir_all(&installed_root).unwrap();
+        fs::create_dir_all(operation_dir.join("old")).unwrap();
+        fs::write(operation_dir.join("old/manifest.json"), "{}").unwrap();
+
+        rollback_operation(
+            &installed_root,
+            &AppliedOperation {
+                row: PluginPendingRow {
+                    plugin_id: "dev.crescendo.manager-test".into(),
+                    staged_path: "op-1".into(),
+                    operation: PendingOperation::Uninstall { remove_data: false },
+                },
+                old_dir: operation_dir.join("old"),
+                operation_dir: operation_dir.clone(),
+            },
+        )
+        .unwrap();
+        assert!(installed_root
+            .join("dev.crescendo.manager-test/manifest.json")
+            .exists());
+        assert!(!operation_dir.join("old").exists());
+    }
+
+    #[test]
+    fn enablement_names_why_and_whether_a_restart_helps() {
+        use Enablement::*;
+        let facts = |desired, loaded| EnablementFacts {
+            uninstall_pending: false,
+            valid_package: true,
+            desired,
+            loaded,
+            compatible: true,
+            grants_approved: true,
+            safe_mode: false,
+        };
+        for (facts, expected, helps) in [
+            (facts(false, false), Disabled, false),
+            (facts(true, true), Enabled, false),
+            (facts(true, false), EnablePending, true),
+            (facts(false, true), DisablePending, true),
+            (
+                EnablementFacts {
+                    grants_approved: false,
+                    ..facts(true, false)
+                },
+                AwaitingApproval,
+                false,
+            ),
+            (
+                EnablementFacts {
+                    compatible: false,
+                    ..facts(true, false)
+                },
+                Incompatible,
+                false,
+            ),
+            (
+                EnablementFacts {
+                    valid_package: false,
+                    ..facts(true, false)
+                },
+                InvalidPackage,
+                false,
+            ),
+            (
+                EnablementFacts {
+                    safe_mode: true,
+                    ..facts(true, false)
+                },
+                SuppressedBySafeMode,
+                true,
+            ),
+            (
+                EnablementFacts {
+                    uninstall_pending: true,
+                    ..facts(true, true)
+                },
+                UninstallPending,
+                true,
+            ),
+        ] {
+            let got = Enablement::of(facts);
+            assert_eq!(got, expected);
+            assert_eq!(got.restart_helps(), helps, "{expected:?}");
+        }
+    }
+
+    #[test]
+    fn a_journal_row_that_makes_no_sense_is_reported_and_dropped() {
+        let (dir, db, manager) = setup();
+        let package = dir.path().join("plugin.crescendo-plugin");
+        write_test_package(&package, &manifest("1.0.0"), &[]);
+        manager.install(&package).unwrap();
+        drop(manager);
+        let root = dir.path().join("plugins");
+        let (operation_id, _) = create_operation_dir(&root.join("staging")).unwrap();
+        for (operation, target) in [("update", None), ("frobnicate", None)] {
+            db.with(|connection| {
+                connection.execute(
+                    "INSERT OR REPLACE INTO plugin_pending(plugin_id, operation, staged_path, target_version, package_hash, remove_data)
+                     VALUES ('dev.crescendo.manager-test', ?1, ?2, ?3, NULL, 0)",
+                    rusqlite::params![operation, operation_id, target as Option<&str>],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            let recovered = PluginManager::start(root.clone(), db.clone(), "0.8.0").unwrap();
+            assert!(db.plugin_pending_all().unwrap().is_empty());
+            assert_eq!(
+                recovered.snapshot().unwrap().plugins[0].version.as_deref(),
+                Some("1.0.0"),
+                "{operation}"
+            );
+        }
+    }
+
+    #[test]
     fn incomplete_update_rolls_back_instead_of_losing_the_installed_plugin() {
         let (dir, db, manager) = setup();
         let package = dir.path().join("plugin.crescendo-plugin");
@@ -2499,11 +2868,11 @@ mod tests {
         db.plugin_schedule_pending(
             &PluginPendingRow {
                 plugin_id: "dev.crescendo.manager-test".into(),
-                operation: "update".into(),
                 staged_path: operation_id,
-                target_version: Some("2.0.0".into()),
-                package_hash: Some("00".repeat(32)),
-                remove_data: false,
+                operation: PendingOperation::Update {
+                    target_version: "2.0.0".into(),
+                    package_hash: "00".repeat(32),
+                },
             },
             None,
         )
@@ -2658,7 +3027,11 @@ mod tests {
         assert_eq!(snapshot.plugins.len(), 1);
         assert!(snapshot.loaded_plugin_ids.is_empty());
         assert!(snapshot.plugins[0].error.is_some());
-        assert!(!snapshot.plugins[0].desired_enabled);
+        assert_eq!(snapshot.plugins[0].enablement, Enablement::InvalidPackage);
+        assert!(
+            snapshot.plugins[0].desired_enabled,
+            "reported, not turned off"
+        );
     }
 
     #[test]

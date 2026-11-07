@@ -7,8 +7,8 @@ use crescendo_core::plugins::wasm::{
     HostEvent, RuntimeLimits, RuntimePaths, WasmHandle, WasmPluginSpec, UNHEALTHY_FAILURE_LIMIT,
 };
 use crescendo_core::plugins::{
-    PluginCommandDeclaration, PluginContributions, PluginKind, PluginManager, PluginManifest,
-    PluginMenuAction, PluginMenuControl, PluginMenuSlot, PluginMenuVisibility,
+    Enablement, PluginCommandDeclaration, PluginContributions, PluginKind, PluginManager,
+    PluginManifest, PluginMenuAction, PluginMenuControl, PluginMenuSlot, PluginMenuVisibility,
     PluginSettingDeclaration, WASM_API_VERSION,
 };
 use serde_json::Value;
@@ -513,9 +513,10 @@ fn guest_work_is_bounded_by_the_epoch_deadline_and_failures_mark_it_unhealthy() 
         module_path,
         manifest: Arc::new(wasm_manifest("1.0.0", &[])),
     };
+    // Long enough for a replacement's `init`, which runs under the same budget.
     let limits = RuntimeLimits {
         fuel: 2_000_000_000,
-        epoch_ticks: 3,
+        epoch_ticks: 100,
         invoke_timeout: Duration::from_secs(2),
     };
     let handle = WasmHandle::spawn(
@@ -840,6 +841,130 @@ fn a_failed_restart_ends_the_session_for_the_plugin_without_auto_disabling_it() 
     assert!(!dir.path().join("safe-mode-requested").exists());
 }
 
+/// Everything after a rollback judges the package on disk: an update's manifest
+/// must not get its old version disabled, or describe what is running.
+#[test]
+fn a_rolled_back_update_is_not_judged_by_the_manifest_it_rejected() {
+    let (dir, db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &[]));
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    drop(manager);
+    let manager = restart(&dir, db.clone());
+
+    let mut rejected = wasm_manifest("2.0.0", &[]);
+    rejected.min_crescendo_version = "99.0.0".into();
+    let update = dir.path().join("rejected.crescendo-plugin");
+    write_package(&update, &rejected, b"this is not a component");
+    manager.install(&update).unwrap();
+    drop(manager);
+
+    let manager = restart(&dir, db);
+    let info = plugin_info(&manager);
+    assert_eq!(info.version.as_deref(), Some("1.0.0"));
+    assert!(info.desired_enabled, "the working version stays enabled");
+    assert!(info.loaded);
+    assert_eq!(info.enablement, Enablement::Enabled);
+    assert_eq!(
+        invoke_once_ready(&manager, "identity", serde_json::json!({"n": 1}))["n"],
+        1
+    );
+}
+
+/// The user's choice survives the package being unreadable for a while.
+#[test]
+fn an_unreadable_package_comes_back_enabled_once_it_is_readable() {
+    let (dir, db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &[]));
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    drop(manager);
+
+    let manifest = dir
+        .path()
+        .join("plugins/installed")
+        .join(PLUGIN_ID)
+        .join("manifest.json");
+    let original = std::fs::read(&manifest).unwrap();
+    std::fs::write(&manifest, b"not json").unwrap();
+    let manager = restart(&dir, db.clone());
+    let snapshot = manager.snapshot().unwrap();
+    let info = snapshot.plugins.iter().find(|p| p.id == PLUGIN_ID).unwrap();
+    assert_eq!(info.enablement, Enablement::InvalidPackage);
+    assert!(!snapshot.restart_required, "a restart would not fix this");
+    drop(manager);
+
+    std::fs::write(&manifest, original).unwrap();
+    let manager = restart(&dir, db);
+    let info = plugin_info(&manager);
+    assert!(info.loaded, "enabled without being asked again");
+    assert_eq!(info.enablement, Enablement::Enabled);
+}
+
+#[test]
+fn turning_an_auto_disabled_plugin_back_on_gives_it_a_fresh_start() {
+    let (dir, db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &[]));
+    for _ in 0..2 {
+        db.plugin_note_init_failure(PLUGIN_ID).unwrap();
+    }
+    db.plugin_record_error(PLUGIN_ID, Some("Disabled after repeated startup failures"))
+        .unwrap();
+    manager.set_enabled(PLUGIN_ID, true).unwrap();
+    let state = db.plugin_state_get(PLUGIN_ID).unwrap().unwrap();
+    assert_eq!(state.init_failures, 0);
+    assert_eq!(state.last_error, None);
+}
+
+#[test]
+fn waiting_for_approval_does_not_ask_for_a_restart() {
+    let (dir, db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &["storage"]));
+    db.plugin_set_desired_enabled(PLUGIN_ID, true).unwrap();
+    let snapshot = manager.snapshot().unwrap();
+    assert_eq!(snapshot.plugins[0].enablement, Enablement::AwaitingApproval);
+    assert!(!snapshot.restart_required);
+
+    manager.approve_grants(PLUGIN_ID).unwrap();
+    let snapshot = manager.snapshot().unwrap();
+    assert_eq!(snapshot.plugins[0].enablement, Enablement::EnablePending);
+    assert!(snapshot.restart_required);
+}
+
+/// That approval would be deleted when the update commits, after telling the user
+/// a restart was all that was left to do.
+#[test]
+fn capabilities_cannot_be_approved_for_a_package_about_to_be_replaced() {
+    let (dir, _db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &["storage"]));
+    let update = dir.path().join("update.crescendo-plugin");
+    write_package(&update, &wasm_manifest("2.0.0", &["storage"]), MODULE);
+    manager.install(&update).unwrap();
+    let refused = manager.approve_grants(PLUGIN_ID).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("will update"),
+        "{refused:#}"
+    );
+}
+
+#[test]
+fn uninstalling_replaces_a_pending_update_and_cleans_up_after_it() {
+    let (dir, db, manager) = setup();
+    install_and_enable(&manager, &dir, &wasm_manifest("1.0.0", &[]));
+    let update = dir.path().join("update.crescendo-plugin");
+    write_package(&update, &wasm_manifest("2.0.0", &[]), MODULE);
+    manager.install(&update).unwrap();
+    let staged = db.plugin_pending_all().unwrap().remove(0).staged_path;
+    let staging = dir.path().join("plugins/staging");
+    assert!(staging.join(&staged).exists());
+
+    manager.uninstall(PLUGIN_ID, false).unwrap();
+    assert!(
+        db.plugin_pending_all().unwrap().is_empty(),
+        "not loaded, so at once"
+    );
+    assert!(!staging.join(&staged).exists());
+    assert!(manager.snapshot().unwrap().plugins.is_empty());
+}
+
 /// Auto-disable counts failed starts only. Every other plugin error (a
 /// rolled-back update, a facet conflict) used to bump the same counter, so a
 /// single failed start after one of those disabled the plugin.
@@ -851,7 +976,7 @@ fn an_unrelated_earlier_error_does_not_count_toward_auto_disable() {
     manager.install(&package).unwrap();
     manager.set_enabled(PLUGIN_ID, true).unwrap();
     drop(manager);
-    db.plugin_record_error_preserving_state(PLUGIN_ID, "an update was rolled back")
+    db.plugin_record_error(PLUGIN_ID, Some("an update was rolled back"))
         .unwrap();
 
     let manager = restart(&dir, db.clone());

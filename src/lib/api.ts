@@ -120,6 +120,7 @@ export interface ScanProgress {
   errors: number;
   current_path: string;
   done: boolean;
+  cancelled: boolean;
 }
 
 export type PluginKind = "declarative" | "wasm";
@@ -160,7 +161,19 @@ export interface PluginPendingStatus {
   target_version: string | null;
 }
 
+export type Enablement =
+  | "disabled"
+  | "enabled"
+  | "enable_pending"
+  | "disable_pending"
+  | "awaiting_approval"
+  | "suppressed_by_safe_mode"
+  | "incompatible"
+  | "invalid_package"
+  | "uninstall_pending";
+
 export interface PluginInfo {
+  enablement: Enablement;
   id: string;
   name: string;
   version: string | null;

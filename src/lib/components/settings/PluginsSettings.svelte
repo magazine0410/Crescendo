@@ -121,16 +121,24 @@
     }
   }
 
+  const ENABLEMENT_LABELS: Record<PluginInfo["enablement"], string> = {
+    disabled: "Disabled",
+    enabled: "Enabled",
+    enable_pending: "Enables after restart",
+    disable_pending: "Disables after restart",
+    awaiting_approval: "Needs approval",
+    suppressed_by_safe_mode: "Off for this run",
+    incompatible: "Incompatible",
+    invalid_package: "Invalid package",
+    uninstall_pending: "Pending removal",
+  };
+
   function status(plugin: PluginInfo): string {
-    if (plugin.pending?.operation === "uninstall") return "Pending removal";
+    if (plugin.enablement === "uninstall_pending") return ENABLEMENT_LABELS.uninstall_pending;
     if (plugin.pending?.operation === "update") return `Update ${plugin.pending.target_version}`;
     if (plugin.error) return "Error";
-    if (!plugin.compatible) return "Incompatible";
     if (plugin.runtime_error) return "Runtime error";
-    if (!plugin.grants_approved) return "Needs approval";
-    if (plugin.loaded && !plugin.desired_enabled) return "Disables after restart";
-    if (!plugin.loaded && plugin.desired_enabled) return "Enables after restart";
-    return plugin.loaded ? "Enabled" : "Disabled";
+    return ENABLEMENT_LABELS[plugin.enablement];
   }
 </script>
 
@@ -261,14 +269,15 @@
         <div class="actions">
           <button
             class="btn"
-            disabled={busy || !selected.compatible || selected.pending?.operation === "uninstall"}
+            disabled={busy || selected.enablement === "uninstall_pending" ||
+              (!selected.desired_enabled && (!selected.compatible || !selected.grants_approved))}
             onclick={() => setEnabled(selected, !selected.desired_enabled)}
           >
             {selected.desired_enabled ? "Disable" : "Enable"}
           </button>
           <button
             class="btn danger"
-            disabled={busy || selected.pending?.operation === "uninstall"}
+            disabled={busy || selected.enablement === "uninstall_pending"}
             onclick={() => (confirmingUninstall = true)}
           >
             Uninstall…

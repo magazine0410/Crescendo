@@ -1,6 +1,6 @@
 use super::Db;
 use crate::plugins::{parse_permissions, PluginGrant};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 
@@ -13,14 +13,59 @@ pub struct PluginStateRow {
     pub init_failures: i64,
 }
 
+/// A package operation journalled for the next start. Each carries exactly what
+/// it needs, so an update cannot lack its target or delete a plugin's data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingOperation {
+    Update {
+        target_version: String,
+        package_hash: String,
+    },
+    Uninstall {
+        remove_data: bool,
+    },
+    /// A stored row this build cannot act on. Startup reports and drops it.
+    Malformed {
+        description: String,
+    },
+}
+
+impl PendingOperation {
+    pub fn name(&self) -> &str {
+        match self {
+            PendingOperation::Update { .. } => "update",
+            PendingOperation::Uninstall { .. } => "uninstall",
+            PendingOperation::Malformed { .. } => "operation",
+        }
+    }
+
+    fn decode(
+        operation: String,
+        target_version: Option<String>,
+        package_hash: Option<String>,
+        remove_data: bool,
+    ) -> Self {
+        match (operation.as_str(), target_version, package_hash) {
+            ("update", Some(target_version), Some(package_hash)) => PendingOperation::Update {
+                target_version,
+                package_hash,
+            },
+            ("uninstall", _, _) => PendingOperation::Uninstall { remove_data },
+            ("update", _, _) => PendingOperation::Malformed {
+                description: "an update without its target version and package hash".into(),
+            },
+            _ => PendingOperation::Malformed {
+                description: format!("unknown pending plugin operation {operation:?}"),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginPendingRow {
     pub plugin_id: String,
-    pub operation: String,
     pub staged_path: String,
-    pub target_version: Option<String>,
-    pub package_hash: Option<String>,
-    pub remove_data: bool,
+    pub operation: PendingOperation,
 }
 
 impl Db {
@@ -66,15 +111,16 @@ impl Db {
         })
     }
 
+    /// Note or clear a plugin's stored error, including its failure counts when
+    /// clearing. Whether it should stay enabled is a separate decision.
     pub fn plugin_record_error(&self, plugin_id: &str, error: Option<&str>) -> Result<()> {
         self.with(|conn| {
             match error {
                 Some(error) => {
                     conn.execute(
-                        "INSERT INTO plugin_state(plugin_id, desired_enabled, failure_count, last_error)
-                         VALUES (?1, 0, 1, ?2)
+                        "INSERT INTO plugin_state(plugin_id, failure_count, last_error)
+                         VALUES (?1, 1, ?2)
                          ON CONFLICT(plugin_id) DO UPDATE SET
-                           desired_enabled = 0,
                            failure_count = plugin_state.failure_count + 1,
                            last_error = excluded.last_error",
                         rusqlite::params![plugin_id, error],
@@ -106,20 +152,6 @@ impl Db {
         })
     }
 
-    pub fn plugin_record_error_preserving_state(&self, plugin_id: &str, error: &str) -> Result<()> {
-        self.with(|conn| {
-            conn.execute(
-                "INSERT INTO plugin_state(plugin_id, desired_enabled, failure_count, last_error)
-                 VALUES (?1, 0, 1, ?2)
-                 ON CONFLICT(plugin_id) DO UPDATE SET
-                   failure_count = plugin_state.failure_count + 1,
-                   last_error = excluded.last_error",
-                rusqlite::params![plugin_id, error],
-            )?;
-            Ok(())
-        })
-    }
-
     pub fn plugin_pending_all(&self) -> Result<Vec<PluginPendingRow>> {
         self.with(|conn| {
             let mut stmt = conn.prepare(
@@ -129,11 +161,13 @@ impl Db {
             let rows = stmt.query_map([], |row| {
                 Ok(PluginPendingRow {
                     plugin_id: row.get(0)?,
-                    operation: row.get(1)?,
                     staged_path: row.get(2)?,
-                    target_version: row.get(3)?,
-                    package_hash: row.get(4)?,
-                    remove_data: row.get::<_, i64>(5)? != 0,
+                    operation: PendingOperation::decode(
+                        row.get(1)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get::<_, i64>(5)? != 0,
+                    ),
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -146,6 +180,16 @@ impl Db {
         row: &PluginPendingRow,
         desired_enabled: Option<bool>,
     ) -> Result<()> {
+        let (target_version, package_hash, remove_data) = match &row.operation {
+            PendingOperation::Update {
+                target_version,
+                package_hash,
+            } => (Some(target_version), Some(package_hash), false),
+            PendingOperation::Uninstall { remove_data } => (None, None, *remove_data),
+            PendingOperation::Malformed { description } => {
+                bail!("cannot journal {description}")
+            }
+        };
         self.with(|conn| {
             let tx = conn.transaction()?;
             tx.execute(
@@ -160,11 +204,11 @@ impl Db {
                    remove_data = excluded.remove_data",
                 rusqlite::params![
                     row.plugin_id,
-                    row.operation,
+                    row.operation.name(),
                     row.staged_path,
-                    row.target_version,
-                    row.package_hash,
-                    i64::from(row.remove_data),
+                    target_version,
+                    package_hash,
+                    i64::from(remove_data),
                 ],
             )?;
             if let Some(enabled) = desired_enabled {

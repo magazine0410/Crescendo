@@ -44,10 +44,7 @@ export async function initEvents() {
     library.onScanProgress(e.payload);
     library.refresh();
   });
-  await listen<string>("scan:error", (e) => {
-    library.scanError = e.payload;
-    library.scanning = false;
-  });
+  await listen<string>("scan:error", (e) => library.onScanFailed(e.payload));
   await listen<{ id: number; plays: number }>("play:recorded", (e) => {
     void library.bumpPlayCount(e.payload.id, e.payload.plays)
       .catch((error) => console.error("play-history refresh failed:", error));

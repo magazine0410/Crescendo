@@ -16,6 +16,7 @@ use std::{env, fs, path::Path};
 const COMMANDS: &[&str] = &[
     "scan_start",
     "scan_cancel",
+    "scan_running",
     "tag_edit_open",
     "library_stats",
     "browse_values",
@@ -94,6 +95,7 @@ const COMMANDS: &[&str] = &[
     "lastfm_connect",
     "lastfm_finish_connect",
     "lastfm_set_enabled",
+    "lastfm_cancel_connect",
     "lastfm_disconnect",
     "song_history",
     "lastfm_track_url",

@@ -1378,7 +1378,7 @@ impl RuntimeThread<'_> {
     }
 
     /// Startup-initialization failure. The plugin stays installed; repeated
-    /// failures (persisted via `failure_count`) auto-disable it so a broken
+    /// failures (persisted via `init_failures`) auto-disable it so a broken
     /// package can never wedge every startup.
     fn record_init_failure(&mut self, spec: &WasmPluginSpec, message: String) {
         let message = truncate_on_boundary(&message, MAX_GUEST_ERROR_BYTES);
@@ -1420,9 +1420,7 @@ impl RuntimeThread<'_> {
                 message
             }
         } else {
-            let _ = self
-                .db
-                .plugin_record_error_preserving_state(&spec.id, &message);
+            let _ = self.db.plugin_record_error(&spec.id, Some(&message));
             message
         };
         self.states.record_failure(&spec.id, &message);

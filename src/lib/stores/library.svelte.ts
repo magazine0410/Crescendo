@@ -89,6 +89,40 @@ export function customTagLabel(tag: string): string {
   return tag;
 }
 
+/** Everything a library scan can be doing, from one value. */
+export type ScanState =
+  | { phase: "idle" }
+  | { phase: "starting" }
+  | { phase: "running"; progress: ScanProgress | null }
+  | { phase: "cancelling"; progress: ScanProgress | null }
+  | { phase: "finished"; progress: ScanProgress }
+  | { phase: "failed"; message: string };
+
+/** How long a finished scan's summary stays on screen. */
+const SCAN_SUMMARY_MS = 4000;
+
+/** Why the whole library view is being rebuilt. */
+type ViewRebuild = "projection" | "recovery" | "history";
+
+/** What a Track-list view queries; fixed for as long as that list is on screen. */
+interface TrackViewParams {
+  query: string | null;
+  mode: WireBrowseMode;
+  values: string[];
+  projectionRevision: number;
+  sort: TrackSort | null;
+}
+
+/** The rows on screen come from one source: its parameters and its pages, which
+    hold both in-flight and loaded fetches. A reload that succeeds replaces the
+    source along with the rows, so a fetch can only ever write into the list it
+    was started for, and a reload that fails leaves that list fully working. */
+interface TrackSource {
+  /** Null until the first reload, when the current filter is what is meant. */
+  params: TrackViewParams | null;
+  pages: Map<number, Promise<void>>;
+}
+
 /** A visible row in the Track-list view: an album separator or a track. */
 export type TrackRow = { sep: TrackGroup; albumId: number | null } | { trackIndex: number };
 
@@ -153,31 +187,39 @@ class LibraryStore {
 
   /** Windowed full-library track list (Track-list view). `tracks[i]` is
       undefined until its page loads. `trackEpoch` bumps on every reset so the
-      view can re-fetch its visible range; `loadedPages` dedupes page fetches
-      and `trackReqId` discards responses that a filter change has superseded. */
+      view can re-fetch its visible range; `trackSource` is what those rows come
+      from, and `trackReqId` orders reloads so only the newest one commits. */
   trackCount = $state(0);
   tracks = $state<(Track | undefined)[]>([]);
   trackEpoch = $state(0);
   /** Non-null when album separators are on: the flat row layout over `tracks`. */
   trackModel = $state<RowModel | null>(null);
-  private pagePromises = new Map<number, Promise<void>>();
+  private trackSource: TrackSource = { params: null, pages: new Map() };
   private pendingTrackRange: [number, number] | null = null;
   private loadingVisibleTracks = false;
   private trackReqId = 0;
   private valuesReqId = 0;
   private albumsReqId = 0;
   private albumTracksReqId = 0;
-  private staleRecovery: Promise<void> | null = null;
-  private projectionTransition: Promise<void> = Promise.resolve();
-  private historyRefresh: Promise<void> | null = null;
-  private historyRefreshPending = false;
+  /** Rebuilds run one at a time, in order. The gate closes when the first is
+      queued and opens when the last has finished. */
+  private rebuildQueue: Promise<void> = Promise.resolve();
+  private rebuildsWaiting = 0;
+  private queuedRecovery: Promise<void> | null = null;
+  private recoveryRevision = 0;
+  private queuedHistory: Promise<void> | null = null;
+  /** A revision newer than the rebuild in progress was reading. */
+  private staleDuringRebuild: number | null = null;
+  /** The separators setting the view last asked for while a rebuild ran. */
+  private requestedDuringRebuild: boolean | null = null;
+  /** Identifies what the rows on screen were last loaded for. */
+  private loadedViewKey: string | null = null;
 
   /** One revision backs every projection-dependent object currently rendered. */
   projectionRevision = $state(0);
-  projectionChanging = $state(false);
-  historyChanging = $state(false);
+  rebuild = $state<ViewRebuild | null>(null);
   get interactionBlocked(): boolean {
-    return this.projectionChanging || this.historyChanging;
+    return this.rebuild !== null;
   }
   /** One dismissible banner line for the library tab: a stale-projection
       retry that could not be revalidated, or a plugin menu action that
@@ -211,9 +253,20 @@ class LibraryStore {
       an album under a browsing user on every song would be far too much. */
   pendingJump = $state<"explicit" | "auto" | null>(null);
 
-  scanning = $state(false);
-  scanProgress = $state<ScanProgress | null>(null);
-  scanError = $state<string | null>(null);
+  scan = $state<ScanState>({ phase: "idle" });
+  private scanSummaryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  get scanning(): boolean {
+    const phase = this.scan.phase;
+    return phase === "starting" || phase === "running" || phase === "cancelling";
+  }
+
+  /** The latest numbers from the scan in progress, if it has reported any. */
+  get scanProgressNow(): ScanProgress | null {
+    return this.scan.phase === "running" || this.scan.phase === "cancelling"
+      ? this.scan.progress
+      : null;
+  }
 
   /** Whether the active fixed/custom filter browses the grouping tag. */
   get isGroupingMode(): boolean {
@@ -272,6 +325,7 @@ class LibraryStore {
   /** Set (and persist) the custom filter text, switch to the custom tab, and
       reload it — configuring the filter implies you want to use it. */
   async setCustomTag(raw: string) {
+    await this.rebuildQueue;
     await prefs.set("custom_browse_tag", raw);
     this.mode = "custom";
     this.selectedValues = [];
@@ -386,6 +440,14 @@ class LibraryStore {
 
   async init() {
     await this.refresh();
+    // A webview reload during a scan starts with no idea one is running.
+    try {
+      if ((await call<boolean>("scan_running")) && this.scan.phase === "idle") {
+        this.scan = { phase: "running", progress: null };
+      }
+    } catch (e) {
+      console.debug("scan_running failed:", e);
+    }
   }
 
   async refresh() {
@@ -415,9 +477,10 @@ class LibraryStore {
     // may reveal the playing track. Resetting after loadValues() (a GROUP BY
     // over the library) used to land later and throw that reveal away.
     this.resetScroll();
-    await this.loadValues();
-    // Drop the parts of the selection the new search filtered away.
-    if (this.selectedValues.length > 0) {
+    const current = await this.loadValues();
+    // Drop the parts of the selection the new search filtered away. Only `values`
+    // from this search can say that; a failed or superseded load cannot.
+    if (current && this.selectedValues.length > 0) {
       const still = this.selectedValues.filter((v) =>
         this.values.some(({ value }) => value === v),
       );
@@ -439,86 +502,130 @@ class LibraryStore {
     this.scrollResetKey += 1;
   }
 
-  async loadValues() {
+  /** Whether `values` now reflects this request. */
+  async loadValues(): Promise<boolean> {
     const request = ++this.valuesReqId;
     // Custom tab with no single valid tag set → empty value list ("show nothing").
     if (this.mode === "custom" && this.customTagName === null) {
-      if (request === this.valuesReqId) this.values = [];
-      return;
+      this.values = [];
+      return true;
     }
     try {
       const result = await call<BrowseValuesResult>("browse_values", {
         mode: this.wireMode,
         query: this.query,
       });
-      if (request === this.valuesReqId) {
-        this.projectionRevision = result.projection_revision;
-        this.values = result.values;
-      }
+      if (request !== this.valuesReqId) return false;
+      this.projectionRevision = result.projection_revision;
+      this.values = result.values;
+      return true;
     } catch (e) {
       // invalid search query mid-typing — keep the previous list
       console.debug("browse_values failed:", e);
+      return false;
+    }
+  }
+
+  private async reloadView() {
+    await this.loadValues();
+    await Promise.all([
+      this.loadAlbums(),
+      this.reloadTrackView(prefs.values.track_separators),
+    ]);
+  }
+
+  /** Run `body` after any rebuild ahead of it, with the gate shut throughout. */
+  private queueRebuild(kind: ViewRebuild, body: () => Promise<void>): Promise<void> {
+    if (this.rebuildsWaiting === 0) this.invalidateViewRequests();
+    this.rebuildsWaiting++;
+    this.rebuild ??= kind;
+    const run = this.rebuildQueue
+      .then(() => {
+        this.rebuild = kind;
+        this.invalidateViewRequests();
+        return body();
+      })
+      .finally(() => {
+        this.rebuildsWaiting--;
+        if (this.rebuildsWaiting === 0) this.afterRebuilds();
+      });
+    this.rebuildQueue = run.catch(() => {});
+    return run;
+  }
+
+  private afterRebuilds() {
+    const stale = this.staleDuringRebuild;
+    this.staleDuringRebuild = null;
+    if (stale !== null && stale !== this.projectionRevision) {
+      void this.queueRecovery(stale);
+      return;
+    }
+    this.rebuild = null;
+    const requested = this.requestedDuringRebuild;
+    this.requestedDuringRebuild = null;
+    if (requested !== null && this.trackViewKey(requested) !== this.loadedViewKey) {
+      void this.reloadTrackView(requested);
     }
   }
 
   /** Serialize a setting write with complete invalidation and reconstruction
-      of every object whose identity depends on the projection. */
+      of every object whose identity depends on the projection. A write that
+      fails still reloads, since queuing it invalidated what was loading. */
   changeProjection(write: () => Promise<number>): Promise<void> {
-    const transition = this.projectionTransition.then(() => this.runProjectionChange(write));
-    this.projectionTransition = transition.catch(() => {});
-    return transition;
-  }
-
-  private async runProjectionChange(write: () => Promise<number>): Promise<void> {
-    this.projectionChanging = true;
     this.notice = null;
-    this.invalidateProjectionRequests();
-    try {
-      this.projectionRevision = await write();
-      this.clearProjectionState();
-      await this.loadValues();
-      await Promise.all([
-        this.loadAlbums(),
-        this.reloadTrackView(prefs.values.track_separators),
-      ]);
-    } finally {
-      this.projectionChanging = false;
-    }
+    return this.queueRebuild("projection", async () => {
+      let written = false;
+      try {
+        this.projectionRevision = await write();
+        written = true;
+        this.clearProjectionState();
+      } finally {
+        if (!written) await this.reloadView();
+      }
+      await this.reloadView();
+    });
   }
 
-  /** Refresh exactly once after a backend stale-revision rejection. */
+  /** Refresh once after a backend stale-revision rejection. */
   async recoverStaleProjection(reason: unknown): Promise<boolean> {
     const revision = staleProjectionRevision(reason);
     if (revision == null) return false;
-    if (!this.staleRecovery) {
-      this.staleRecovery = (async () => {
-        this.projectionChanging = true;
-        this.invalidateProjectionRequests();
-        try {
-          this.projectionRevision = revision;
-          this.clearProjectionState();
-          await this.loadValues();
-          await Promise.all([
-            this.loadAlbums(),
-            this.reloadTrackView(prefs.values.track_separators),
-          ]);
-        } finally {
-          this.projectionChanging = false;
-          this.staleRecovery = null;
-        }
-      })();
-    }
-    await this.staleRecovery;
+    await this.queueRecovery(revision);
     return true;
   }
 
-  private invalidateProjectionRequests() {
+  private queueRecovery(revision: number): Promise<void> {
+    this.recoveryRevision = revision;
+    this.queuedRecovery ??= this.queueRebuild("recovery", async () => {
+      this.queuedRecovery = null;
+      this.projectionRevision = this.recoveryRevision;
+      this.clearProjectionState();
+      await this.reloadView();
+    });
+    return this.queuedRecovery;
+  }
+
+  /** Handle a stale-revision error from a load. True if that is what it was. A
+      rebuild is waiting on this very load, so it notes the revision for afterwards
+      rather than queuing behind itself. */
+  private async recoverLoad(reason: unknown): Promise<boolean> {
+    const revision = staleProjectionRevision(reason);
+    if (revision == null) return false;
+    if (this.rebuild !== null) {
+      this.staleDuringRebuild = revision;
+      return true;
+    }
+    await this.queueRecovery(revision);
+    return true;
+  }
+
+  private invalidateViewRequests() {
     this.valuesReqId++;
     this.albumsReqId++;
     this.albumTracksReqId++;
     this.trackReqId++;
     this.pendingTrackRange = null;
-    this.pagePromises.clear();
+    this.trackSource = { params: this.trackSource.params, pages: new Map() };
   }
 
   private clearProjectionState() {
@@ -584,7 +691,7 @@ class LibraryStore {
       });
       if (request === this.albumsReqId) this.albums = albums;
     } catch (e) {
-      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
+      if (await this.recoverLoad(e)) return;
       console.debug("browse_albums failed:", e);
     }
   }
@@ -615,27 +722,18 @@ class LibraryStore {
       !this.query && !this.isPlayCountMode && !this.isLastPlayedMode &&
       this.sort?.key !== "lastplayed" && this.sort?.secondary !== "lastplayed"
     ) return;
-    this.historyRefreshPending = true;
-    if (this.historyRefresh) return this.historyRefresh;
-    this.historyChanging = true;
-    this.invalidateProjectionRequests();
     this.clearSelection();
-    this.historyRefresh = (async () => {
-      while (this.historyRefreshPending) {
-        this.historyRefreshPending = false;
-        await this.projectionTransition;
-        await this.loadValues();
-        await Promise.all([
-          this.loadAlbums(),
-          this.reloadTrackView(prefs.values.track_separators),
-          this.selectedAlbum ? this.selectAlbum(this.selectedAlbum) : Promise.resolve(),
-        ]);
-      }
-    })().finally(() => {
-      this.historyChanging = false;
-      this.historyRefresh = null;
+    this.queuedHistory ??= this.queueRebuild("history", async () => {
+      // Plays credited from here on need another rebuild; this one has started.
+      this.queuedHistory = null;
+      await this.loadValues();
+      await Promise.all([
+        this.loadAlbums(),
+        this.reloadTrackView(prefs.values.track_separators),
+        this.selectedAlbum ? this.selectAlbum(this.selectedAlbum) : Promise.resolve(),
+      ]);
     });
-    return this.historyRefresh;
+    return this.queuedHistory;
   }
 
   /** Flat row count of the Track-list view (tracks, plus separators when on). */
@@ -672,26 +770,16 @@ class LibraryStore {
   /** 0-based index of a track within the current Track-list view (same filter +
       order as the loaded rows), or null if it isn't in the view. */
   async indexOfTrack(id: number): Promise<number | null> {
+    const query = () => call<number | null>("track_index", {
+      ...this.trackParams(),
+      trackId: id,
+    });
     try {
-      return await call<number | null>("track_index", {
-        query: this.query,
-        mode: this.wireMode,
-        values: this.selectedValues,
-        projectionRevision: this.projectionRevision,
-        sort: this.sort,
-        trackId: id,
-      });
+      return await query();
     } catch (e) {
-      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) {
+      if (this.rebuild === null && (await this.recoverStaleProjection(e))) {
         try {
-          return await call<number | null>("track_index", {
-            query: this.query,
-            mode: this.wireMode,
-            values: this.selectedValues,
-            projectionRevision: this.projectionRevision,
-            sort: this.sort,
-            trackId: id,
-          });
+          return await query();
         } catch {
           return null;
         }
@@ -729,22 +817,50 @@ class LibraryStore {
     return [tFirst, tLast];
   }
 
+  /** What a list loaded right now would query. */
+  private liveTrackParams(): TrackViewParams {
+    return {
+      query: this.query,
+      mode: this.wireMode,
+      values: this.selectedValues,
+      projectionRevision: this.projectionRevision,
+      sort: this.sort,
+    };
+  }
+
+  /** What the rows on screen come from. */
+  private trackParams(): TrackViewParams {
+    return this.trackSource.params ?? this.liveTrackParams();
+  }
+
+  private trackViewKey(withGroups: boolean): string {
+    return JSON.stringify([this.liveTrackParams(), withGroups, this.stats]);
+  }
+
+  /** The view's inputs changed. A rebuild in progress reconstructs the view
+      itself, so wait for it and reload only if it read something older. */
+  requestTrackView(withGroups: boolean) {
+    if (this.rebuild !== null) {
+      this.requestedDuringRebuild = withGroups;
+      return;
+    }
+    return this.reloadTrackView(withGroups);
+  }
+
   /** Recount + reset the Track-list view for the current (mode, value, query).
       When `withGroups`, also loads album runs for separators. Bumps trackEpoch so
-      the mounted view re-fetches its visible range. */
+      the mounted view re-fetches its visible range. Until it succeeds, the rows
+      on screen and their source stay exactly as they were. */
   async reloadTrackView(withGroups: boolean) {
     const reqId = ++this.trackReqId;
-    this.pendingTrackRange = null;
+    const key = this.trackViewKey(withGroups);
+    const params = this.liveTrackParams();
+    const { query, mode, values, projectionRevision, sort } = params;
     let count: number;
     try {
-      count = await call<number>("track_count", {
-        query: this.query,
-        mode: this.wireMode,
-        values: this.selectedValues,
-        projectionRevision: this.projectionRevision,
-      });
+      count = await call<number>("track_count", { query, mode, values, projectionRevision });
     } catch (e) {
-      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
+      if (await this.recoverLoad(e)) return;
       console.debug("track_count failed:", e);
       return;
     }
@@ -754,28 +870,21 @@ class LibraryStore {
     if (withGroups) {
       try {
         const groups = await call<TrackGroup[]>("track_groups", {
-          query: this.query,
-          mode: this.wireMode,
-          values: this.selectedValues,
-          projectionRevision: this.projectionRevision,
-          sort: this.sort,
+          query, mode, values, projectionRevision, sort,
         });
         if (reqId !== this.trackReqId) return;
         model = buildRowModel(groups);
       } catch (e) {
-        if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
+        if (await this.recoverLoad(e)) return;
         console.debug("track_groups failed:", e);
         // fall back to a flat list rather than leaving the view empty
       }
     }
-    // Reset the page cache and the sparse array together, so an in-flight
-    // loadTrackPage from the async window above can't leave a page marked
-    // "loaded" against the array we're about to replace (which would blank
-    // that page until a scroll re-triggered it — the "empty top after
-    // returning from an album" bug).
+    this.trackSource = { params, pages: new Map() };
+    this.loadedViewKey = key;
+    this.pendingTrackRange = null;
     this.trackModel = model;
     this.trackCount = count;
-    this.pagePromises.clear();
     this.tracks = new Array(count);
     this.clearSelection();
     this.trackEpoch++;
@@ -818,17 +927,17 @@ class LibraryStore {
       visible window still yields every track. */
   async collectSelectedTracks(limit = Number.POSITIVE_INFINITY): Promise<Track[]> {
     if (this.interactionBlocked) return [];
-    const request = this.trackReqId;
+    const source = this.trackSource;
     const idx = [...this.selection].sort((a, b) => a - b).slice(0, limit);
     if (idx.length === 0) return [];
     const pages = [...new Set(idx.map((i) => Math.floor(i / TRACK_PAGE)))];
     // Sparse selections need only their own pages, including context menus.
     // Bound concurrent IPC for large Shift selections as well.
     for (let i = 0; i < pages.length; i += 4) {
-      if (request !== this.trackReqId || this.interactionBlocked) return [];
+      if (source !== this.trackSource || this.interactionBlocked) return [];
       await Promise.all(pages.slice(i, i + 4).map((page) => this.loadTrackPage(page)));
     }
-    if (request !== this.trackReqId || this.interactionBlocked) return [];
+    if (source !== this.trackSource || this.interactionBlocked) return [];
     return idx.map((i) => this.tracks[i]).filter((t): t is Track => t != null);
   }
 
@@ -859,13 +968,13 @@ class LibraryStore {
       while (this.pendingTrackRange) {
         const [first, last] = this.pendingTrackRange;
         this.pendingTrackRange = null;
-        const reqId = this.trackReqId;
+        const source = this.trackSource;
         if (this.trackCount === 0 || last < first) continue;
         const firstPage = Math.max(0, Math.floor(first / TRACK_PAGE));
         const lastPage = Math.floor(Math.min(last, this.trackCount - 1) / TRACK_PAGE);
         for (let page = firstPage; page <= lastPage; page++) {
           await this.loadTrackPage(page);
-          if (this.pendingTrackRange || reqId !== this.trackReqId) break;
+          if (this.pendingTrackRange || source !== this.trackSource) break;
         }
       }
     } finally {
@@ -885,56 +994,76 @@ class LibraryStore {
   }
 
   private loadTrackPage(page: number): Promise<void> {
-    const inflight = this.pagePromises.get(page);
+    const source = this.trackSource;
+    const inflight = source.pages.get(page);
     if (inflight) return inflight;
-    const p = this.fetchTrackPage(page);
-    this.pagePromises.set(page, p);
+    const p = this.fetchTrackPage(source, page);
+    source.pages.set(page, p);
     return p;
   }
 
-  private async fetchTrackPage(page: number): Promise<void> {
-    const reqId = this.trackReqId;
+  private async fetchTrackPage(source: TrackSource, page: number): Promise<void> {
     const offset = page * TRACK_PAGE;
     let rows: Track[];
     try {
       rows = await call<Track[]>("tracks_range", {
-        query: this.query,
-        mode: this.wireMode,
-        values: this.selectedValues,
-        projectionRevision: this.projectionRevision,
-        sort: this.sort,
+        ...(source.params ?? this.liveTrackParams()),
         offset,
         limit: TRACK_PAGE,
       });
     } catch (e) {
-      if (reqId !== this.trackReqId) return;
-      this.pagePromises.delete(page); // let a later pass retry
-      if (!this.projectionChanging && (await this.recoverStaleProjection(e))) return;
+      source.pages.delete(page); // let a later pass retry
+      if (source !== this.trackSource) return;
+      if (await this.recoverLoad(e)) return;
       console.debug("tracks_range failed:", e);
       return;
     }
-    if (reqId !== this.trackReqId) return; // filter changed mid-flight; discard
+    if (source !== this.trackSource) return; // that list is gone; discard
     for (let i = 0; i < rows.length; i++) this.tracks[offset + i] = rows[i];
   }
 
-  onScanProgress(p: ScanProgress) {
-    this.scanProgress = p;
-    this.scanning = !p.done;
-    if (p.done) setTimeout(() => (this.scanProgress = null), 4000);
+  // --- Scan -------------------------------------------------------------
+
+  private clearScanSummaryTimer() {
+    if (this.scanSummaryTimer !== null) clearTimeout(this.scanSummaryTimer);
+    this.scanSummaryTimer = null;
+  }
+
+  onScanProgress(progress: ScanProgress) {
+    if (progress.done) {
+      this.clearScanSummaryTimer();
+      this.scan = { phase: "finished", progress };
+      this.scanSummaryTimer = setTimeout(() => {
+        this.scanSummaryTimer = null;
+        this.scan = { phase: "idle" };
+      }, SCAN_SUMMARY_MS);
+      return;
+    }
+    this.scan = { phase: this.scan.phase === "cancelling" ? "cancelling" : "running", progress };
+  }
+
+  onScanFailed(message: string) {
+    this.clearScanSummaryTimer();
+    this.scan = { phase: "failed", message };
+  }
+
+  dismissScanFailure() {
+    if (this.scan.phase === "failed") this.scan = { phase: "idle" };
   }
 
   async startScan(full: boolean) {
-    this.scanError = null;
-    this.scanning = true;
+    this.clearScanSummaryTimer();
+    this.scan = { phase: "starting" };
     try {
       await call("scan_start", { full });
     } catch (e) {
-      this.scanning = false;
-      this.scanError = String(e);
+      this.onScanFailed(String(e));
     }
   }
 
   async cancelScan() {
+    if (this.scan.phase !== "running") return;
+    this.scan = { phase: "cancelling", progress: this.scan.progress };
     await call("scan_cancel");
   }
 }

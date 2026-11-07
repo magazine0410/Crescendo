@@ -24,6 +24,58 @@ pub fn now() -> i64 {
         .as_secs() as i64
 }
 
+/// Whether plays are being sent for the connected account.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Scrobbling {
+    #[default]
+    Off,
+    On,
+    /// Last.fm rejected the session. Unlike Off, this was not the user's choice,
+    /// so waiting plays are kept for a reconnect of the same account.
+    Suspended,
+}
+
+impl Scrobbling {
+    fn from_pref(value: Option<&str>) -> Self {
+        match value {
+            Some("true") => Scrobbling::On,
+            Some("suspended") => Scrobbling::Suspended,
+            _ => Scrobbling::Off,
+        }
+    }
+
+    fn as_pref(self) -> &'static str {
+        match self {
+            Scrobbling::Off => "false",
+            Scrobbling::On => "true",
+            Scrobbling::Suspended => "suspended",
+        }
+    }
+}
+
+const SESSION_REJECTED: &str =
+    "Last.fm rejected this session. Reconnect to resume scrobbling; waiting plays are kept.";
+
+/// Where one queued play stands. Pending is the only state a row can leave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Settled {
+    Submitted,
+    Ignored,
+    Skipped,
+    Failed,
+}
+
+impl Settled {
+    fn as_str(self) -> &'static str {
+        match self {
+            Settled::Submitted => "submitted",
+            Settled::Ignored => "ignored",
+            Settled::Skipped => "skipped",
+            Settled::Failed => "failed",
+        }
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Credentials {
     api_key: String,
@@ -32,20 +84,35 @@ struct Credentials {
     username: String,
     // Persisted in SQLite, never in the credential file.
     #[serde(skip)]
-    enabled: bool,
+    scrobbling: Scrobbling,
+}
+
+/// A connection the user has started in the browser. It stays beside the current
+/// account until Last.fm issues a session, so abandoning it loses nothing, and it
+/// is never saved: a restart simply means starting the authorization again.
+struct Authorization {
+    api_key: String,
+    secret: String,
+    token: String,
+    issued: i64,
+}
+
+impl Authorization {
+    fn expired(&self) -> bool {
+        now() - self.issued >= 3600
+    }
 }
 
 #[derive(Default)]
 struct Config {
     credentials: Credentials,
-    token: Option<(String, i64)>,
+    authorization: Option<Authorization>,
     generation: u64,
     error: Option<String>,
-    /// Failed deliveries per outbox row in this run that were not outages.
-    /// Kept in memory: a row reaching `MAX_ITEM_ATTEMPTS` is marked failed,
-    /// and a restart only grants the rest another few tries.
-    attempts: std::collections::HashMap<i64, u32>,
 }
+
+/// Queued plays as read: id, track JSON, start time, failed attempts.
+type OutboxBatch = Vec<(i64, String, i64, u32)>;
 
 /// Deliveries of one scrobble that may fail for reasons of its own before it
 /// is given up on.
@@ -55,6 +122,8 @@ const MAX_ITEM_ATTEMPTS: u32 = 5;
 pub struct ScrobbleStatus {
     pub username: Option<String>,
     pub enabled: bool,
+    /// Last.fm rejected the session; reconnecting resumes sending.
+    pub suspended: bool,
     pub pending: i64,
     pub error: Option<String>,
     pub authorizing: bool,
@@ -255,8 +324,10 @@ impl Scrobbler {
             .err()
             .map(|_| "Could not read Last.fm credentials. Reconnect your account.".to_string());
         let mut credentials = loaded.unwrap_or_default();
-        credentials.enabled = !credentials.session.is_empty()
-            && db.prefs_get("lastfm_scrobbling_enabled")?.as_deref() == Some("true");
+        if !credentials.session.is_empty() {
+            credentials.scrobbling =
+                Scrobbling::from_pref(db.prefs_get("lastfm_scrobbling_enabled")?.as_deref());
+        }
         let (wake, rx) = sync_channel(1);
         let service = Arc::new(Self {
             db,
@@ -290,6 +361,11 @@ impl Scrobbler {
     }
 
     fn save(&self, credentials: &Credentials) -> Result<()> {
+        // The pref first: if the file then fails, this errs towards not sending.
+        self.db.prefs_set(
+            "lastfm_scrobbling_enabled",
+            credentials.scrobbling.as_pref(),
+        )?;
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -311,10 +387,6 @@ impl Scrobbler {
         file.write_all(&serde_json::to_vec(credentials)?)?;
         file.sync_all()?;
         std::fs::rename(tmp, &self.path)?;
-        self.db.prefs_set(
-            "lastfm_scrobbling_enabled",
-            if credentials.enabled { "true" } else { "false" },
-        )?;
         Ok(())
     }
 
@@ -327,16 +399,21 @@ impl Scrobbler {
                 |r| r.get(0),
             )?)
         })?;
+        let suspended = config.credentials.scrobbling == Scrobbling::Suspended;
         Ok(ScrobbleStatus {
             username: (!config.credentials.username.is_empty())
                 .then(|| config.credentials.username.clone()),
-            enabled: config.credentials.enabled,
+            enabled: config.credentials.scrobbling == Scrobbling::On,
+            suspended,
             pending,
-            error: config.error.clone(),
+            error: config
+                .error
+                .clone()
+                .or_else(|| suspended.then(|| SESSION_REJECTED.to_string())),
             authorizing: config
-                .token
+                .authorization
                 .as_ref()
-                .is_some_and(|(_, issued)| now() - issued < 3600),
+                .is_some_and(|authorization| !authorization.expired()),
         })
     }
 
@@ -363,31 +440,49 @@ impl Scrobbler {
             .as_str()
             .context("Last.fm returned no authorization token")?
             .to_string();
-        self.save(&credentials)?;
         let mut url = url::Url::parse("https://www.last.fm/api/auth/")?;
         url.query_pairs_mut()
             .append_pair("api_key", &credentials.api_key)
             .append_pair("token", &token);
         let mut config = self.config.lock().unwrap();
-        config.credentials = credentials;
-        config.token = Some((token, now()));
-        config.generation += 1;
+        config.authorization = Some(Authorization {
+            api_key: credentials.api_key,
+            secret: credentials.secret,
+            token,
+            issued: now(),
+        });
         config.error = None;
         Ok(url.into())
+    }
+
+    /// Give up on a started connection. The current account is untouched.
+    pub fn cancel_connect(&self) {
+        let _operation = self.operation.lock().unwrap();
+        let mut config = self.config.lock().unwrap();
+        config.authorization = None;
+        config.error = None;
     }
 
     pub fn finish_connect(&self) -> Result<()> {
         let _operation = self.operation.lock().unwrap();
         let (mut credentials, token) = {
-            let config = self.config.lock().unwrap();
-            let (token, issued) = config
-                .token
-                .clone()
+            let mut config = self.config.lock().unwrap();
+            let authorization = config
+                .authorization
+                .as_ref()
                 .context("Start a new Last.fm connection first.")?;
-            if now() - issued >= 3600 {
+            if authorization.expired() {
+                config.authorization = None;
                 bail!("Authorization timed out. Connect Last.fm again.")
             }
-            (config.credentials.clone(), token)
+            (
+                Credentials {
+                    api_key: authorization.api_key.clone(),
+                    secret: authorization.secret.clone(),
+                    ..Default::default()
+                },
+                authorization.token.clone(),
+            )
         };
         let result = signed_call(
             &self.endpoint,
@@ -407,52 +502,63 @@ impl Scrobbler {
             .into();
         // Connecting does not silently opt in; the checkbox is explicit.
         self.save(&credentials)?;
+        let account = credentials.username.clone();
+        {
+            let mut config = self.config.lock().unwrap();
+            config.credentials = credentials;
+            config.authorization = None;
+            config.generation += 1;
+            config.error = None;
+        }
         // Preserve pending plays only when reconnecting the same account.
         self.db.with(|conn| {
             conn.execute(
                 "DELETE FROM lastfm_outbox WHERE state = 'pending' AND account != ?1",
-                [&credentials.username],
+                [&account],
             )?;
             Ok(())
-        })?;
-        let mut config = self.config.lock().unwrap();
-        config.credentials = credentials;
-        config.token = None;
-        config.generation += 1;
-        config.error = None;
-        Ok(())
+        })
     }
 
     pub fn set_enabled(&self, enabled: bool) -> Result<()> {
         let _operation = self.operation.lock().unwrap();
-        let mut config = self.config.lock().unwrap();
-        if enabled && config.credentials.session.is_empty() {
-            bail!("Connect Last.fm first.")
+        {
+            let mut config = self.config.lock().unwrap();
+            if enabled && config.credentials.session.is_empty() {
+                bail!("Connect Last.fm first.")
+            }
+            let mut credentials = config.credentials.clone();
+            credentials.scrobbling = if enabled {
+                Scrobbling::On
+            } else {
+                Scrobbling::Off
+            };
+            self.save(&credentials)?;
+            config.credentials = credentials;
+            config.generation += 1;
+            config.error = None;
         }
-        let mut credentials = config.credentials.clone();
-        credentials.enabled = enabled;
-        self.save(&credentials)?;
         if !enabled {
             self.clear_pending()?;
         }
-        config.credentials = credentials;
-        config.generation += 1;
-        config.error = None;
         let _ = self.wake.try_send(());
         Ok(())
     }
 
+    /// Memory follows the file before the queue is cleared, so a failure there
+    /// cannot leave a disconnected account still sending until the next start.
     pub fn disconnect(&self) -> Result<()> {
         let _operation = self.operation.lock().unwrap();
         self.save(&Credentials::default())?;
-        self.clear_pending()?;
-        let mut config = self.config.lock().unwrap();
-        let generation = config.generation + 1;
-        *config = Config {
-            generation,
-            ..Default::default()
-        };
-        Ok(())
+        {
+            let mut config = self.config.lock().unwrap();
+            let generation = config.generation + 1;
+            *config = Config {
+                generation,
+                ..Default::default()
+            };
+        }
+        self.clear_pending()
     }
 
     fn clear_pending(&self) -> Result<()> {
@@ -465,12 +571,13 @@ impl Scrobbler {
     /// Captured when a stream starts; enabling midway cannot upload earlier listening.
     pub fn generation(&self) -> Option<u64> {
         let c = self.config.lock().unwrap();
-        (c.credentials.enabled && !c.credentials.session.is_empty()).then_some(c.generation)
+        (c.credentials.scrobbling == Scrobbling::On).then_some(c.generation)
     }
 
     pub fn enqueue(&self, track: &Track, started_at: i64, generation: Option<u64>) -> Result<()> {
         let config = self.config.lock().unwrap();
-        if !config.credentials.enabled || generation != Some(config.generation) {
+        if config.credentials.scrobbling != Scrobbling::On || generation != Some(config.generation)
+        {
             return Ok(());
         }
         if track.artist.as_deref().is_none_or(|s| s.trim().is_empty())
@@ -487,50 +594,82 @@ impl Scrobbler {
         Ok(())
     }
 
-    fn mark(&self, id: i64, state: &str, message: Option<&str>) -> Result<()> {
+    /// Settle a pending row. A row already settled or deleted stays as it is.
+    fn mark(&self, id: i64, state: Settled, message: Option<&str>) -> Result<()> {
         self.db.with(|conn| {
-            conn.execute("UPDATE lastfm_outbox SET state = ?2, message = ?3 WHERE id = ?1", params![id, state, message])?;
+            conn.execute(
+                "UPDATE lastfm_outbox SET state = ?2, message = ?3 WHERE id = ?1 AND state = 'pending'",
+                params![id, state.as_str(), message],
+            )?;
             // Retain only recent delivery diagnostics; song history is separate.
             conn.execute("DELETE FROM lastfm_outbox WHERE state != 'pending' AND id < (SELECT COALESCE(MAX(id),0)-1000 FROM lastfm_outbox)", [])?;
             Ok(())
         })
     }
 
+    fn note_attempt(&self, id: i64) -> Result<()> {
+        self.db.with(|conn| {
+            conn.execute(
+                "UPDATE lastfm_outbox SET attempts = attempts + 1 WHERE id = ?1 AND state = 'pending'",
+                [id],
+            )?;
+            Ok(())
+        })
+    }
+
     fn deliver(&self) -> Result<()> {
-        // One batch is bounded; wakeups coalesce, and outages retry once a
-        // minute. A scrobble that fails on its own account does not stop the
-        // batch, so it cannot hold back the ones queued after it.
-        let account = {
+        let (generation, batch) = self.read_batch()?;
+        self.deliver_batch(generation, batch)
+    }
+
+    /// One batch is bounded; wakeups coalesce, and outages retry once a minute.
+    fn read_batch(&self) -> Result<(u64, OutboxBatch)> {
+        let (account, generation) = {
             let config = self.config.lock().unwrap();
-            config.credentials.username.clone()
+            (config.credentials.username.clone(), config.generation)
         };
-        let batch: Vec<(i64, String, i64)> = self.db.with(|conn| {
+        let batch = self.db.with(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, track_json, started_at FROM lastfm_outbox \
+                "SELECT id, track_json, started_at, attempts FROM lastfm_outbox \
                  WHERE state = 'pending' AND account = ?1 ORDER BY id LIMIT 50",
             )?;
             let rows = stmt
-                .query_map([&account], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .query_map([&account], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
                 .collect::<rusqlite::Result<_>>()?;
             Ok(rows)
         })?;
-        for (id, raw, started_at) in batch {
+        Ok((generation, batch))
+    }
+
+    /// A scrobble that fails on its own account does not stop the batch, so it
+    /// cannot hold back the ones queued after it.
+    fn deliver_batch(&self, generation: u64, batch: OutboxBatch) -> Result<()> {
+        for (id, raw, started_at, attempts) in batch {
             let _operation = self.operation.lock().unwrap();
-            let credentials = self.config.lock().unwrap().credentials.clone();
-            // An account change while the batch ran clears or rebinds the
-            // rows fetched above.
-            if !credentials.enabled
-                || credentials.session.is_empty()
-                || credentials.username != account
-            {
+            let credentials = {
+                let config = self.config.lock().unwrap();
+                // Any account change since the batch was read may have deleted
+                // or rebound its rows, even one the user has since undone.
+                if config.generation != generation {
+                    return Ok(());
+                }
+                config.credentials.clone()
+            };
+            if credentials.scrobbling != Scrobbling::On {
                 return Ok(());
             }
             if now() - started_at > 14 * 86400 {
-                self.mark(id, "skipped", Some("Too old for Last.fm"))?;
+                self.mark(id, Settled::Skipped, Some("Too old for Last.fm"))?;
                 continue;
             }
             let Ok(track) = serde_json::from_str::<Track>(&raw) else {
-                self.mark(id, "failed", Some("The queued play could not be read."))?;
+                self.mark(
+                    id,
+                    Settled::Failed,
+                    Some("The queued play could not be read."),
+                )?;
                 continue;
             };
             // The library deliberately fills absent titles from filenames. Verify
@@ -544,7 +683,7 @@ impl Scrobbler {
                     && meta.artist == track.artist
             }) {
                 let message = "Missing, changed, or unreadable artist/title tags; not submitted.";
-                self.mark(id, "skipped", Some(message))?;
+                self.mark(id, Settled::Skipped, Some(message))?;
                 self.config.lock().unwrap().error = Some(message.into());
                 continue;
             }
@@ -552,9 +691,7 @@ impl Scrobbler {
             match result {
                 Ok((state, message)) => {
                     self.mark(id, state, message.as_deref())?;
-                    let mut config = self.config.lock().unwrap();
-                    config.attempts.remove(&id);
-                    config.error = message;
+                    self.config.lock().unwrap().error = message;
                 }
                 // A local database error is no fault of the scrobble either.
                 Err(e) if is_outage(&e) || e.downcast_ref::<rusqlite::Error>().is_some() => {
@@ -565,31 +702,23 @@ impl Scrobbler {
                         if matches!(api.code, 9 | 10 | 13 | 26) {
                             let mut config = self.config.lock().unwrap();
                             let mut c = config.credentials.clone();
-                            c.enabled = false;
+                            c.scrobbling = Scrobbling::Suspended;
                             self.save(&c)?;
                             config.credentials = c;
                             config.generation += 1;
                             return Err(e);
                         }
-                        self.mark(id, "failed", Some(&e.to_string()))?;
+                        self.mark(id, Settled::Failed, Some(&e.to_string()))?;
                         self.config.lock().unwrap().error = Some(e.to_string());
                         continue;
                     }
                     // Not an outage and not a verdict from the API: retry on
                     // later wakes, then give up on this one scrobble.
-                    let give_up = {
-                        let mut config = self.config.lock().unwrap();
-                        config.error = Some(e.to_string());
-                        let attempts = config.attempts.entry(id).or_insert(0);
-                        *attempts += 1;
-                        let give_up = *attempts >= MAX_ITEM_ATTEMPTS;
-                        if give_up {
-                            config.attempts.remove(&id);
-                        }
-                        give_up
-                    };
-                    if give_up {
-                        self.mark(id, "failed", Some(&e.to_string()))?;
+                    self.config.lock().unwrap().error = Some(e.to_string());
+                    if attempts + 1 >= MAX_ITEM_ATTEMPTS {
+                        self.mark(id, Settled::Failed, Some(&e.to_string()))?;
+                    } else {
+                        self.note_attempt(id)?;
                     }
                 }
             }
@@ -602,10 +731,10 @@ impl Scrobbler {
         credentials: &Credentials,
         track: &Track,
         started_at: i64,
-    ) -> Result<(&'static str, Option<String>)> {
+    ) -> Result<(Settled, Option<String>)> {
         if track_url_at(&self.endpoint, &self.db, &credentials.api_key, track)?.is_none() {
             return Ok((
-                "skipped",
+                Settled::Skipped,
                 Some("Track not found on Last.fm; not submitted.".into()),
             ));
         }
@@ -626,13 +755,13 @@ impl Scrobbler {
     }
 }
 
-fn submission_result(result: &Value) -> Result<(&'static str, Option<String>)> {
+fn submission_result(result: &Value) -> Result<(Settled, Option<String>)> {
     let attr = &result["scrobbles"]["@attr"];
     if super::int_of(&attr["accepted"]) == Some(1) {
-        Ok(("submitted", None))
+        Ok((Settled::Submitted, None))
     } else if super::int_of(&attr["ignored"]) == Some(1) {
         Ok((
-            "ignored",
+            Settled::Ignored,
             Some("Last.fm ignored this scrobble (metadata, timestamp, or daily limit).".into()),
         ))
     } else {
@@ -664,7 +793,7 @@ mod tests {
                     secret: "b".repeat(32),
                     session: "test-session".into(),
                     username: "alice".into(),
-                    enabled: true,
+                    scrobbling: Scrobbling::On,
                 },
                 ..Default::default()
             }),
@@ -731,7 +860,7 @@ mod tests {
         let c = service.config.lock().unwrap().credentials.clone();
         assert_eq!(
             service.submit(&c, &track, 1700000000).unwrap().0,
-            "submitted"
+            Settled::Submitted
         );
         let request = request.join().unwrap();
         assert!(request.starts_with("POST / HTTP/1.1"));
@@ -791,9 +920,15 @@ mod tests {
         let (endpoint, request) = server(200, serde_json::json!({"error":6}));
         service.endpoint = endpoint;
         let c = service.config.lock().unwrap().credentials.clone();
-        assert_eq!(service.submit(&c, &track, now()).unwrap().0, "skipped");
+        assert_eq!(
+            service.submit(&c, &track, now()).unwrap().0,
+            Settled::Skipped
+        );
         assert!(request.join().unwrap().starts_with("GET /?"));
-        assert_eq!(service.submit(&c, &track, now()).unwrap().0, "skipped");
+        assert_eq!(
+            service.submit(&c, &track, now()).unwrap().0,
+            Settled::Skipped
+        );
     }
 
     #[test]
@@ -804,7 +939,7 @@ mod tests {
             )
             .unwrap()
             .0,
-            "ignored"
+            Settled::Ignored
         );
         assert!(submission_result(&serde_json::json!({})).is_err());
         assert_eq!(
@@ -899,8 +1034,12 @@ mod tests {
             assert!(url.starts_with("https://www.last.fm/api/auth/"));
             assert!(url.contains("token=auth-token"));
             request.join().unwrap();
-            assert!(!service.status().unwrap().enabled);
-            assert!(service.status().unwrap().authorizing);
+            // Until a session exists, the current account carries on as it was.
+            let status = service.status().unwrap();
+            assert!(status.authorizing);
+            assert!(status.enabled);
+            assert_eq!(status.username.as_deref(), Some("alice"));
+            assert_eq!(status.pending, 1);
             let (endpoint, request) = server(
                 200,
                 serde_json::json!({"session":{"name":username,"key":"new-session"}}),
@@ -983,15 +1122,17 @@ mod tests {
         service.endpoint = endpoint;
         assert!(service.deliver().is_err());
         request.join().unwrap();
-        assert_eq!(service.status().unwrap().pending, 1);
-        assert!(!service.status().unwrap().enabled);
+        let status = service.status().unwrap();
+        assert_eq!(status.pending, 1);
+        assert!(!status.enabled);
+        assert!(status.suspended);
         assert_eq!(
             service
                 .db
                 .prefs_get("lastfm_scrobbling_enabled")
                 .unwrap()
                 .as_deref(),
-            Some("false")
+            Some("suspended")
         );
     }
 
@@ -1128,6 +1269,157 @@ mod tests {
             .unwrap();
         service.deliver().unwrap();
         assert_eq!(outbox_states(&service), ["skipped", "failed"]);
+    }
+
+    #[test]
+    fn abandoning_a_reconnect_leaves_the_account_and_its_plays_alone() {
+        let (_dir, mut service, track) = fixture();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+        let generation = service.generation();
+        let (endpoint, request) = server(200, serde_json::json!({"token":"auth-token"}));
+        service.endpoint = endpoint;
+        service.connect("c".repeat(32), "d".repeat(32)).unwrap();
+        request.join().unwrap();
+        assert_eq!(
+            service.generation(),
+            generation,
+            "the stream keeps scrobbling"
+        );
+
+        service.cancel_connect();
+        let status = service.status().unwrap();
+        assert!(!status.authorizing);
+        assert!(status.enabled);
+        assert_eq!(status.username.as_deref(), Some("alice"));
+        assert_eq!(status.pending, 1);
+        assert_eq!(
+            service.config.lock().unwrap().credentials.session,
+            "test-session"
+        );
+        assert!(service.finish_connect().is_err(), "nothing left to finish");
+    }
+
+    #[test]
+    fn a_reconnect_in_progress_is_not_saved() {
+        let (dir, mut service, _track) = fixture();
+        let (endpoint, request) = server(200, serde_json::json!({"token":"auth-token"}));
+        service.endpoint = endpoint;
+        service.connect("c".repeat(32), "d".repeat(32)).unwrap();
+        request.join().unwrap();
+        assert!(!dir.path().join("credentials.json").exists());
+    }
+
+    #[test]
+    fn an_expired_authorization_is_dropped_when_it_is_used() {
+        let (_dir, service, _track) = fixture();
+        service.config.lock().unwrap().authorization = Some(Authorization {
+            api_key: "c".repeat(32),
+            secret: "d".repeat(32),
+            token: "old".into(),
+            issued: now() - 3600,
+        });
+        assert!(!service.status().unwrap().authorizing);
+        let refused = service.finish_connect().unwrap_err();
+        assert!(refused.to_string().contains("timed out"));
+        assert!(service.config.lock().unwrap().authorization.is_none());
+    }
+
+    #[test]
+    fn a_rejected_session_stays_apart_from_turning_scrobbling_off() {
+        let (dir, service, track) = fixture();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+        let mut suspended = service.config.lock().unwrap().credentials.clone();
+        suspended.scrobbling = Scrobbling::Suspended;
+        service.save(&suspended).unwrap();
+
+        let restarted =
+            Scrobbler::start(service.db.clone(), dir.path().join("credentials.json")).unwrap();
+        let status = restarted.status().unwrap();
+        assert!(status.suspended && !status.enabled);
+        assert_eq!(status.pending, 1, "kept, unlike turning it off");
+        assert!(status.error.unwrap().contains("rejected"));
+        assert!(restarted.generation().is_none(), "nothing new is queued");
+
+        restarted.set_enabled(false).unwrap();
+        let status = restarted.status().unwrap();
+        assert!(!status.suspended && !status.enabled);
+        assert_eq!(status.pending, 0);
+    }
+
+    #[test]
+    fn a_settled_row_stays_settled() {
+        let (_dir, service, track) = fixture();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+        service.mark(1, Settled::Submitted, None).unwrap();
+        service.mark(1, Settled::Failed, Some("too late")).unwrap();
+        assert_eq!(outbox_states(&service), ["submitted"]);
+    }
+
+    /// Row ids can be reused once the highest row is deleted.
+    #[test]
+    fn failed_attempts_are_stored_with_their_row() {
+        let (_dir, service, track) = fixture();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+        for _ in 0..MAX_ITEM_ATTEMPTS - 1 {
+            service.note_attempt(1).unwrap();
+        }
+        let attempts = |service: &Scrobbler| -> i64 {
+            service
+                .db
+                .with(|c| Ok(c.query_row("SELECT attempts FROM lastfm_outbox", [], |r| r.get(0))?))
+                .unwrap()
+        };
+        assert_eq!(attempts(&service), i64::from(MAX_ITEM_ATTEMPTS) - 1);
+
+        service.set_enabled(false).unwrap();
+        service.set_enabled(true).unwrap();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+        assert_eq!(
+            attempts(&service),
+            0,
+            "a new row starts clean, whatever its id"
+        );
+    }
+
+    /// Off then on after a batch was read: its rows are gone, and a POST would
+    /// submit a play the user discarded. The endpoint here is unreachable, so an
+    /// attempted POST comes back as an error.
+    #[test]
+    fn a_batch_stops_when_the_account_changed_since_it_was_read() {
+        let (dir, mut service, mut track) = fixture();
+        tagged_wav(dir.path(), &mut track);
+        let cache = format!(
+            "track:{}",
+            serde_json::to_string(&("歌手", "夜の歌")).unwrap()
+        );
+        service
+            .db
+            .lastfm_cache_put(&cache, r#""https://www.last.fm/music/Artist/_/Song""#)
+            .unwrap();
+        service.endpoint = "http://127.0.0.1:1/".into();
+        service
+            .enqueue(&track, now(), service.generation())
+            .unwrap();
+        let (generation, batch) = service.read_batch().unwrap();
+        assert_eq!(batch.len(), 1);
+        assert!(
+            service.deliver_batch(generation, batch.clone()).is_err(),
+            "unchanged, it does try to send"
+        );
+
+        service.set_enabled(false).unwrap();
+        service.set_enabled(true).unwrap();
+        service.deliver_batch(generation, batch).unwrap();
     }
 
     #[test]

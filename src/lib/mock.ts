@@ -78,6 +78,7 @@ const mockPluginPackage: PluginInfo = {
   api_version: "1.0.0",
   min_crescendo_version: "0.8.0",
   package_hash: "43e8b6bdfb5f2bfef5f2f9cf70f719b2d686fa158ef72ed8a4d8b43a30193a20",
+  enablement: "enabled",
   desired_enabled: true,
   loaded: true,
   compatible: true,
@@ -130,6 +131,7 @@ const mockGroupingPlugin: PluginInfo = {
   api_version: "1.0.0",
   min_crescendo_version: "0.8.0",
   package_hash: "bf986e4f9d78e60e6d22db26b58a4fa25dd4606905603ba0b6cb1e66e9fe655f",
+  enablement: "enabled",
   desired_enabled: true,
   loaded: true,
   compatible: true,
@@ -170,6 +172,7 @@ const mockWasmPlugin: PluginInfo = {
   api_version: "0.2.1",
   min_crescendo_version: "0.8.0",
   package_hash: "c0ffee000000000000000000000000000000000000000000000000000000dead",
+  enablement: "enabled",
   desired_enabled: true,
   loaded: true,
   compatible: true,
@@ -234,16 +237,28 @@ function wasmDemoMenuControls(): PluginMenuControl[] {
   ];
 }
 
+function mockEnablement(plugin: PluginInfo): PluginInfo["enablement"] {
+  if (plugin.pending?.operation === "uninstall") return "uninstall_pending";
+  if (plugin.loaded) return plugin.desired_enabled ? "enabled" : "disable_pending";
+  if (!plugin.desired_enabled) return "disabled";
+  if (!plugin.compatible) return "incompatible";
+  return plugin.grants_approved ? "enable_pending" : "awaiting_approval";
+}
+
 function pluginSnapshot(): PluginSnapshot {
   return {
-    plugins: structuredClone(mockPlugins),
+    plugins: structuredClone(mockPlugins).map((plugin) => ({
+      ...plugin,
+      enablement: mockEnablement(plugin),
+    })),
     loaded_plugin_ids: mockPlugins.filter((plugin) => plugin.loaded).map((plugin) => plugin.id),
     safe_mode: false,
     safe_mode_reason: null,
     errors: [],
-    restart_required: mockPlugins.some(
-      (plugin) => plugin.pending !== null || plugin.desired_enabled !== plugin.loaded,
-    ),
+    restart_required: mockPlugins.some((plugin) => {
+      const enablement = mockEnablement(plugin);
+      return plugin.pending !== null || enablement === "enable_pending" || enablement === "disable_pending";
+    }),
     projection_revision: projectionRevision,
     file_drag_provider: null,
     menu_controls: groupingCollapseEnabled()
@@ -1092,7 +1107,9 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       ] as T;
     }
     case "lastfm_status":
-      return { username: null, enabled: false, pending: 0, error: null, authorizing: false } as T;
+      return { username: null, enabled: false, suspended: false, pending: 0, error: null, authorizing: false } as T;
+    case "lastfm_cancel_connect":
+      return undefined as T;
     case "lastfm_connect":
     case "lastfm_finish_connect":
     case "lastfm_set_enabled":
@@ -1140,6 +1157,8 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "scan_start":
     case "scan_cancel":
       return undefined as T;
+    case "scan_running":
+      return false as T;
     case "tag_edit_open":
       throw new Error("Open Crescendo's desktop app to launch Forte.");
     case "player_play_context": {

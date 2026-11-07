@@ -167,6 +167,7 @@ impl Counters<'_> {
             errors: self.errors.load(Ordering::Relaxed),
             current_path,
             done,
+            cancelled: false,
         }
     }
 }
@@ -299,6 +300,7 @@ pub fn scan(
 
     let mut result = counters.snapshot(String::new(), true);
     result.removed = removed;
+    result.cancelled = cancel.load(Ordering::Relaxed);
     progress(result.clone());
     Ok(result)
 }

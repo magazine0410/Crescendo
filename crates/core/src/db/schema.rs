@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -372,6 +372,39 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
                 "ALTER TABLE plugin_state ADD COLUMN init_failures INTEGER NOT NULL DEFAULT 0;",
             )?;
         }
+    }
+    if version < 14 {
+        // Failed deliveries of one scrobble. Kept with the row they belong to: an
+        // in-memory count reset on every restart and could outlive a deleted row,
+        // passing its failures to a new one that reused the id.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS lastfm_outbox (
+               id INTEGER PRIMARY KEY,
+               account TEXT NOT NULL,
+               track_json TEXT NOT NULL,
+               started_at INTEGER NOT NULL,
+               state TEXT NOT NULL DEFAULT 'pending',
+               message TEXT,
+               UNIQUE(account, started_at, track_json)
+             );",
+        )?;
+        let has_column: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('lastfm_outbox') \
+             WHERE name = 'attempts')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_column {
+            tx.execute_batch(
+                "ALTER TABLE lastfm_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        // Forte notices whose changes were committed and whose files may not be
+        // deleted yet. Written in the same transaction as those changes, so a
+        // crash cannot apply one twice. Rows last only until the files are gone.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS forte_applied_notices (name TEXT PRIMARY KEY);",
+        )?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;

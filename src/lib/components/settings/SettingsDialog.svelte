@@ -334,7 +334,7 @@
         </div>
 
         {#if library.scanning}
-          {@const scanned = library.scanProgress?.scanned ?? 0}
+          {@const scanned = library.scanProgressNow?.scanned ?? 0}
           {@const total = library.stats?.tracks ?? 0}
           {@const pct = total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : null}
           <div class="scanprogress">
@@ -355,7 +355,7 @@
             Full rescan
           </button>
           {#if library.scanning}
-            <button class="btn" onclick={() => library.cancelScan()}>Cancel</button>
+            <button class="btn" disabled={library.scan.phase === "cancelling"} onclick={() => library.cancelScan()}>Cancel</button>
           {/if}
         </div>
         {#if library.stats}

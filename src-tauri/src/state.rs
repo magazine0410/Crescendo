@@ -2,6 +2,7 @@ use crate::player::PlayerHandle;
 use crate::waveform::WaveformStore;
 use crescendo_core::art::ArtStore;
 use crescendo_core::db::Db;
+use crescendo_core::library_lock::LibraryLock;
 use crescendo_core::plugins::PluginManager;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -42,7 +43,7 @@ pub struct AppState {
     pub player: PlayerHandle,
     pub scrobbler: Arc<crescendo_core::lastfm::scrobble::Scrobbler>,
     pub projectm_grants: Arc<Mutex<ProjectMGrants>>,
-    pub scanning: Arc<AtomicBool>,
+    pub library_lock: Arc<LibraryLock>,
     pub scan_cancel: Arc<AtomicBool>,
     /// The paths of the last file-manager drop onto the main window, as the
     /// native drop event reported them. `playlist_add_paths` takes only

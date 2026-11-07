@@ -37,13 +37,7 @@
     library.query;
     library.sort;
     library.stats;
-    const withGroups = prefs.values.track_separators;
-    // Projection and history transitions reconstruct this view before they
-    // re-enable interaction. Read the transition flag without subscribing to
-    // it so the false edge does not immediately trigger a duplicate reload.
-    if (!untrack(() => library.interactionBlocked)) {
-      library.reloadTrackView(withGroups);
-    }
+    library.requestTrackView(prefs.values.track_separators);
   });
 
   // Fetch the pages covering the visible (flat) row range, on reset or scroll.

@@ -1,31 +1,36 @@
 <script lang="ts">
   import { library } from "$lib/stores/library.svelte";
 
-  const p = $derived(library.scanProgress);
+  const scan = $derived(library.scan);
+  const p = $derived(scan.phase === "running" || scan.phase === "cancelling" ? scan.progress : null);
 </script>
 
-{#if p || library.scanError}
-  <div class="strip" class:error={!!library.scanError}>
-    {#if library.scanError}
-      <span>Scan failed: {library.scanError}</span>
-      <button onclick={() => (library.scanError = null)}>✕</button>
-    {:else if p}
-      {#if p.done}
-        <span>
-          Scan complete — {p.scanned.toLocaleString()} files
-          ({p.added} added, {p.updated} updated, {p.removed} removed{p.errors
-            ? `, ${p.errors} errors`
-            : ""})
-        </span>
+{#if scan.phase === "failed"}
+  <div class="strip error">
+    <span>Scan failed: {scan.message}</span>
+    <button onclick={() => library.dismissScanFailure()}>✕</button>
+  </div>
+{:else if scan.phase === "finished"}
+  <div class="strip">
+    <span>
+      {scan.progress.cancelled ? "Scan cancelled" : "Scan complete"} — {scan.progress.scanned.toLocaleString()} files
+      ({scan.progress.added} added, {scan.progress.updated} updated, {scan.progress.removed} removed{scan.progress.errors
+        ? `, ${scan.progress.errors} errors`
+        : ""})
+    </span>
+  </div>
+{:else if scan.phase === "running" || scan.phase === "cancelling"}
+  <div class="strip">
+    <span class="busy">
+      {#if p}
+        {scan.phase === "cancelling" ? "Cancelling…" : "Scanning…"} {p.scanned.toLocaleString()} files
+        ({p.added} added, {p.updated} updated)
+        <span class="path">{p.current_path}</span>
       {:else}
-        <span class="busy">
-          Scanning… {p.scanned.toLocaleString()} files
-          ({p.added} added, {p.updated} updated)
-          <span class="path">{p.current_path}</span>
-        </span>
-        <button onclick={() => library.cancelScan()}>Cancel</button>
+        {scan.phase === "cancelling" ? "Cancelling…" : "Scanning…"}
       {/if}
-    {/if}
+    </span>
+    <button disabled={scan.phase === "cancelling"} onclick={() => library.cancelScan()}>Cancel</button>
   </div>
 {/if}
 

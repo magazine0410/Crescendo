@@ -3,15 +3,14 @@
   import { call, isTauri } from "$lib/api";
   import { prefs } from "$lib/stores/prefs.svelte";
 
-  interface Status { username: string | null; enabled: boolean; pending: number; error: string | null; authorizing: boolean }
-  let status = $state<Status>({ username: null, enabled: false, pending: 0, error: null, authorizing: false });
+  interface Status { username: string | null; enabled: boolean; suspended: boolean; pending: number; error: string | null; authorizing: boolean }
+  let status = $state<Status>({ username: null, enabled: false, suspended: false, pending: 0, error: null, authorizing: false });
   let secret = $state("");
-  let authorizing = $state(false);
   let busy = $state(false);
   let error = $state("");
 
   async function refresh() {
-    try { status = await call<Status>("lastfm_status"); authorizing = status.authorizing; }
+    try { status = await call<Status>("lastfm_status"); }
     catch (e) { error = String(e); }
   }
   onMount(() => {
@@ -25,8 +24,7 @@
     error = "";
     try {
       await call(command, args);
-      if (command === "lastfm_connect") { authorizing = true; secret = ""; }
-      if (command === "lastfm_finish_connect" || command === "lastfm_disconnect") authorizing = false;
+      if (command === "lastfm_connect") secret = "";
     } catch (e) { error = String(e); }
     finally { await refresh(); busy = false; }
   }
@@ -43,10 +41,10 @@
   <p class="hint">Submits recognized tracks using their original tags after half the song or four minutes of listening. Tracks must be longer than 30 seconds. Applies from the next song.</p>
   {#if status.pending}<p class="hint">{status.pending} scrobble{status.pending === 1 ? "" : "s"} waiting to send.</p>{/if}
   {#if status.enabled || status.pending}<p class="hint">Turning scrobbling off discards waiting submissions.</p>{/if}
-  {#if authorizing}
+  {#if status.authorizing}
     <p class="hint">Authorize Crescendo on Last.fm in your browser, then finish connecting here.</p>
     <button class="btn" disabled={busy} onclick={() => run("lastfm_finish_connect")}>Finish connecting</button>
-    <button class="btn" disabled={busy} onclick={() => run("lastfm_disconnect")}>Cancel</button>
+    <button class="btn" disabled={busy} onclick={() => run("lastfm_cancel_connect")}>Cancel</button>
   {:else}
     <label for="lfm-secret">Last.fm API shared secret</label>
     <input id="lfm-secret" type="password" autocomplete="off" spellcheck="false" bind:value={secret} disabled={busy} />

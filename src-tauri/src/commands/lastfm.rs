@@ -41,6 +41,12 @@ pub async fn lastfm_finish_connect(state: State<'_, AppState>) -> Result<(), Str
 }
 
 #[tauri::command]
+pub async fn lastfm_cancel_connect(state: State<'_, AppState>) -> Result<(), String> {
+    state.scrobbler.cancel_connect();
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn lastfm_set_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     let service = state.scrobbler.clone();
     tauri::async_runtime::spawn_blocking(move || service.set_enabled(enabled))
