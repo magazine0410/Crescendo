@@ -254,7 +254,7 @@ fn tag_replaygain(
     use lofty::prelude::*;
     let mut tag = lofty::tag::Tag::new(lofty::tag::TagType::VorbisComments);
     for (key, value) in values {
-        tag.insert_text(key.clone(), value.to_string());
+        tag.insert_text(*key, value.to_string());
     }
     tag.save_to_path(&file.0, lofty::config::WriteOptions::default())?;
     Ok(())

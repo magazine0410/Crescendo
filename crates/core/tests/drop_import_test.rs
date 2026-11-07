@@ -41,7 +41,7 @@ fn folder_drop_adds_every_audio_file() {
     let (_tmp, db, album, _loose) = fixture();
     let pl = db.playlist_create("Test").unwrap();
 
-    let r = add_paths_to_playlist(&db, pl, &[album.clone()]).unwrap();
+    let r = add_paths_to_playlist(&db, pl, std::slice::from_ref(&album)).unwrap();
     assert_eq!(r.added, 3, "3 audio files in the folder");
     assert_eq!(r.imported, 3, "none of them were in the library");
     assert_eq!(r.duplicates, 0);
@@ -59,7 +59,7 @@ fn folder_drop_adds_every_audio_file() {
 fn dropping_the_same_folder_twice_adds_nothing() {
     let (_tmp, db, album, _loose) = fixture();
     let pl = db.playlist_create("Test").unwrap();
-    add_paths_to_playlist(&db, pl, &[album.clone()]).unwrap();
+    add_paths_to_playlist(&db, pl, std::slice::from_ref(&album)).unwrap();
 
     let r = add_paths_to_playlist(&db, pl, &[album]).unwrap();
     assert_eq!(r.added, 0);
@@ -102,7 +102,7 @@ fn known_tracks_are_reused_instead_of_reimported() {
     let (_tmp, db, album, _loose) = fixture();
     let first = db.playlist_create("First").unwrap();
     let second = db.playlist_create("Second").unwrap();
-    add_paths_to_playlist(&db, first, &[album.clone()]).unwrap();
+    add_paths_to_playlist(&db, first, std::slice::from_ref(&album)).unwrap();
 
     let r = add_paths_to_playlist(&db, second, &[album]).unwrap();
     assert_eq!(r.added, 3);
@@ -121,7 +121,7 @@ fn known_tracks_are_reused_instead_of_reimported() {
 fn folder_drop_follows_album_order_not_filename_order() {
     let (_tmp, db, album, _loose) = fixture();
     let pl = db.playlist_create("Test").unwrap();
-    add_paths_to_playlist(&db, pl, &[album.clone()]).unwrap();
+    add_paths_to_playlist(&db, pl, std::slice::from_ref(&album)).unwrap();
 
     // Tag the imported rows so disc/track numbers disagree with the names.
     db.with(|conn| {
@@ -178,7 +178,7 @@ fn parent_folder_keeps_each_album_together() {
 
     // Get the rows in, then tag them the way a real rip is tagged.
     let seed = db.playlist_create("Seed").unwrap();
-    add_paths_to_playlist(&db, seed, &[parent.clone()]).unwrap();
+    add_paths_to_playlist(&db, seed, std::slice::from_ref(&parent)).unwrap();
     db.with(|conn| {
         conn.execute(
             "UPDATE tracks SET album = 'Summer', albumartist = 'VA', disc_no = 1, \

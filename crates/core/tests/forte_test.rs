@@ -41,7 +41,7 @@ fn editing_and_renaming_preserve_playlists_history_and_track_identity() {
     let new = temp.path().join("new.wav");
     wave(&old, "Old title");
     let playlist = db.playlist_create("Keep this playlist").unwrap();
-    add_paths_to_playlist(&db, playlist, &[old.clone()]).unwrap();
+    add_paths_to_playlist(&db, playlist, std::slice::from_ref(&old)).unwrap();
     let id = db.playlist_tracks(playlist).unwrap()[0].id;
     db.record_play(id).unwrap();
     std::fs::rename(&old, &new).unwrap();
@@ -103,7 +103,7 @@ fn independent_editor_notifications_follow_offline_rename_chains() {
     let final_path = temp.path().join("final.wav");
     wave(&old, "Old title");
     let playlist = db.playlist_create("Test").unwrap();
-    add_paths_to_playlist(&db, playlist, &[old.clone()]).unwrap();
+    add_paths_to_playlist(&db, playlist, std::slice::from_ref(&old)).unwrap();
     let id = db.playlist_tracks(playlist).unwrap()[0].id;
     std::fs::rename(&old, &final_path).unwrap();
     wave(&final_path, "Edited offline");
@@ -207,7 +207,7 @@ fn an_unreadable_notice_waits_then_is_set_aside() {
     let new = temp.path().join("new.wav");
     wave(&old, "Old");
     let playlist = db.playlist_create("Test").unwrap();
-    add_paths_to_playlist(&db, playlist, &[old.clone()]).unwrap();
+    add_paths_to_playlist(&db, playlist, std::slice::from_ref(&old)).unwrap();
     let id = db.playlist_tracks(playlist).unwrap()[0].id;
     std::fs::rename(&old, &new).unwrap();
 
