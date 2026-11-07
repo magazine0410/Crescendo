@@ -3,6 +3,10 @@
 //! short enough to chain handoffs before any of them is heard.
 //! Run: cargo test -p crescendo --test gapless_handoff
 
+#[allow(dead_code)]
+#[path = "../src/player/settle.rs"]
+mod settle;
+
 use crescendo_core::playback::{Playback, StreamStarted};
 use crescendo_core::playqueue::RepeatMode;
 use gst::prelude::*;
@@ -70,8 +74,8 @@ fn player(uris: &HashMap<i64, String>) -> anyhow::Result<(gst::Element, Arc<Mute
         let playbin = values[0].get::<gst::Element>().ok()?;
         let (generation, next_id) = callback_playback.lock().ok()?.handoff_candidate()?;
         let uri = uris.get(&next_id)?;
-        let mut playback = callback_playback.lock().ok()?;
-        if playback.reserve_handoff(generation) {
+        let reserved = callback_playback.lock().ok()?.reserve_handoff(generation);
+        if reserved {
             playbin.set_property("uri", uri.as_str());
         }
         None
@@ -137,7 +141,7 @@ fn the_queue_moves_when_each_stream_is_heard_even_for_short_files() -> anyhow::R
         }
     }
     let elapsed = started_at.elapsed();
-    playbin.set_state(gst::State::Null)?;
+    settle::stop_streams(&playbin, gst::State::Null, settle::PATIENCE);
 
     assert!(reached_eos, "the walk did not finish; heard {heard:?}");
     assert_eq!(heard, [1, 2, 3, 4, 5]);
@@ -180,7 +184,7 @@ fn repeat_one_hands_a_track_over_to_itself_until_next() -> anyhow::Result<()> {
         }
     }
     let next = playback.lock().unwrap().next();
-    playbin.set_state(gst::State::Null)?;
+    settle::stop_streams(&playbin, gst::State::Null, settle::PATIENCE);
     assert_eq!(repeats, 3);
     assert_eq!(next, Some(2));
     Ok(())
@@ -221,7 +225,7 @@ fn stop_after_current_armed_during_a_handoff_stops_when_the_next_stream_starts(
             _ => {}
         }
     }
-    playbin.set_state(gst::State::Null)?;
+    settle::stop_streams(&playbin, gst::State::Null, settle::PATIENCE);
     assert_eq!(outcome, Some(StreamStarted::Stop));
     assert_eq!(playback.lock().unwrap().queue().current(), Some(1));
     Ok(())
@@ -284,7 +288,7 @@ fn a_seek_with_a_handoff_reserved_stays_on_the_audible_track() -> anyhow::Result
             _ => {}
         }
     }
-    playbin.set_state(gst::State::Null)?;
+    settle::stop_streams(&playbin, gst::State::Null, settle::PATIENCE);
 
     let heard = handed_over_at.expect("the next track never started")
         - reloaded_at.expect("the seek never happened");
@@ -293,5 +297,126 @@ fn a_seek_with_a_handoff_reserved_stays_on_the_audible_track() -> anyhow::Result
         "3 s remained after seeking to 2 s, but the next track came after {heard:?}"
     );
     assert_eq!(playback.lock().unwrap().queue().current(), Some(2));
+    Ok(())
+}
+
+/// The hang needs a stop to land near a handoff, which these timings aim at. A
+/// run with no hang still shows that stopping and starting again works.
+#[test]
+fn a_pipeline_stuck_in_a_stop_is_replaced_and_the_next_one_plays() -> anyhow::Result<()> {
+    let files = flacs("stuck", &[(1, 300), (2, 300), (3, 300)])?;
+    let (mut playbin, mut playback) = player(&files.uris)?;
+    let mut replaced = 0;
+    for round in 0..120u64 {
+        let id = playback
+            .lock()
+            .unwrap()
+            .play_context(vec![1, 2, 3], 0)
+            .unwrap();
+        start(&playbin, &playback, &files.uris[&id], id);
+
+        let bus = playbin.bus().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut opened = false;
+        while !opened && Instant::now() < deadline {
+            let Some(message) = bus.timed_pop(gst::ClockTime::from_mseconds(50)) else {
+                continue;
+            };
+            match message.view() {
+                gst::MessageView::StreamStart(_) => {
+                    playback.lock().unwrap().stream_started();
+                    opened = true;
+                }
+                gst::MessageView::Error(error) => anyhow::bail!("{}", error.error()),
+                _ => {}
+            }
+        }
+        assert!(opened, "round {round} never started its stream");
+
+        std::thread::sleep(Duration::from_micros(round * 37 % 4000));
+        if settle::stop_streams(&playbin, gst::State::Ready, Duration::from_millis(500)) {
+            bus.set_flushing(true);
+            bus.set_flushing(false);
+        } else {
+            replaced += 1;
+            (playbin, playback) = player(&files.uris)?;
+        }
+    }
+    settle::stop_streams(&playbin, gst::State::Null, settle::PATIENCE);
+    println!("replaced {replaced} of 120 pipelines");
+    Ok(())
+}
+
+#[test]
+fn stop_streams_gives_up_on_a_hung_stop_and_releases_the_element_if_it_returns(
+) -> anyhow::Result<()> {
+    gst::init()?;
+    let pipeline =
+        gst::parse::launch("fakesrc ! identity name=gate signal-handoffs=true ! fakesink")?
+            .downcast::<gst::Pipeline>()
+            .unwrap();
+    // Holding the streaming thread here holds the pad's stream lock, so leaving
+    // PLAYING waits for it the way a real deadlock does.
+    let (entered, in_callback) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let hold = Mutex::new((entered, released));
+    pipeline
+        .by_name("gate")
+        .unwrap()
+        .connect("handoff", false, move |_| {
+            let hold = hold.lock().unwrap();
+            let _ = hold.0.send(());
+            let _ = hold.1.recv();
+            None
+        });
+    let element = pipeline.clone().upcast::<gst::Element>();
+    element.set_state(gst::State::Playing)?;
+    in_callback.recv_timeout(Duration::from_secs(5))?;
+
+    let asked = Instant::now();
+    assert!(!settle::stop_streams(
+        &element,
+        gst::State::Ready,
+        Duration::from_millis(200)
+    ));
+    assert!(asked.elapsed() < Duration::from_secs(2));
+
+    let weak = element.downgrade();
+    drop((element, pipeline));
+    assert!(
+        weak.upgrade().is_some(),
+        "the stopping thread keeps it alive"
+    );
+    drop(release);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while weak.upgrade().is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        weak.upgrade().is_none(),
+        "a slow stop must free the element"
+    );
+    Ok(())
+}
+
+#[test]
+fn stop_streams_reports_success_once_the_state_is_reached() -> anyhow::Result<()> {
+    let files = flacs("healthy", &[(1, 2000)])?;
+    let (playbin, playback) = player(&files.uris)?;
+    let id = playback.lock().unwrap().play_context(vec![1], 0).unwrap();
+    start(&playbin, &playback, &files.uris[&id], id);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(settle::stop_streams(
+        &playbin,
+        gst::State::Ready,
+        settle::PATIENCE
+    ));
+    assert_eq!(playbin.current_state(), gst::State::Ready);
+    assert!(settle::stop_streams(
+        &playbin,
+        gst::State::Null,
+        settle::PATIENCE
+    ));
+    assert_eq!(playbin.current_state(), gst::State::Null);
     Ok(())
 }

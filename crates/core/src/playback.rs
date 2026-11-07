@@ -154,8 +154,8 @@ impl Playback {
         Some((self.generation, self.upcoming()?.track))
     }
 
-    /// Record the step whose uri the caller sets while it still holds the lock.
-    /// False if anything changed since the candidate was read.
+    /// Record the step whose uri the caller is about to set. False if anything
+    /// changed since the candidate was read.
     pub fn reserve_handoff(&mut self, generation: u64) -> bool {
         if generation != self.generation || self.stop_after_current {
             return false;
@@ -284,8 +284,8 @@ impl Playback {
         self.phase = Phase::Stopped;
     }
 
-    /// Call while holding the lock across setting the uri, so a late callback
-    /// cannot land a stale uri after it.
+    /// Call once the streams are stopped and the uri is set, so no callback can
+    /// still land a stale uri after it.
     pub fn loaded(&mut self, track: i64) {
         self.phase = Phase::Loaded {
             track,

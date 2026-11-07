@@ -3,6 +3,9 @@
 
 #[path = "../src/player/audio_filter.rs"]
 mod audio_filter;
+#[allow(dead_code)]
+#[path = "../src/player/settle.rs"]
+mod settle;
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -13,7 +16,7 @@ use std::sync::{Arc, Mutex};
 struct StopOnDrop(gst::Element);
 impl Drop for StopOnDrop {
     fn drop(&mut self) {
-        let _ = self.0.set_state(gst::State::Null);
+        settle::stop_streams(&self.0, gst::State::Null, settle::PATIENCE);
     }
 }
 
@@ -23,6 +26,8 @@ impl Drop for TestFile {
         let _ = std::fs::remove_file(&self.0);
     }
 }
+
+const NO_EOS: &str = "pipeline did not reach EOS";
 
 fn wait_for_eos(pipeline: &gst::Element) -> anyhow::Result<usize> {
     let bus = pipeline.bus().unwrap();
@@ -49,7 +54,7 @@ fn wait_for_eos(pipeline: &gst::Element) -> anyhow::Result<usize> {
             }
         }
     }
-    anyhow::bail!("pipeline did not reach EOS")
+    anyhow::bail!(NO_EOS)
 }
 
 fn encode_flac(bits: u32, rate: i32) -> anyhow::Result<(TestFile, Vec<i32>)> {
@@ -191,7 +196,7 @@ fn flac_samples_and_rates_survive_both_visualizers() -> anyhow::Result<()> {
                     spectrum_caps.structure(0).unwrap().get::<i32>("rate")?,
                     rate
                 );
-                playbin.set_state(gst::State::Null)?;
+                settle::stop_streams(&playbin, gst::State::Null, settle::PATIENCE);
 
                 let mut actual = Vec::new();
                 for sample in captured.lock().unwrap().iter() {
@@ -327,7 +332,7 @@ fn replaygain_output(
     playbin.set_property("audio-sink", &output);
     playbin.set_state(gst::State::Playing)?;
     wait_for_eos(&playbin)?;
-    playbin.set_state(gst::State::Null)?;
+    settle::stop_streams(&playbin, gst::State::Null, settle::PATIENCE);
     let result = captured.lock().unwrap().clone();
     Ok(result)
 }
@@ -371,12 +376,21 @@ fn replaygain_tags_apply_per_track_across_gapless_handoffs() -> anyhow::Result<(
     )?;
     let files = [&track, &album, &untagged, &peak, &untagged, &track];
     for (enabled, user_volume) in [(true, 1.0), (false, 1.0), (true, 0.125), (true, 0.0)] {
-        let actual = replaygain_output(
-            &files,
-            Arc::new(AtomicBool::new(enabled)),
-            user_volume,
-            |_| {},
-        )?;
+        // Files this short are read before the pipeline is playing, where GStreamer
+        // can deadlock on its own (see settle.rs). The stall is not what this tests.
+        let mut attempts = 0;
+        let actual = loop {
+            attempts += 1;
+            match replaygain_output(
+                &files,
+                Arc::new(AtomicBool::new(enabled)),
+                user_volume,
+                |_| {},
+            ) {
+                Err(error) if attempts < 3 && error.to_string() == NO_EOS => continue,
+                result => break result?,
+            }
+        };
         let expected: Vec<f64> = [0.5, 0.25, 1.0, 1.25, 1.0, 0.5]
             .into_iter()
             .flat_map(|gain| {

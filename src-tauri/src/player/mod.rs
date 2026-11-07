@@ -5,6 +5,7 @@
 //! is `crescendo_core::playback::Playback`; this module drives GStreamer from it.
 
 mod audio_filter;
+mod settle;
 
 use crescendo_core::db::Db;
 use crescendo_core::lastfm::scrobble::{now, Scrobbler};
@@ -292,12 +293,24 @@ struct ListenSession {
     scrobble_recorded: bool,
 }
 
-struct Engine {
+/// One playbin and what the engine needs to reach inside it. Replaced whole when
+/// stopping it hangs; see `settle`.
+struct Pipeline {
     playbin: gstreamer::Element,
-    replaygain_enabled: Arc<AtomicBool>,
     /// `spectrum` element on a separate analysis branch of the audio-filter;
     /// posts per-band magnitudes on the bus when `post-messages` is on.
     spectrum: gstreamer::Element,
+    /// Cleared, under the `Playback` lock, when this pipeline is abandoned, so
+    /// its callback cannot reserve a handoff that only a replacement could play.
+    live: Arc<AtomicBool>,
+}
+
+struct Engine {
+    playbin: gstreamer::Element,
+    replaygain_enabled: Arc<AtomicBool>,
+    spectrum: gstreamer::Element,
+    spectrum_on: bool,
+    live: Arc<AtomicBool>,
     /// The appsink callback reads this without touching the player thread.
     projectm_enabled: Arc<AtomicBool>,
     projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
@@ -305,8 +318,9 @@ struct Engine {
     db: Arc<Db>,
     scrobbler: Arc<Scrobbler>,
     listening: Option<ListenSession>,
-    /// Shared with the about-to-finish callback (streaming thread). Never hold
-    /// it across `set_state`, which can wait for that thread.
+    /// Shared with the about-to-finish callback (streaming thread). Neither side
+    /// holds it across a GStreamer call: `set_state` can wait for that thread, and
+    /// setting the uri there can wait for `set_state`.
     playback: Arc<Mutex<Playback>>,
     shared: Arc<Mutex<PlayerState>>,
     queue_shared: Arc<Mutex<Vec<i64>>>,
@@ -327,18 +341,15 @@ struct Engine {
     consecutive_failures: usize,
 }
 
-fn run_player(
-    app: AppHandle,
-    db: Arc<Db>,
-    scrobbler: Arc<Scrobbler>,
-    rx: Receiver<Cmd>,
-    shared: Arc<Mutex<PlayerState>>,
-    queue_shared: Arc<Mutex<Vec<i64>>>,
-    projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
-) -> anyhow::Result<()> {
+fn build_pipeline(
+    replaygain_enabled: &Arc<AtomicBool>,
+    projectm_enabled: &Arc<AtomicBool>,
+    projectm_pcm: &Arc<Mutex<VecDeque<Vec<u8>>>>,
+    playback: &Arc<Mutex<Playback>>,
+    db: &Arc<Db>,
+) -> anyhow::Result<Pipeline> {
     let playbin = gstreamer::ElementFactory::make("playbin3").build()?;
 
-    let replaygain_enabled = Arc::new(AtomicBool::new(db.replaygain_enabled()));
     let audio_filter = audio_filter::build(replaygain_enabled.clone())?;
     let spectrum = audio_filter
         .by_name("spectrum")
@@ -351,7 +362,6 @@ fn run_player(
         .ok_or_else(|| anyhow::anyhow!("projectM PCM appsink is missing"))?
         .downcast::<AppSink>()
         .map_err(|_| anyhow::anyhow!("projectM PCM element is not an appsink"))?;
-    let projectm_enabled = Arc::new(AtomicBool::new(false));
     // Drop only buffers: flush, segment and EOS must still reach the side
     // branch so inactive projectM cannot hold up seeks or track transitions.
     projectm_gate
@@ -395,13 +405,14 @@ fn run_player(
     );
     playbin.set_property("audio-filter", &audio_filter);
 
-    let playback = Arc::new(Mutex::new(Playback::default()));
+    let live = Arc::new(AtomicBool::new(true));
 
     // Gapless: when the current track is about to end, hand playbin the next
     // uri synchronously from the streaming thread.
     {
         let playback = playback.clone();
         let db = db.clone();
+        let live = live.clone();
         playbin.connect("about-to-finish", false, move |values| {
             let playbin = values[0].get::<gstreamer::Element>().ok()?;
             // Resolve the path without holding the lock. The generation check
@@ -410,18 +421,58 @@ fn run_player(
             let (generation, next_id) = playback.lock().ok()?.handoff_candidate()?;
             let track = db.track_by_id(next_id).ok().flatten()?;
             let uri = gstreamer::glib::filename_to_uri(&track.path, None).ok()?;
-            let mut playback = playback.lock().ok()?;
-            if playback.reserve_handoff(generation) {
+            let reserved = {
+                let mut playback = playback.lock().ok()?;
+                live.load(Ordering::SeqCst) && playback.reserve_handoff(generation)
+            };
+            // Unlocked: this can wait for a state change in progress, and if that
+            // one hangs the player must still be able to reach `Playback`. No uri
+            // lands late on a pipeline in use, because a stop finishes only once
+            // this thread has left the callback.
+            if reserved {
                 playbin.set_property("uri", uri.as_str());
             }
             None
         });
     }
 
+    Ok(Pipeline {
+        playbin,
+        spectrum,
+        live,
+    })
+}
+
+fn run_player(
+    app: AppHandle,
+    db: Arc<Db>,
+    scrobbler: Arc<Scrobbler>,
+    rx: Receiver<Cmd>,
+    shared: Arc<Mutex<PlayerState>>,
+    queue_shared: Arc<Mutex<Vec<i64>>>,
+    projectm_pcm: Arc<Mutex<VecDeque<Vec<u8>>>>,
+) -> anyhow::Result<()> {
+    let replaygain_enabled = Arc::new(AtomicBool::new(db.replaygain_enabled()));
+    let projectm_enabled = Arc::new(AtomicBool::new(false));
+    let playback = Arc::new(Mutex::new(Playback::default()));
+    let Pipeline {
+        playbin,
+        spectrum,
+        live,
+    } = build_pipeline(
+        &replaygain_enabled,
+        &projectm_enabled,
+        &projectm_pcm,
+        &playback,
+        &db,
+    )?;
+
     let mut engine = Engine {
         playbin,
         replaygain_enabled,
         spectrum,
+        spectrum_on: false,
+        live,
         projectm_enabled,
         projectm_pcm,
         app,
@@ -441,7 +492,6 @@ fn run_player(
     };
     engine.apply_volume();
 
-    let bus = engine.playbin.bus().expect("playbin has no bus");
     let mut last_tick = Instant::now();
 
     loop {
@@ -457,9 +507,12 @@ fn run_player(
         // `timed_pop` returns as soon as a message is available, so after the
         // first one drain the rest immediately: the spectrum element posts
         // ~30/s and we don't want its messages to back up behind the timeout.
+        // Each read asks for the bus again: a command or a message can replace
+        // the pipeline, and what the old one posted no longer applies.
+        let bus = engine.playbin.bus().expect("playbin has no bus");
         if let Some(msg) = bus.timed_pop(gstreamer::ClockTime::from_mseconds(50)) {
             engine.handle_bus(&msg);
-            while let Some(msg) = bus.pop() {
+            while let Some(msg) = engine.playbin.bus().and_then(|bus| bus.pop()) {
                 engine.handle_bus(&msg);
             }
         }
@@ -616,14 +669,14 @@ impl Engine {
                     // the pause flag then decides whether it resumes.
                     Status::Playing => {
                         if self.pending_seek.is_none() {
-                            let _ = self.playbin.set_state(gstreamer::State::Paused);
+                            self.change_state(gstreamer::State::Paused);
                         }
                         self.playback().set_paused(true);
                         self.publish_state();
                     }
                     Status::Paused => {
                         if self.pending_seek.is_none() {
-                            let _ = self.playbin.set_state(gstreamer::State::Playing);
+                            self.change_state(gstreamer::State::Playing);
                         }
                         self.playback().set_paused(false);
                         self.publish_state();
@@ -706,6 +759,7 @@ impl Engine {
                 self.publish_state();
             }
             Cmd::SetSpectrumEnabled(on) => {
+                self.spectrum_on = on;
                 self.spectrum.set_property("post-messages", on);
             }
             Cmd::SetProjectMEnabled(on) => {
@@ -793,7 +847,7 @@ impl Engine {
                     self.seek_at_rate(position);
                     let resume = self.playback().reloaded();
                     if resume {
-                        let _ = self.playbin.set_state(gstreamer::State::Playing);
+                        self.change_state(gstreamer::State::Playing);
                     }
                 } else if self.rate_pending {
                     self.rate_pending = false;
@@ -851,7 +905,7 @@ impl Engine {
             self.stop();
             return;
         };
-        let _ = self.playbin.set_state(gstreamer::State::Ready);
+        self.stop_streams(gstreamer::State::Ready);
         // READY stops the old stream's threads but, unlike NULL, keeps what
         // they already posted. A decoder usually posts two errors for one bad
         // file, and an EOS can be waiting behind a user command; read after
@@ -860,13 +914,9 @@ impl Engine {
             bus.set_flushing(true);
             bus.set_flushing(false);
         }
-        {
-            // about-to-finish performs its queue decision and URI write under
-            // this lock, so neither side can land a stale URI after the other.
-            let mut playback = self.playback();
-            self.playbin.set_property("uri", uri.as_str());
-            playback.loaded(track_id);
-        }
+        // The streams are stopped, so no about-to-finish can overwrite this uri.
+        self.playbin.set_property("uri", uri.as_str());
+        self.playback().loaded(track_id);
         let _ = self.playbin.set_state(gstreamer::State::Playing);
         // A rate seek needs a prerolled pipeline: wait for its async-done.
         self.rate_pending = self.rate != 1.0;
@@ -882,7 +932,7 @@ impl Engine {
         self.pending_seek = None;
         self.playback().begin_stop();
         self.commit_play();
-        let _ = self.playbin.set_state(gstreamer::State::Null);
+        self.stop_streams(gstreamer::State::Null);
         self.playback().stopped();
         self.current_duration_ms = 0;
         self.sync_queue_shared();
@@ -894,6 +944,47 @@ impl Engine {
                 duration_ms: 0,
             },
         );
+    }
+
+    fn change_state(&self, target: gstreamer::State) {
+        if !settle::change_state(&self.playbin, target, settle::PATIENCE) {
+            log::warn!("GStreamer did not change state in time; the next stop replaces it");
+        }
+    }
+
+    /// Every caller loads a track or stays stopped next, so a replacement needs
+    /// nothing carried over from the stream it replaces.
+    fn stop_streams(&mut self, target: gstreamer::State) {
+        if !settle::stop_streams(&self.playbin, target, settle::PATIENCE) {
+            log::warn!("GStreamer did not stop in time; replacing the pipeline");
+            self.replace_pipeline();
+        }
+    }
+
+    fn replace_pipeline(&mut self) {
+        let pipeline = match build_pipeline(
+            &self.replaygain_enabled,
+            &self.projectm_enabled,
+            &self.projectm_pcm,
+            &self.playback,
+            &self.db,
+        ) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                log::error!("cannot replace the stuck pipeline: {error}");
+                return;
+            }
+        };
+        {
+            let _playback = self.playback();
+            self.live.store(false, Ordering::SeqCst);
+        }
+        self.playbin = pipeline.playbin;
+        self.spectrum = pipeline.spectrum;
+        self.live = pipeline.live;
+        self.spectrum
+            .set_property("post-messages", self.spectrum_on);
+        self.apply_volume();
     }
 
     fn begin_listening(&mut self) {
@@ -996,7 +1087,7 @@ impl Engine {
         if self.playback().begin_reload().is_none() {
             return;
         }
-        let _ = self.playbin.set_state(gstreamer::State::Ready);
+        self.stop_streams(gstreamer::State::Ready);
         // As in start_track: nothing the old stream posted applies to this one.
         if let Some(bus) = self.playbin.bus() {
             bus.set_flushing(true);
