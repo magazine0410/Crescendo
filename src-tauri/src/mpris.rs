@@ -575,6 +575,29 @@ struct Tick {
     at: Instant,
 }
 
+/// Whether a position report contradicts where the last one said playback would
+/// be by now. Stopping zeroes the position under the same track id, and clients
+/// learn that from the status, so nothing a stopped player reports is a seek.
+fn position_jumped(
+    last: Option<&Tick>,
+    track_id: Option<i64>,
+    status: Option<PlaybackStatus>,
+    position_ms: u64,
+) -> bool {
+    if status == Some(PlaybackStatus::Stopped) {
+        return false;
+    }
+    let Some(tick) = last.filter(|tick| tick.track_id == track_id) else {
+        return false;
+    };
+    let expected = if status == Some(PlaybackStatus::Playing) {
+        tick.position_ms + tick.at.elapsed().as_millis() as u64
+    } else {
+        tick.position_ms
+    };
+    position_ms.abs_diff(expected) > SEEK_JUMP_MS
+}
+
 /// Register on the session bus and keep clients informed. Failure to reach
 /// the bus only logs: the player works the same without MPRIS.
 pub fn start(
@@ -700,22 +723,13 @@ async fn run(
             }
             Update::Position(position_ms) => {
                 let track_id = published.as_ref().and_then(|p| p.track_id);
-                let playing = published
-                    .as_ref()
-                    .is_some_and(|p| p.status == PlaybackStatus::Playing);
-                if let Some(tick) = last_tick.as_ref().filter(|tick| tick.track_id == track_id) {
-                    let expected = if playing {
-                        tick.position_ms + tick.at.elapsed().as_millis() as u64
-                    } else {
-                        tick.position_ms
+                let status = published.as_ref().map(|p| p.status);
+                if position_jumped(last_tick.as_ref(), track_id, status, position_ms) {
+                    let signal = Signal::Seeked {
+                        position: Time::from_millis(position_ms as i64),
                     };
-                    if position_ms.abs_diff(expected) > SEEK_JUMP_MS {
-                        let signal = Signal::Seeked {
-                            position: Time::from_millis(position_ms as i64),
-                        };
-                        if let Err(error) = server.emit(signal).await {
-                            log::debug!("MPRIS Seeked failed: {error}");
-                        }
+                    if let Err(error) = server.emit(signal).await {
+                        log::debug!("MPRIS Seeked failed: {error}");
                     }
                 }
                 last_tick = Some(Tick {
@@ -731,6 +745,32 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_position_that_breaks_the_expected_progress_is_a_seek() {
+        let tick = Tick {
+            track_id: Some(1),
+            position_ms: 90_000,
+            at: Instant::now(),
+        };
+        let (playing, paused, stopped) = (
+            Some(PlaybackStatus::Playing),
+            Some(PlaybackStatus::Paused),
+            Some(PlaybackStatus::Stopped),
+        );
+        let jumped =
+            |track, status, position| position_jumped(Some(&tick), track, status, position);
+        assert!(!jumped(Some(1), playing, 90_250), "normal progress");
+        assert!(jumped(Some(1), playing, 10_000), "seek back");
+        assert!(jumped(Some(1), paused, 10_000), "seek while paused");
+        assert!(
+            jumped(Some(1), playing, 0),
+            "repeat-one restart moves it too"
+        );
+        assert!(!jumped(Some(1), stopped, 0), "stopping is not a seek");
+        assert!(!jumped(Some(2), playing, 0), "a new song starts near zero");
+        assert!(!position_jumped(None, Some(1), playing, 0), "no baseline");
+    }
 
     fn track(title: &str, titlesort: Option<&str>, albumartist: &str, sort: Option<&str>) -> Track {
         Track {

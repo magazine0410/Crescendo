@@ -31,12 +31,14 @@ pub enum RepeatMode {
     One,
 }
 
-/// What one [`PlayQueue::advance_reserving`] changed.
+/// One move along the walk, chosen ahead of taking it. A context move is kept
+/// as a display index, so a shuffle toggled in between does not misplace it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Reservation {
-    context_index: Option<usize>,
-    playing_adhoc: Option<i64>,
-    popped: Option<i64>,
+pub enum Step {
+    /// Repeat-one: the current track again.
+    Repeat,
+    Queued(i64),
+    Context(usize),
 }
 
 #[derive(Debug, Default)]
@@ -130,8 +132,7 @@ impl PlayQueue {
     }
 
     /// Remove the queued tracks a view showed as `(position, id)`. The view
-    /// can lag a pop at the head: the gapless handoff takes the next queued
-    /// track seconds before it is heard, which shifts every entry left. So an
+    /// can lag a pop at the head, which shifts every entry left. So an
     /// id is looked for at its position and then before it, and an entry that
     /// is no longer queued is left alone rather than removing its neighbour.
     pub fn queue_remove(&mut self, items: &[(usize, i64)]) {
@@ -162,79 +163,92 @@ impl PlayQueue {
         &self.adhoc
     }
 
-    /// Inspect the track that follows the current one without consuming it.
-    pub fn peek_advance(&self) -> Option<i64> {
+    /// The move [`advance`](Self::advance) would make, if there is one.
+    pub fn next_step(&self) -> Option<Step> {
+        self.step_after([])
+    }
+
+    /// The move that would follow `reserved`, steps chosen but not taken yet.
+    pub fn step_after(&self, reserved: impl IntoIterator<Item = Step>) -> Option<Step> {
         if self.repeat == RepeatMode::One {
-            return self.current();
+            return self.current().map(|_| Step::Repeat);
         }
-        if let Some(id) = self.adhoc.first() {
-            return Some(*id);
+        let mut queued = 0;
+        let mut pos = self.pos;
+        for step in reserved {
+            match step {
+                Step::Repeat => {}
+                Step::Queued(_) => queued += 1,
+                Step::Context(index) => pos = self.order.iter().position(|&i| i == index),
+            }
+        }
+        if let Some(&id) = self.adhoc.get(queued) {
+            return Some(Step::Queued(id));
         }
         let n = self.order.len();
         if n == 0 {
             return None;
         }
-        let next = match self.pos {
+        let next = match pos {
             None => 0,
             Some(p) if p + 1 < n => p + 1,
             Some(_) if self.repeat == RepeatMode::All => 0,
             Some(_) => return None,
         };
-        Some(self.context[self.order[next]])
+        Some(Step::Context(self.order[next]))
     }
 
-    /// [`advance`](Self::advance) for the gapless handoff, which runs while the
-    /// outgoing track is still audible. The returned reservation lets a
-    /// manual transition before the handoff is heard put the queue back.
-    pub fn advance_reserving(&mut self) -> Option<(i64, Reservation)> {
-        let before = Reservation {
-            context_index: self.pos.map(|p| self.order[p]),
-            playing_adhoc: self.playing_adhoc,
-            popped: None,
-        };
-        let queued = self.adhoc.len();
-        let id = self.advance()?;
-        let popped = (self.adhoc.len() < queued).then_some(id);
-        Some((id, Reservation { popped, ..before }))
+    /// The track a step lands on.
+    pub fn track_of(&self, step: Step) -> Option<i64> {
+        match step {
+            Step::Repeat => self.current(),
+            Step::Queued(id) => Some(id),
+            Step::Context(index) => self.context.get(index).copied(),
+        }
     }
 
-    /// Return to the state before [`advance_reserving`](Self::advance_reserving):
-    /// the audible track is current again and a queued track the handoff took
-    /// is queued again. The position is kept as a context index, so a shuffle
-    /// toggled in between does not misplace it.
-    pub fn undo(&mut self, reservation: Reservation) {
-        self.pos = reservation
-            .context_index
-            .and_then(|index| self.order.iter().position(|&i| i == index));
-        self.playing_adhoc = reservation.playing_adhoc;
-        if let Some(id) = reservation.popped {
-            self.adhoc.insert(0, id);
+    /// Inspect the track that follows the current one without consuming it.
+    pub fn peek_advance(&self) -> Option<i64> {
+        self.track_of(self.next_step()?)
+    }
+
+    /// Land on a step chosen earlier, which may no longer be
+    /// [`next_step`](Self::next_step). A queued track removed since then takes
+    /// no other entry with it.
+    pub fn take_step(&mut self, step: Step) {
+        match step {
+            Step::Repeat => {}
+            Step::Queued(id) => {
+                if self.adhoc.first() == Some(&id) {
+                    self.adhoc.remove(0);
+                }
+                self.playing_adhoc = Some(id);
+            }
+            Step::Context(index) => {
+                self.playing_adhoc = None;
+                let target = self.order.iter().position(|&i| i == index);
+                // Shuffle switched on since the step was chosen rebuilt the walk
+                // around the track before it. Make the step next in that walk,
+                // so jumping to it leaves no track behind it unvisited.
+                if let (true, Some(p), Some(t)) = (self.shuffle, self.pos, target) {
+                    if t > p + 1 {
+                        self.order.swap(t, p + 1);
+                        self.pos = Some(p + 1);
+                        return;
+                    }
+                }
+                self.pos = target;
+            }
         }
     }
 
     /// The track that follows the current one; consumes queue/position state.
+    /// With nothing to move to, the current track stays current, so Play
+    /// resumes the one that just finished.
     pub fn advance(&mut self) -> Option<i64> {
-        if self.repeat == RepeatMode::One {
-            return self.current();
-        }
-        if !self.adhoc.is_empty() {
-            let id = self.adhoc.remove(0);
-            self.playing_adhoc = Some(id);
-            return Some(id);
-        }
-        self.playing_adhoc = None;
-        let n = self.order.len();
-        if n == 0 {
-            return None;
-        }
-        let next = match self.pos {
-            None => 0,
-            Some(p) if p + 1 < n => p + 1,
-            Some(_) if self.repeat == RepeatMode::All => 0,
-            Some(_) => return None,
-        };
-        self.pos = Some(next);
-        Some(self.context[self.order[next]])
+        let step = self.next_step()?;
+        self.take_step(step);
+        self.current()
     }
 
     /// The track a manual Next goes to. Like [`advance`](Self::advance), except
@@ -262,11 +276,11 @@ impl PlayQueue {
 
     /// Previous track in the walk order (queue is not re-entered).
     pub fn previous(&mut self) -> Option<i64> {
-        self.playing_adhoc = None;
         let n = self.order.len();
         if n == 0 {
             return None;
         }
+        self.playing_adhoc = None;
         let prev = match self.pos {
             None => 0,
             Some(0) if self.repeat == RepeatMode::All => n - 1,
@@ -357,25 +371,21 @@ mod tests {
     }
 
     #[test]
-    fn undo_restores_the_audible_track_and_a_reserved_queue_entry() {
+    fn a_step_chosen_before_shuffle_keeps_its_track_and_the_whole_walk() {
         let mut q = PlayQueue::default();
-        q.set_context(vec![10, 20, 30], 1);
-        q.queue_add(&[99, 98]);
-        let (id, reservation) = q.advance_reserving().unwrap();
-        assert_eq!(id, 99);
-        assert_eq!(q.queue_ids(), [98]);
-        q.undo(reservation);
-        assert_eq!(q.current(), Some(20));
-        assert_eq!(q.queue_ids(), [99, 98]);
-        assert_eq!(q.previous(), Some(10), "Prev goes back from what was heard");
-
-        // A shuffle toggled between the handoff and the undo.
-        let mut q = PlayQueue::default();
-        q.set_context((0..20).collect(), 5);
-        let (_, reservation) = q.advance_reserving().unwrap();
+        q.set_context((0..50).collect(), 7);
+        let step = q.next_step().unwrap();
         q.set_shuffle(true);
-        q.undo(reservation);
-        assert_eq!(q.current(), Some(5));
+        q.take_step(step);
+        assert_eq!(q.current(), Some(8));
+        assert_eq!(q.context_index(), Some(8));
+        let mut seen = vec![7, 8];
+        while let Some(id) = q.advance() {
+            seen.push(id);
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 50, "no track is left behind the jump");
     }
 
     #[test]
@@ -431,6 +441,41 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), 50, "shuffle walk must visit every track once");
+    }
+
+    #[test]
+    fn reaching_the_end_keeps_the_track_that_just_finished_current() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![1, 2], 1);
+        q.queue_add(&[99]);
+        assert_eq!(q.advance(), Some(99));
+        assert_eq!(q.advance(), None);
+        assert_eq!(q.current(), Some(99), "Play resumes the queued track");
+
+        // A queued track played with no context behind it.
+        let mut q = PlayQueue::default();
+        q.queue_add(&[99]);
+        assert_eq!(q.advance(), Some(99));
+        assert_eq!(q.previous(), None);
+        assert_eq!(q.current(), Some(99));
+    }
+
+    #[test]
+    fn steps_can_be_chosen_ahead_of_steps_not_taken_yet() {
+        let mut q = PlayQueue::default();
+        q.set_context(vec![10, 20, 30], 0);
+        q.queue_add(&[99]);
+        let first = q.next_step().unwrap();
+        assert_eq!(first, Step::Queued(99));
+        let second = q.step_after([first]).unwrap();
+        assert_eq!(second, Step::Context(1));
+        let third = q.step_after([first, second]).unwrap();
+        assert_eq!(third, Step::Context(2));
+        assert_eq!(q.step_after([first, second, third]), None);
+        assert_eq!(q.current(), Some(10), "choosing moves nothing");
+
+        q.repeat = RepeatMode::All;
+        assert_eq!(q.step_after([first, second, third]), Some(Step::Context(0)));
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod listening;
 pub mod lyrics;
 pub mod m3u;
 pub mod model;
+pub mod playback;
 pub mod playqueue;
 pub mod plugins;
 pub mod replaygain;
