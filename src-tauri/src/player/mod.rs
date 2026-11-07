@@ -12,7 +12,7 @@ use crescendo_core::lastfm::scrobble::{now, Scrobbler};
 use crescendo_core::listening::ListeningProgress;
 use crescendo_core::model::{Track, MAX_SEEK_MS};
 pub use crescendo_core::playback::Status;
-use crescendo_core::playback::{Playback, StreamStarted};
+use crescendo_core::playback::{Playback, ReloadRetry, StreamStarted};
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
@@ -335,6 +335,7 @@ struct Engine {
     /// Where to move a reloaded stream once it has prerolled; set exactly while
     /// `Playback` is reloading. See `seek_audible`.
     pending_seek: Option<gstreamer::ClockTime>,
+    reload_retry: ReloadRetry,
     current_duration_ms: u64,
     /// Playback errors since a track last played for a second or the user
     /// last picked a track; see `Playback::failed`.
@@ -487,6 +488,7 @@ fn run_player(
         rate: 1.0,
         rate_pending: false,
         pending_seek: None,
+        reload_retry: ReloadRetry::default(),
         current_duration_ms: 0,
         consecutive_failures: 0,
     };
@@ -802,6 +804,9 @@ impl Engine {
                     err.error(),
                     err.debug()
                 );
+                if self.retry_reload() {
+                    return;
+                }
                 let _ = self.app.emit("player:error", err.error().to_string());
                 // Skip to the next track rather than going silent.
                 self.consecutive_failures += 1;
@@ -844,6 +849,7 @@ impl Engine {
             }
             MessageView::AsyncDone(_) => {
                 if let Some(position) = self.pending_seek.take() {
+                    self.reload_retry.moved(position.nseconds(), Instant::now());
                     self.seek_at_rate(position);
                     let resume = self.playback().reloaded();
                     if resume {
@@ -861,6 +867,8 @@ impl Engine {
                 match started {
                     StreamStarted::Stop => self.stop(),
                     StreamStarted::HandedOver => {
+                        // A retry would reload the track the move was not for.
+                        self.reload_retry.forget();
                         // Finish the outgoing session before starting the next;
                         // queued scrobbles already contain a snapshot of its tags.
                         self.commit_play();
@@ -892,6 +900,7 @@ impl Engine {
 
     fn start_track(&mut self, track_id: i64) {
         self.pending_seek = None;
+        self.reload_retry.forget();
         // Credit the outgoing track (still live, so its position is queryable)
         // before we tear its stream down.
         self.commit_play();
@@ -930,6 +939,7 @@ impl Engine {
 
     fn stop(&mut self) {
         self.pending_seek = None;
+        self.reload_retry.forget();
         self.playback().begin_stop();
         self.commit_play();
         self.stop_streams(gstreamer::State::Null);
@@ -1069,23 +1079,36 @@ impl Engine {
         if self.pending_seek.is_some() {
             self.pending_seek = Some(position);
         } else if self.playback().handoff_reserved() {
+            self.reload_retry.forget();
             self.reload_at(position);
         } else {
+            self.reload_retry
+                .seeked(position.nseconds(), Instant::now());
             self.seek_at_rate(position);
         }
     }
 
-    fn reload_at(&mut self, position: gstreamer::ClockTime) {
+    /// Whether a playback error was the reload's own and has been handled.
+    fn retry_reload(&mut self) -> bool {
+        let Some(position) = self.reload_retry.retry(Instant::now()) else {
+            return false;
+        };
+        log::warn!("the move after a reload failed; reloading again");
+        self.reload_at(gstreamer::ClockTime::from_nseconds(position))
+    }
+
+    /// False if the playing track could not be reloaded.
+    fn reload_at(&mut self, position: gstreamer::ClockTime) -> bool {
         let track = self.playback().track();
         let uri = track
             .and_then(|id| self.db.track_by_id(id).ok().flatten())
             .and_then(|track| gstreamer::glib::filename_to_uri(&track.path, None).ok());
         let Some(uri) = uri else {
             log::error!("cannot reload the playing track to seek in it");
-            return;
+            return false;
         };
         if self.playback().begin_reload().is_none() {
-            return;
+            return false;
         }
         self.stop_streams(gstreamer::State::Ready);
         // As in start_track: nothing the old stream posted applies to this one.
@@ -1101,6 +1124,7 @@ impl Engine {
         if let Some(session) = &mut self.listening {
             session.progress.reset_position();
         }
+        true
     }
 
     fn seek_at_rate(&mut self, position: gstreamer::ClockTime) {

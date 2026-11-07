@@ -15,6 +15,7 @@
 use crate::playqueue::{PlayQueue, Step};
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 /// Stop rather than keep skipping once this many tracks in a row failed to
 /// play: past that, the music folder is most likely unmounted.
@@ -341,10 +342,133 @@ impl Playback {
     }
 }
 
+/// How long after a reloaded stream is moved an error is blamed on the move.
+const RELOAD_SETTLE: Duration = Duration::from_secs(1);
+/// Each move hits the error independently, about one time in twelve.
+const RELOAD_RETRIES: u32 = 2;
+
+/// Whether a playback error is really the reload's. Moving a stream just after it
+/// prerolled can make GStreamer's FLAC parser fail on a good file (1.28.8,
+/// `streaming stopped, reason error (-5)`, about 1 ms after the seek). Taken for a
+/// broken file, that would skip to the next track, so it reloads and moves again
+/// first. A file that keeps failing is then treated as broken like any other.
+#[derive(Debug, Default)]
+pub struct ReloadRetry {
+    /// Where the stream was last moved to, in nanoseconds, and when.
+    moved: Option<(u64, Instant)>,
+    attempts: u32,
+}
+
+impl ReloadRetry {
+    /// A reloaded stream was just moved.
+    pub fn moved(&mut self, position_ns: u64, now: Instant) {
+        self.moved = Some((position_ns, now));
+    }
+
+    /// A plain seek while still settling: it moves the same fresh stream, and a
+    /// retry must go to where it was sent.
+    pub fn seeked(&mut self, position_ns: u64, now: Instant) {
+        if self.moved.is_some_and(|(_, at)| now - at < RELOAD_SETTLE) {
+            self.moved = Some((position_ns, now));
+        }
+    }
+
+    /// Nothing to protect any more: another track, a stop, or a new reload.
+    pub fn forget(&mut self) {
+        *self = Self::default();
+    }
+
+    /// A playback error arrived. Where to reload to, or None if it is the file's.
+    pub fn retry(&mut self, now: Instant) -> Option<u64> {
+        let (position_ns, at) = self.moved.take()?;
+        if now - at >= RELOAD_SETTLE || self.attempts >= RELOAD_RETRIES {
+            return None;
+        }
+        self.attempts += 1;
+        Some(position_ns)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::playqueue::RepeatMode;
+
+    #[test]
+    fn an_error_right_after_a_reload_retries_to_the_same_place() {
+        let now = Instant::now();
+        let mut retry = ReloadRetry::default();
+        retry.moved(5, now);
+        assert_eq!(retry.retry(now + Duration::from_millis(2)), Some(5));
+    }
+
+    #[test]
+    fn an_error_with_no_reload_or_after_it_settled_is_the_files() {
+        let now = Instant::now();
+        let mut retry = ReloadRetry::default();
+        assert_eq!(retry.retry(now), None);
+        retry.moved(5, now);
+        assert_eq!(retry.retry(now + RELOAD_SETTLE), None);
+    }
+
+    #[test]
+    fn a_file_that_keeps_failing_runs_out_of_retries() {
+        let now = Instant::now();
+        let mut retry = ReloadRetry::default();
+        for _ in 0..RELOAD_RETRIES {
+            retry.moved(5, now);
+            assert_eq!(retry.retry(now), Some(5));
+        }
+        retry.moved(5, now);
+        assert_eq!(retry.retry(now), None);
+    }
+
+    #[test]
+    fn one_error_uses_up_one_move() {
+        // A decoder usually posts two errors for one failure.
+        let now = Instant::now();
+        let mut retry = ReloadRetry::default();
+        retry.moved(5, now);
+        assert_eq!(retry.retry(now), Some(5));
+        assert_eq!(retry.retry(now), None);
+    }
+
+    #[test]
+    fn a_seek_while_settling_changes_where_a_retry_goes() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(100);
+        let mut retry = ReloadRetry::default();
+        retry.moved(5, now);
+        retry.seeked(9, later);
+        assert_eq!(retry.retry(later), Some(9));
+    }
+
+    #[test]
+    fn a_seek_that_follows_no_recent_reload_is_not_protected() {
+        let now = Instant::now();
+        let mut retry = ReloadRetry::default();
+        retry.seeked(9, now);
+        assert_eq!(retry.retry(now), None);
+        retry.moved(5, now);
+        let settled = now + RELOAD_SETTLE;
+        retry.seeked(9, settled);
+        assert_eq!(retry.retry(settled), None);
+    }
+
+    #[test]
+    fn forgetting_gives_a_new_reload_all_its_retries() {
+        let now = Instant::now();
+        let mut retry = ReloadRetry::default();
+        retry.moved(5, now);
+        retry.retry(now);
+        retry.moved(5, now);
+        retry.forget();
+        assert_eq!(retry.retry(now), None);
+        for _ in 0..RELOAD_RETRIES {
+            retry.moved(7, now);
+            assert_eq!(retry.retry(now), Some(7));
+        }
+    }
 
     /// Playing `ids[start]`, its stream started.
     fn playing(ids: &[i64], start: usize) -> Playback {
