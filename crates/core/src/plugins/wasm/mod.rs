@@ -99,6 +99,7 @@ pub struct RuntimePaths {
 }
 
 /// A loaded Wasm plugin the runtime should instantiate.
+#[derive(Clone)]
 pub struct WasmPluginSpec {
     pub id: String,
     pub module_path: PathBuf,
@@ -203,6 +204,16 @@ impl RuntimeStates {
         self.with_plugin(plugin_id, |state| {
             state.ready = true;
             state.error = None;
+        });
+    }
+
+    /// The plugin cannot run again this session, whatever the failure count.
+    fn mark_unhealthy(&self, plugin_id: &str, message: &str) {
+        let message = truncate_on_boundary(message, MAX_GUEST_ERROR_BYTES);
+        self.push_diagnostic(plugin_id, &message);
+        self.with_plugin(plugin_id, |state| {
+            state.unhealthy = true;
+            state.error = Some(message);
         });
     }
 
@@ -952,6 +963,10 @@ fn valid_playlist_name(name: &str) -> bool {
 struct PluginInstance {
     instance: CrescendoPlugin,
     store: Store<StoreData>,
+    /// What a replacement is built from, already compiled so that replacing a
+    /// trapped instance does not depend on the package or repeat that work.
+    spec: WasmPluginSpec,
+    component: Component,
 }
 
 fn run(
@@ -1001,6 +1016,8 @@ fn run(
         engine: &engine,
         linker: build_linker(&engine),
         plugins: BTreeMap::new(),
+        trapped: Vec::new(),
+        ready_delivered: false,
         db,
         limits,
         states,
@@ -1084,6 +1101,10 @@ struct RuntimeThread<'a> {
     engine: &'a Engine,
     linker: Linker<StoreData>,
     plugins: BTreeMap<String, PluginInstance>,
+    /// Plugins whose call trapped while handling the current message.
+    trapped: Vec<String>,
+    /// Whether `on-ready` has gone out, so a replacement instance still gets it.
+    ready_delivered: bool,
     db: Arc<Db>,
     limits: RuntimeLimits,
     states: Arc<RuntimeStates>,
@@ -1185,13 +1206,64 @@ impl RuntimeThread<'_> {
                     self.dispatch_event(&event);
                 }
             }
+            // After the reply went out, so a slow `init` cannot delay the error
+            // or outlast the caller's wait, and before the next message.
+            self.replace_trapped();
         }
+    }
+
+    /// Wasmtime never lets an instance be entered again once it has trapped, so
+    /// a command that failed alone needs a new instance for the next call to
+    /// work. Guest memory starts over; namespaced storage does not.
+    fn replace_trapped(&mut self) {
+        for plugin_id in std::mem::take(&mut self.trapped) {
+            if self.states.info(&plugin_id).unhealthy {
+                continue;
+            }
+            match self.replace_instance(&plugin_id) {
+                Ok(()) => self.states.push_diagnostic(
+                    &plugin_id,
+                    "restarted after a failure; its in-memory state was reset",
+                ),
+                // Not `record_init_failure`. This plugin has already started once,
+                // so its package is not what the auto-disable count is there for.
+                Err(message) => self.states.mark_unhealthy(
+                    &plugin_id,
+                    &format!("Could not restart after a failure: {message}"),
+                ),
+            }
+        }
+    }
+
+    fn replace_instance(&mut self, plugin_id: &str) -> Result<(), String> {
+        let Some(old) = self.plugins.get(plugin_id) else {
+            return Ok(());
+        };
+        let (spec, component) = (old.spec.clone(), old.component.clone());
+        let mut fresh = self.start_instance(spec, component)?;
+        if self.ready_delivered {
+            fresh
+                .store
+                .set_fuel(self.limits.fuel)
+                .map_err(|error| format!("could not arm fuel: {error}"))?;
+            fresh.store.set_epoch_deadline(self.limits.epoch_ticks);
+            fresh
+                .instance
+                .crescendo_plugin_commands()
+                .call_on_ready(&mut fresh.store)
+                .map_err(|error| format!("on-ready trapped: {error}"))?;
+        }
+        self.plugins.insert(plugin_id.to_string(), fresh);
+        Ok(())
     }
 
     /// Deliver one event to every ready plugin. A guest that traps or runs out
     /// of fuel here is recorded like any other failure and skipped; one bad
     /// plugin never stops the others from being notified.
     fn dispatch_event(&mut self, event: &HostEvent) {
+        if *event == HostEvent::Ready {
+            self.ready_delivered = true;
+        }
         let ids: Vec<String> = self.plugins.keys().cloned().collect();
         for plugin_id in ids {
             // An unhealthy plugin is done for the session. Invoke and settings
@@ -1229,6 +1301,7 @@ impl RuntimeThread<'_> {
             if let Err(error) = outcome {
                 self.states
                     .record_failure(&plugin_id, &format!("{event:?} handler failed: {error}"));
+                self.trapped.push(plugin_id);
             }
         }
     }
@@ -1244,32 +1317,8 @@ impl RuntimeThread<'_> {
         let bytes = read_module(&spec.module_path).map_err(|error| format!("{error:#}"))?;
         let component = Component::new(self.engine, bytes)
             .map_err(|error| format!("module.wasm is not a valid component: {error}"))?;
-        let mut store = Store::new(
-            self.engine,
-            StoreData::new(
-                spec,
-                self.db.clone(),
-                self.states.clone(),
-                self.player.clone(),
-                self.notifier.clone(),
-            )
-            .map_err(|error| format!("{error:#}"))?,
-        );
-        store.limiter(|data| &mut data.limiter);
-        store
-            .set_fuel(self.limits.fuel)
-            .map_err(|error| format!("could not arm fuel: {error}"))?;
-        store.set_epoch_deadline(self.limits.epoch_ticks);
-        let instance = CrescendoPlugin::instantiate(&mut store, &component, &self.linker)
-            .map_err(|error| format!("could not instantiate the component: {error}"))?;
-        instance
-            .crescendo_plugin_commands()
-            .call_init(&mut store)
-            .map_err(|error| format!("init trapped: {error}"))
-            .and_then(|result| result.map_err(|()| "init returned an error".to_string()))?;
-
-        self.plugins
-            .insert(spec.id.clone(), PluginInstance { instance, store });
+        let plugin = self.start_instance(spec.clone(), component)?;
+        self.plugins.insert(spec.id.clone(), plugin);
         self.states.mark_ready(&spec.id);
         // `mark_ready` clears only this session's view. The persisted count is
         // what decides auto-disable, and it must mean *consecutive* failures:
@@ -1289,6 +1338,43 @@ impl RuntimeThread<'_> {
             let _ = self.db.plugin_record_error(&spec.id, None);
         }
         Ok(())
+    }
+
+    /// Instantiate a compiled component and run its `init`.
+    fn start_instance(
+        &self,
+        spec: WasmPluginSpec,
+        component: Component,
+    ) -> Result<PluginInstance, String> {
+        let mut store = Store::new(
+            self.engine,
+            StoreData::new(
+                &spec,
+                self.db.clone(),
+                self.states.clone(),
+                self.player.clone(),
+                self.notifier.clone(),
+            )
+            .map_err(|error| format!("{error:#}"))?,
+        );
+        store.limiter(|data| &mut data.limiter);
+        store
+            .set_fuel(self.limits.fuel)
+            .map_err(|error| format!("could not arm fuel: {error}"))?;
+        store.set_epoch_deadline(self.limits.epoch_ticks);
+        let instance = CrescendoPlugin::instantiate(&mut store, &component, &self.linker)
+            .map_err(|error| format!("could not instantiate the component: {error}"))?;
+        instance
+            .crescendo_plugin_commands()
+            .call_init(&mut store)
+            .map_err(|error| format!("init trapped: {error}"))
+            .and_then(|result| result.map_err(|()| "init returned an error".to_string()))?;
+        Ok(PluginInstance {
+            instance,
+            store,
+            spec,
+            component,
+        })
     }
 
     /// Startup-initialization failure. The plugin stays installed; repeated
@@ -1392,6 +1478,7 @@ impl RuntimeThread<'_> {
                     MAX_GUEST_ERROR_BYTES,
                 );
                 self.states.record_failure(plugin_id, &entry);
+                self.trapped.push(plugin_id.to_string());
                 bail!("{entry}")
             }
         }
@@ -1417,6 +1504,7 @@ impl RuntimeThread<'_> {
                 plugin_id,
                 &format!("on-settings-changed trapped: {error:#}"),
             );
+            self.trapped.push(plugin_id.to_string());
         }
     }
 }

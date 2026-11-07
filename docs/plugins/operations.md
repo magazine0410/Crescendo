@@ -20,8 +20,9 @@ approval action records exactly that package — its version and SHA-256 — and
 any update must be approved again before it can load. Enabling a Wasm plugin
 that requests capabilities is rejected until they are approved. A sandboxed
 plugin that traps, exceeds its fuel or wall-clock budget, or fails to
-initialize is reported under its entry; after repeated runtime failures it is
-marked unhealthy for the session, and after repeated startup-init failures it
+initialize is reported under its entry. A runtime failure restarts it with its
+in-memory state reset; after repeated runtime failures, or a failed restart, it
+is marked unhealthy for the session, and after repeated startup-init failures it
 is disabled automatically. Its bounded runtime log is shown in Settings, and a
 plugin failure never interrupts playback or blocks startup.
 

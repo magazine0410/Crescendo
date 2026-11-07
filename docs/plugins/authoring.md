@@ -139,8 +139,11 @@ handler stops it from instantiating at all.
 There is no WASI: no filesystem, environment, process, socket, clock, or
 database access, and no per-track execution. Each plugin runs as one isolated
 component on a dedicated runtime thread with a 64 MiB memory limit, per-call
-fuel, and a wall-clock deadline. Repeated runtime failures mark the plugin
-unhealthy for the session; repeated startup-init failures auto-disable it.
+fuel, and a wall-clock deadline. A call that traps or exceeds those limits fails
+alone and the host restarts the component: `init` and `on-ready` run again and
+guest memory starts empty, so keep anything that must survive in `storage`.
+Repeated runtime failures mark the plugin unhealthy for the session; repeated
+startup-init failures auto-disable it.
 
 ### Rust bindings
 

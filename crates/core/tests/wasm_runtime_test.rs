@@ -4,7 +4,7 @@
 
 use crescendo_core::db::Db;
 use crescendo_core::plugins::wasm::{
-    HostEvent, RuntimeLimits, RuntimePaths, WasmHandle, WasmPluginSpec,
+    HostEvent, RuntimeLimits, RuntimePaths, WasmHandle, WasmPluginSpec, UNHEALTHY_FAILURE_LIMIT,
 };
 use crescendo_core::plugins::{
     PluginCommandDeclaration, PluginContributions, PluginKind, PluginManager, PluginManifest,
@@ -26,6 +26,8 @@ const MODULE: &[u8] = include_bytes!("fixtures/wasm-demo-module.wasm");
 /// unchanged so every later host keeps proving that a component built for an
 /// older compatible API still loads. Never rebuild this file.
 const LEGACY_MODULE: &[u8] = include_bytes!("fixtures/wasm-legacy-0.2.0-module.wasm");
+/// Fails on request; built from `fixtures/wasm-fault-plugin`.
+const FAULT_MODULE: &[u8] = include_bytes!("fixtures/wasm-fault-module.wasm");
 const PLUGIN_ID: &str = "dev.crescendo.wasm-demo";
 
 fn wasm_manifest(version: &str, permissions: &[&str]) -> PluginManifest {
@@ -648,6 +650,194 @@ fn guest_work_is_bounded_by_fuel() {
     }
     assert!(handle.invoke(PLUGIN_ID, "spin", "{}").is_err());
     assert!(handle.runtime_info(PLUGIN_ID).error.is_some());
+}
+
+fn spawn_ready(
+    dir: &TempDir,
+    db: Arc<Db>,
+    module: &[u8],
+    permissions: &[&str],
+    limits: RuntimeLimits,
+) -> WasmHandle {
+    let module_path = dir.path().join("module.wasm");
+    std::fs::write(&module_path, module).unwrap();
+    let spec = WasmPluginSpec {
+        id: PLUGIN_ID.into(),
+        module_path,
+        manifest: Arc::new(wasm_manifest("1.0.0", permissions)),
+    };
+    let handle = WasmHandle::spawn(
+        vec![spec],
+        db,
+        limits,
+        Default::default(),
+        Default::default(),
+        RuntimePaths {
+            safe_mode_marker: dir.path().join("safe-mode-requested"),
+        },
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !handle.runtime_info(PLUGIN_ID).ready {
+        assert!(Instant::now() < deadline, "plugin never initialized");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    handle
+}
+
+fn test_db(dir: &TempDir) -> Arc<Db> {
+    Arc::new(Db::open(&dir.path().join("library.db")).unwrap())
+}
+
+/// Long enough for `init` and short enough that a spinning guest stops quickly.
+const SHORT_DEADLINE: RuntimeLimits = RuntimeLimits {
+    fuel: 2_000_000_000,
+    epoch_ticks: 100,
+    invoke_timeout: Duration::from_secs(5),
+};
+
+/// Wasmtime never lets an instance be entered again once it has trapped, so
+/// recovering means replacing it. The later calls prove that, and that only the
+/// failures themselves count: harmless commands in between add nothing.
+#[test]
+fn a_trap_fails_alone_and_only_repeated_traps_mark_the_plugin_unhealthy() {
+    let traps = [
+        ("epoch deadline", SHORT_DEADLINE),
+        (
+            "fuel",
+            RuntimeLimits {
+                fuel: 500_000,
+                epoch_ticks: 100_000,
+                invoke_timeout: Duration::from_secs(5),
+            },
+        ),
+    ];
+    for (trap, limits) in traps {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = spawn_ready(&dir, test_db(&dir), MODULE, &[], limits);
+        for failure in 1..UNHEALTHY_FAILURE_LIMIT {
+            assert!(handle.invoke(PLUGIN_ID, "spin", "{}").is_err());
+            for _ in 0..UNHEALTHY_FAILURE_LIMIT {
+                assert_eq!(
+                    handle
+                        .invoke(PLUGIN_ID, "identity", "{}")
+                        .unwrap_or_else(|error| panic!("{trap}, trap {failure}: {error:#}")),
+                    "{}"
+                );
+            }
+            let info = handle.runtime_info(PLUGIN_ID);
+            assert!(info.ready && !info.unhealthy, "{trap}, trap {failure}");
+            assert!(info.error.is_some(), "the last failure stays visible");
+        }
+
+        assert!(handle.invoke(PLUGIN_ID, "spin", "{}").is_err());
+        assert!(handle.runtime_info(PLUGIN_ID).unhealthy, "{trap}");
+        let refused = handle.invoke(PLUGIN_ID, "identity", "{}").unwrap_err();
+        assert!(format!("{refused:#}").contains("unhealthy"), "{trap}");
+    }
+}
+
+/// The control: a guest that returns an error has not trapped, is not counted,
+/// and keeps its instance and so its memory.
+#[test]
+fn a_guest_error_leaves_the_instance_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let handle = spawn_ready(&dir, test_db(&dir), FAULT_MODULE, &[], SHORT_DEADLINE);
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "1");
+    for _ in 0..UNHEALTHY_FAILURE_LIMIT + 1 {
+        assert!(handle.invoke(PLUGIN_ID, "no_such_command", "").is_err());
+    }
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "2");
+    assert!(!handle.runtime_info(PLUGIN_ID).unhealthy);
+}
+
+#[test]
+fn a_replacement_starts_with_fresh_memory_keeps_storage_and_sees_on_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let handle = spawn_ready(
+        &dir,
+        test_db(&dir),
+        FAULT_MODULE,
+        &["storage"],
+        SHORT_DEADLINE,
+    );
+    let on_ready_seen = |handle: &WasmHandle| {
+        handle
+            .runtime_info(PLUGIN_ID)
+            .diagnostics
+            .iter()
+            .filter(|entry| entry.contains("saw on-ready"))
+            .count()
+    };
+    handle.notify_event(HostEvent::Ready);
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "1");
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "2");
+    assert_eq!(on_ready_seen(&handle), 1);
+    handle.invoke(PLUGIN_ID, "store", "kept").unwrap();
+
+    assert!(handle.invoke(PLUGIN_ID, "spin", "").is_err());
+
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "1");
+    assert_eq!(handle.invoke(PLUGIN_ID, "load", "").unwrap(), "kept");
+    assert_eq!(on_ready_seen(&handle), 2, "setup done there must run again");
+    assert!(handle
+        .runtime_info(PLUGIN_ID)
+        .diagnostics
+        .iter()
+        .any(|entry| entry.contains("restarted")));
+}
+
+#[test]
+fn a_trap_in_an_event_handler_replaces_the_instance_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let handle = spawn_ready(
+        &dir,
+        test_db(&dir),
+        FAULT_MODULE,
+        &["library.read"],
+        SHORT_DEADLINE,
+    );
+    handle.invoke(PLUGIN_ID, "arm_event_spin", "").unwrap();
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "1");
+
+    handle.notify_event(HostEvent::LibraryChanged);
+
+    // The runtime handles messages in order, so the event has run by now.
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "1");
+    let info = handle.runtime_info(PLUGIN_ID);
+    assert!(!info.unhealthy);
+    assert!(info.error.unwrap_or_default().contains("handler failed"));
+
+    // The replacement is not armed, so further events do no harm.
+    handle.notify_event(HostEvent::LibraryChanged);
+    assert_eq!(handle.invoke(PLUGIN_ID, "count", "").unwrap(), "2");
+}
+
+/// A plugin that has already started once failing to restart says nothing about
+/// whether it can start: this must not reach the persisted auto-disable count,
+/// which would turn off a plugin the user enabled, or ask for safe mode.
+#[test]
+fn a_failed_restart_ends_the_session_for_the_plugin_without_auto_disabling_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = test_db(&dir);
+    db.plugin_state_ensure(PLUGIN_ID).unwrap();
+    db.plugin_set_desired_enabled(PLUGIN_ID, true).unwrap();
+    let handle = spawn_ready(&dir, db.clone(), FAULT_MODULE, &["storage"], SHORT_DEADLINE);
+    handle.invoke(PLUGIN_ID, "arm_init_failure", "").unwrap();
+
+    assert!(handle.invoke(PLUGIN_ID, "spin", "").is_err());
+
+    // Sends a message through the queue, so the restart attempt has finished.
+    let refused = handle.invoke(PLUGIN_ID, "count", "").unwrap_err();
+    assert!(format!("{refused:#}").contains("unhealthy"), "{refused:#}");
+    let info = handle.runtime_info(PLUGIN_ID);
+    assert!(info.unhealthy);
+    assert!(info.error.unwrap_or_default().contains("restart"));
+
+    let state = db.plugin_state_get(PLUGIN_ID).unwrap().unwrap();
+    assert!(state.desired_enabled);
+    assert_eq!(state.init_failures, 0);
+    assert!(!dir.path().join("safe-mode-requested").exists());
 }
 
 /// Auto-disable counts failed starts only. Every other plugin error (a

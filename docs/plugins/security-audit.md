@@ -78,13 +78,17 @@ against something the host owns:
 | Playlist reads | windowed in SQL, ids only |
 | HTTP | HTTPS only, response size cap, one deadline across all redirects |
 
-A trapped or timed-out command fails alone. Three failures in a session mark
-the plugin unhealthy; a second startup-initialization failure disables it and
+A trapped or timed-out command fails alone: Wasmtime will not enter a trapped
+instance again, so the runtime replaces it from the compiled component, which
+resets guest memory and keeps namespaced storage. Three failures in a session,
+or one failed restart, mark the plugin unhealthy; a second startup-initialization failure disables it and
 asks for one safe-mode run. None of this reaches the player: the runtime is a
 separate thread and holds no player state.
 
 Covered by `guest_work_is_bounded_by_fuel`,
 `guest_work_is_bounded_by_the_epoch_deadline_and_failures_mark_it_unhealthy`,
+`a_trap_fails_alone_and_only_repeated_traps_mark_the_plugin_unhealthy`,
+`a_failed_restart_ends_the_session_for_the_plugin_without_auto_disabling_it`,
 `table_growth_is_charged_against_the_instance_budget`,
 `a_broken_module_fails_isolated_and_auto_disables_after_repeated_startups`,
 and `storage_is_namespaced_per_plugin_and_bounded_by_the_quota`.

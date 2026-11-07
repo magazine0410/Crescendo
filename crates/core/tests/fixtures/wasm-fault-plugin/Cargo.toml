@@ -1,0 +1,19 @@
+[package]
+name = "crescendo-wasm-fault"
+version = "0.1.0"
+edition = "2021"
+description = "Test plugin that fails on request, for wasm_runtime_test"
+license = "MIT"
+publish = false
+
+# Excluded from the Crescendo workspace: it only builds for wasm32-unknown-unknown.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+crescendo-plugin-sdk = { path = "../../../../../plugin-sdk/bindings/rust" }
+
+[profile.release]
+opt-level = "s"
