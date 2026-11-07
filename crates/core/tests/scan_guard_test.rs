@@ -151,7 +151,7 @@ fn unreadable_subdirectory_does_not_hide_its_tracks() {
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(sub.join("track.flac"), b"fixture").unwrap();
     scan_at(&db, &root).unwrap();
-    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
     let result = scan_at(&db, &root);
     std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.unwrap_err().to_string().contains("scan incomplete"));
