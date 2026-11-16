@@ -260,6 +260,7 @@ pub fn run() {
             commands::playlists::playlist_reorder,
             commands::playlists::playlist_add_paths,
             commands::playlists::playlist_import_m3u,
+            commands::playlists::playlist_export_m3u,
             commands::playlists::collection_list,
             commands::playlists::collection_set,
             commands::playlists::collection_rename,

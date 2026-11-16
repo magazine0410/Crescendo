@@ -74,6 +74,7 @@
     "allow-playlist-reorder",
     "allow-playlist-add-paths",
     "allow-playlist-import-m3u",
+    "allow-playlist-export-m3u",
     "allow-collection-list",
     "allow-collection-set",
     "allow-collection-rename",

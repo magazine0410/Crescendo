@@ -97,6 +97,14 @@ export interface M3uImportResult {
   missing: string[];
 }
 
+export interface M3uExportResult {
+  /** The .m3u files written. */
+  files: string[];
+  tracks: number;
+  /** Songs whose file was missing; their paths are written anyway. */
+  missing: number;
+}
+
 /** Outcome of dropping files/folders onto a playlist. */
 export interface DropImportResult {
   added: number;

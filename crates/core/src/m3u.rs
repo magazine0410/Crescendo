@@ -1,4 +1,5 @@
 use crate::db::Db;
+use crate::model::Track;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -15,20 +16,35 @@ pub struct M3uImportResult {
     pub missing: Vec<String>,
 }
 
-/// Import an .m3u/.m3u8 file as a new playlist. Lines resolve absolute, or
-/// relative to the m3u's directory; entries not present in the library are
+/// The playlist file formats [`import`] reads. Export writes M3U only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    M3u,
+    Pls,
+    Xspf,
+}
+
+fn format_of(path: &Path) -> Option<Format> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "m3u" | "m3u8" => Some(Format::M3u),
+        "pls" => Some(Format::Pls),
+        "xspf" => Some(Format::Xspf),
+        _ => None,
+    }
+}
+
+/// Import an .m3u/.m3u8, .pls or .xspf file as a new playlist. Entries resolve
+/// absolute, or relative to the playlist's directory; `file://` URIs are
+/// decoded. Entries not present in the library (web streams included) are
 /// reported back, not silently dropped.
 pub fn import(db: &Db, m3u_path: &Path) -> Result<M3uImportResult> {
     // The path comes from the webview. Its unmatched lines are returned as
     // `missing`, so without these checks any readable file could be read
     // back line by line, and /dev/zero or a FIFO would hang the import.
-    let is_playlist = m3u_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("m3u") || e.eq_ignore_ascii_case("m3u8"));
-    if !is_playlist {
-        anyhow::bail!("only .m3u and .m3u8 files can be imported");
-    }
+    let Some(format) = format_of(m3u_path) else {
+        anyhow::bail!("only .m3u, .m3u8, .pls and .xspf files can be imported");
+    };
     let meta = std::fs::metadata(m3u_path)?;
     if !meta.is_file() {
         anyhow::bail!("the playlist is not a regular file");
@@ -41,15 +57,22 @@ pub fn import(db: &Db, m3u_path: &Path) -> Result<M3uImportResult> {
         &mut std::io::Read::take(std::fs::File::open(m3u_path)?, MAX_M3U_BYTES),
         &mut bytes,
     )?;
-    // .m3u8 is UTF-8 by definition; plain .m3u is assumed UTF-8 too (lossy
-    // fallback keeps imports working on stray encodings).
+    // .m3u8 and XSPF are UTF-8 by definition; .m3u and .pls are assumed UTF-8
+    // too (lossy fallback keeps imports working on stray encodings).
     let content = String::from_utf8_lossy(&bytes);
     let base = m3u_path.parent().unwrap_or_else(|| Path::new("/"));
 
-    let name = m3u_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Imported playlist".into());
+    let (title, entries) = match format {
+        Format::M3u => (None, m3u_entries(&content)),
+        Format::Pls => (None, pls_entries(&content)),
+        Format::Xspf => xspf_entries(&content)?,
+    };
+    let name = title.unwrap_or_else(|| {
+        m3u_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Imported playlist".into())
+    });
 
     let mut track_ids = Vec::new();
     let mut missing = Vec::new();
@@ -61,9 +84,28 @@ pub fn import(db: &Db, m3u_path: &Path) -> Result<M3uImportResult> {
         let conn = db.side_connection()?;
         let mut lookup = conn.prepare("SELECT id FROM tracks WHERE path = ?1")?;
         let mut windows_index: Option<HashMap<String, Vec<(i64, String)>>> = None;
-        for line in content.lines() {
-            let line = line.trim().trim_start_matches('\u{feff}');
-            if line.is_empty() || line.starts_with('#') {
+        for entry in &entries {
+            // XSPF locations are URIs, relative ones included; in M3U and PLS
+            // only an explicit file:// entry is one.
+            let decoded = match entry {
+                Entry::Uri(uri) => uri_to_path(uri, base),
+                Entry::Path(path) if path.starts_with("file:") => uri_to_path(path, base),
+                Entry::Path(_) | Entry::Untitled(_) => None,
+            };
+            // A web address in an M3U or PLS is reported as written, not
+            // taken for a relative path.
+            let web = matches!(entry, Entry::Path(p) if is_web_address(p));
+            let line = match (&decoded, entry) {
+                (Some(path), _) => path.as_str(),
+                (None, Entry::Path(text) | Entry::Uri(text) | Entry::Untitled(text)) => text.as_str(),
+            };
+            if web
+                || matches!(entry, Entry::Untitled(_))
+                || (matches!(entry, Entry::Uri(_)) && decoded.is_none())
+            {
+                // Not a file this computer has: a web address or a track
+                // that names no location at all.
+                missing.push(line.to_string());
                 continue;
             }
             let (candidates, windows_suffix) = entry_candidates(line, base);
@@ -144,6 +186,139 @@ pub fn import(db: &Db, m3u_path: &Path) -> Result<M3uImportResult> {
     })
 }
 
+/// One song a playlist names, before it is matched against the library.
+#[derive(Debug, Clone, PartialEq)]
+enum Entry {
+    /// A filesystem path, absolute or relative (M3U and PLS).
+    Path(String),
+    /// A URI, absolute or relative to the playlist (XSPF `<location>`).
+    Uri(String),
+    /// An XSPF track without a location, reported by its title.
+    Untitled(String),
+}
+
+fn m3u_entries(content: &str) -> Vec<Entry> {
+    content
+        .lines()
+        .map(|line| line.trim().trim_start_matches('\u{feff}'))
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| Entry::Path(line.to_string()))
+        .collect()
+}
+
+/// `File1=…`, `File2=…`, in their numbered order (the [playlist] section's
+/// other keys, titles and lengths, are not needed to find the files).
+fn pls_entries(content: &str) -> Vec<Entry> {
+    let mut numbered: Vec<(u32, String)> = content
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.trim().trim_start_matches('\u{feff}').split_once('=')?;
+            let key = key.trim().to_ascii_lowercase();
+            let n: u32 = key.strip_prefix("file")?.parse().ok()?;
+            let value = value.trim();
+            (!value.is_empty()).then(|| (n, value.to_string()))
+        })
+        .collect();
+    numbered.sort_by_key(|(n, _)| *n);
+    numbered.into_iter().map(|(_, value)| Entry::Path(value)).collect()
+}
+
+/// The playlist's `<title>` and each track's first `<location>`, read with
+/// quick-xml, which never loads external entities.
+fn xspf_entries(content: &str) -> Result<(Option<String>, Vec<Entry>)> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(content);
+    // Element names from the root down, without namespace prefixes.
+    let mut stack: Vec<String> = Vec::new();
+    let mut text = String::new();
+    let mut playlist_title = None;
+    let mut entries = Vec::new();
+    // Inside a <track>: its first location, and its title for the report.
+    let mut location: Option<String> = None;
+    let mut track_title: Option<String> = None;
+    loop {
+        let event = reader
+            .read_event()
+            .map_err(|e| anyhow::anyhow!("not a valid XSPF playlist: {e}"))?;
+        match event {
+            Event::Start(start) => {
+                stack.push(start.local_name().as_ref().to_ascii_lowercase());
+                text.clear();
+                if stack.last().map(String::as_str) == Some("track") {
+                    location = None;
+                    track_title = None;
+                }
+            }
+            Event::Text(t) => text.push_str(&t),
+            Event::CData(c) => text.push_str(&c),
+            Event::GeneralRef(r) => match r.resolve_char_ref() {
+                Ok(Some(c)) => text.push(c),
+                _ => match &*r {
+                    "amp" => text.push('&'),
+                    "lt" => text.push('<'),
+                    "gt" => text.push('>'),
+                    "quot" => text.push('"'),
+                    "apos" => text.push('\''),
+                    // An entity the file declared itself is not expanded.
+                    _ => {}
+                },
+            },
+            Event::End(_) => {
+                let path: Vec<&str> = stack.iter().map(String::as_str).collect();
+                let value = text.trim().to_string();
+                match path.as_slice() {
+                    [.., "playlist", "title"] if !value.is_empty() => playlist_title = Some(value),
+                    [.., "track", "location"] if location.is_none() && !value.is_empty() => {
+                        location = Some(value)
+                    }
+                    [.., "track", "title"] if !value.is_empty() => track_title = Some(value),
+                    [.., "track"] => entries.push(match location.take() {
+                        Some(uri) => Entry::Uri(uri),
+                        None => Entry::Untitled(
+                            track_title.take().unwrap_or_else(|| "(a track with no location)".into()),
+                        ),
+                    }),
+                    _ => {}
+                }
+                stack.pop();
+                text.clear();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok((playlist_title, entries))
+}
+
+/// `http://…`, `https://…`, `mms://…` and the like: a scheme of letters,
+/// digits, `+`, `-` or `.`, then "://".
+fn is_web_address(entry: &str) -> bool {
+    entry.split_once("://").is_some_and(|(scheme, _)| {
+        !scheme.eq_ignore_ascii_case("file")
+            && scheme.len() > 1
+            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
+}
+
+/// A file URI, or a URI relative to the playlist's folder, as a path. None
+/// for anything that is not a file on this computer (http and the like).
+fn uri_to_path(uri: &str, base: &Path) -> Option<String> {
+    let parsed = match url::Url::parse(uri) {
+        Ok(url) => url,
+        Err(url::ParseError::RelativeUrlWithoutBase) => {
+            url::Url::from_directory_path(base).ok()?.join(uri).ok()?
+        }
+        Err(_) => return None,
+    };
+    if parsed.scheme() != "file" {
+        return None;
+    }
+    Some(parsed.to_file_path().ok()?.to_string_lossy().to_string())
+}
+
 /// Native path candidates plus an optional suffix for a Windows absolute path.
 /// Native interpretation comes first so a legal Linux filename containing a
 /// backslash continues to work; the slash-converted form is the fallback.
@@ -199,6 +374,157 @@ fn normalize(path: &Path) -> std::path::PathBuf {
         }
     }
     out
+}
+
+#[derive(Debug, Serialize)]
+pub struct M3uExportResult {
+    /// The files written.
+    pub files: Vec<String>,
+    /// Songs written across them.
+    pub tracks: usize,
+    /// Songs whose file was missing at export time; their paths are written
+    /// anyway, so the playlist stays complete.
+    pub missing: usize,
+}
+
+/// A playlist as extended M3U, in UTF-8: an `#EXTM3U` header, then for each
+/// song an `#EXTINF:<seconds>,<Artist> - <Title>` line and its path. A path
+/// below `dir` (the folder the file is written to) is written relative to it,
+/// any other path in full, which is what [`import`] resolves back.
+pub fn render(tracks: &[Track], dir: &Path) -> String {
+    let mut out = String::from("#EXTM3U\n");
+    for track in tracks {
+        let seconds = if track.duration_ms > 0 {
+            (track.duration_ms + 500) / 1000
+        } else {
+            -1
+        };
+        let title = track
+            .title
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| {
+                Path::new(&track.path)
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+        let artist = track
+            .artist
+            .as_ref()
+            .or(track.albumartist.as_ref())
+            .filter(|a| !a.trim().is_empty());
+        let label = match artist {
+            Some(artist) => format!("{artist} - {title}"),
+            None => title,
+        };
+        // One entry per line: a line break in a tag would split it.
+        let label = label.replace(['\r', '\n'], " ");
+        let path = Path::new(&track.path);
+        let line = match path.strip_prefix(dir) {
+            Ok(relative) if !relative.as_os_str().is_empty() => relative.to_string_lossy(),
+            _ => path.to_string_lossy(),
+        };
+        out.push_str(&format!("#EXTINF:{seconds},{label}\n{line}\n"));
+    }
+    out
+}
+
+/// `path`, ending in `.m3u`.
+pub fn with_m3u_extension(path: &Path) -> PathBuf {
+    let is_m3u = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("m3u"));
+    if is_m3u {
+        path.to_path_buf()
+    } else {
+        let mut name = path.as_os_str().to_owned();
+        name.push(".m3u");
+        PathBuf::from(name)
+    }
+}
+
+/// Write one playlist to `file` (given a `.m3u` extension if it lacks one).
+/// The file is written beside its target and renamed over it, so an existing
+/// one is replaced whole or not at all.
+pub fn export_playlist(db: &Db, playlist_id: i64, file: &Path) -> Result<M3uExportResult> {
+    let file = with_m3u_extension(file);
+    let dir = file
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("the playlist needs a folder to be saved in"))?;
+    let tracks = db.playlist_tracks(playlist_id)?;
+    let text = render(&tracks, dir);
+    let tmp = dir.join(format!(
+        ".{}.crescendo-tmp",
+        file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+    ));
+    std::fs::write(&tmp, text)?;
+    if let Err(error) = std::fs::rename(&tmp, &file) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error.into());
+    }
+    Ok(M3uExportResult {
+        files: vec![file.to_string_lossy().to_string()],
+        tracks: tracks.len(),
+        missing: tracks.iter().filter(|t| t.missing).count(),
+    })
+}
+
+/// Write each playlist into `folder` as `<name>.m3u`. An existing file is
+/// never replaced: the name gets " (2)", " (3)", … instead.
+pub fn export_playlists_to_folder(db: &Db, ids: &[i64], folder: &Path) -> Result<M3uExportResult> {
+    if !folder.is_dir() {
+        anyhow::bail!("{} is not a folder", folder.display());
+    }
+    let names: HashMap<i64, String> = db
+        .playlist_list()?
+        .into_iter()
+        .map(|p| (p.id, p.name))
+        .collect();
+    let mut result = M3uExportResult {
+        files: Vec::new(),
+        tracks: 0,
+        missing: 0,
+    };
+    for id in ids {
+        let name = names
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("playlist {id} no longer exists"))?;
+        let file = free_file_name(folder, &file_stem_for(name));
+        let one = export_playlist(db, *id, &file)?;
+        result.files.extend(one.files);
+        result.tracks += one.tracks;
+        result.missing += one.missing;
+    }
+    Ok(result)
+}
+
+/// A playlist name made safe as a file name: no path separators or control
+/// characters, no leading dot, never empty.
+pub fn file_stem_for(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').trim().to_string();
+    if cleaned.is_empty() {
+        "Playlist".into()
+    } else {
+        cleaned
+    }
+}
+
+fn free_file_name(folder: &Path, stem: &str) -> PathBuf {
+    let first = folder.join(format!("{stem}.m3u"));
+    if !first.exists() {
+        return first;
+    }
+    (2..)
+        .map(|n| folder.join(format!("{stem} ({n}).m3u")))
+        .find(|candidate| !candidate.exists())
+        .expect("some numbered name is free")
 }
 
 #[cfg(test)]

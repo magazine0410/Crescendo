@@ -915,6 +915,7 @@ dependencies = [
  "log",
  "md-5",
  "minisign-verify",
+ "quick-xml",
  "regex",
  "rusqlite",
  "semver",

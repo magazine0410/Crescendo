@@ -28,6 +28,9 @@ log = "0.4"
 wasmtime = { version = "48", default-features = false, features = ["cranelift", "component-model", "runtime", "std"] }
 minisign-verify = "0.3"
 base64 = "0.22"
+# Reads XSPF playlists. Already in the tree through Tauri; never expands
+# external entities.
+quick-xml = "0.42"
 
 [dev-dependencies]
 tempfile = "3"

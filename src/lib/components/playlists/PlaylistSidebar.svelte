@@ -76,7 +76,8 @@
       const { open } = await import("@tauri-apps/plugin-dialog");
       const file = await open({
         multiple: false,
-        filters: [{ name: "Playlists", extensions: ["m3u", "m3u8"] }],
+        // Import reads all of these; export writes .m3u only.
+        filters: [{ name: "Playlists", extensions: ["m3u", "m3u8", "pls", "xspf"] }],
       });
       if (typeof file !== "string") return;
       const r = await playlists.importM3u(file);
@@ -86,6 +87,23 @@
           : `Imported "${r.name}": ${r.added} tracks, ${r.missing.length} not in library`;
     } catch (e) {
       importReport = `Import failed: ${e}`;
+    }
+  }
+
+  async function exportM3u(ids: number[]) {
+    if (!isTauri) {
+      importReport = "Export needs the desktop app";
+      return;
+    }
+    try {
+      const r = await playlists.exportM3u(ids);
+      if (!r) return;
+      const where =
+        r.files.length === 1 ? r.files[0].split("/").pop() : `${r.files.length} files`;
+      const missing = r.missing ? `, ${r.missing} with missing files` : "";
+      importReport = `Exported ${r.tracks} songs to ${where}${missing}`;
+    } catch (e) {
+      importReport = `Export failed: ${e}`;
     }
   }
 
@@ -106,6 +124,10 @@
           for (const i of ids) await playlists.remove(i);
         },
       },
+      {
+        label: many ? `Export ${ids.length} playlists…` : "Export playlist…",
+        action: () => exportM3u(ids),
+      },
       { separator: true, label: "" },
       {
         label: many ? `Set collection… (${ids.length} playlists)` : "Set collection…",
@@ -122,8 +144,16 @@
   }
 
   function collectionMenu(e: MouseEvent, id: number, name: string) {
+    const memberIds = playlists.list.filter((p) => p.collection_id === id).map((p) => p.id);
+    const count = memberIds.length;
     openContextMenu(e, [
       { label: "Rename collection", action: () => startCollectionRename(id, name) },
+      {
+        // One playlist opens the Save dialog; several go into a folder.
+        label: `Export ${count} ${count === 1 ? "playlist" : "playlists"}…`,
+        disabled: count === 0,
+        action: count === 0 ? undefined : () => exportM3u(memberIds),
+      },
       {
         // The playlists inside outlive the group that held them.
         label: "Remove collection (keep playlists)",
@@ -292,7 +322,7 @@
     <span class="plus">+</span> Create Playlist
   </button>
   <button class="create" onclick={importM3u}>
-    <span class="plus">⤓</span> Import .m3u / .m3u8
+    <span class="plus">⤓</span> Import playlist
   </button>
   {#if importReport}
     <div class="report">

@@ -3,10 +3,11 @@ use crate::state::AppState;
 use crescendo_core::db::collections::CollectionInfo;
 use crescendo_core::db::playlists::{PlaylistInfo, PlaylistTracks};
 use crescendo_core::import::DropImportResult;
-use crescendo_core::m3u::M3uImportResult;
+use crescendo_core::m3u::{M3uExportResult, M3uImportResult};
 use crescendo_core::model::{PlayContext, Track};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
 pub async fn playlist_list(state: State<'_, AppState>) -> Result<Vec<PlaylistInfo>, String> {
@@ -276,4 +277,69 @@ pub async fn collection_set_collapsed(
         .db
         .collection_set_collapsed(id, collapsed)
         .map_err(|e| e.to_string())
+}
+
+/// Export playlists as .m3u files. One playlist opens a Save dialog; several
+/// go into a folder the user picks, one file each. The backend opens the
+/// dialog itself, so the webview never names a path to write. None when the
+/// dialog was cancelled.
+#[tauri::command]
+pub async fn playlist_export_m3u(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<Option<M3uExportResult>, String> {
+    if ids.is_empty() {
+        return Err("no playlist to export".into());
+    }
+    let db = state.db.clone();
+    let name = match ids.as_slice() {
+        [id] => Some(
+            db.playlist_list()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|p| p.id == *id)
+                .ok_or("the playlist no longer exists")?
+                .name,
+        ),
+        _ => None,
+    };
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let mut dialog = app.dialog().file();
+    // Start in the music folder: songs below the saved file get relative paths.
+    if let Some(dir) = db
+        .prefs_get("library_path")
+        .ok()
+        .flatten()
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_dir())
+    {
+        dialog = dialog.set_directory(dir);
+    }
+    match &name {
+        Some(name) => dialog
+            .set_title("Export playlist as M3U")
+            .set_file_name(format!("{}.m3u", crescendo_core::m3u::file_stem_for(name)))
+            .add_filter("M3U playlist", &["m3u"])
+            .save_file(move |path| {
+                let _ = sender.send(path);
+            }),
+        None => dialog
+            .set_title(format!("Export {} playlists as M3U into a folder", ids.len()))
+            .pick_folder(move |path| {
+                let _ = sender.send(path);
+            }),
+    }
+    let Some(chosen) = receiver.await.map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let path = chosen.into_path().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || match ids.as_slice() {
+        [id] => crescendo_core::m3u::export_playlist(&db, *id, &path),
+        _ => crescendo_core::m3u::export_playlists_to_folder(&db, &ids, &path),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(Some)
+    .map_err(|e| format!("{e:#}"))
 }

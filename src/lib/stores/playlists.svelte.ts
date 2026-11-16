@@ -2,6 +2,7 @@ import {
   call,
   type CollectionInfo,
   type DropImportResult,
+  type M3uExportResult,
   type M3uImportResult,
   type PlayContext,
   type PlaylistInfo,
@@ -447,6 +448,12 @@ class PlaylistsStore {
   async removeTracks(id: number, items: [number, number][]) {
     await call("playlist_remove_tracks", { id, items });
     await this.refresh();
+  }
+
+  /** Export playlists as .m3u: one through a Save dialog, several into a
+      chosen folder. Null when the dialog was cancelled. */
+  async exportM3u(ids: number[]): Promise<M3uExportResult | null> {
+    return call<M3uExportResult | null>("playlist_export_m3u", { ids });
   }
 
   async importM3u(path: string): Promise<M3uImportResult> {
