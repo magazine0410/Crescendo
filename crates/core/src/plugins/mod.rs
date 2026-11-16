@@ -1,7 +1,7 @@
 mod bridge;
 mod manager;
 mod manifest;
-mod net;
+pub(crate) mod net;
 mod package;
 pub mod permissions;
 pub mod tooling;

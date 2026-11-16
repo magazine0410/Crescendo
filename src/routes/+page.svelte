@@ -10,6 +10,7 @@
   import PlaylistsTab from "$lib/components/playlists/PlaylistsTab.svelte";
   import NowPlayingTab from "$lib/components/nowplaying/NowPlayingTab.svelte";
   import VisualizerTab from "$lib/components/visualizer/VisualizerTab.svelte";
+  import RadioTab from "$lib/components/radio/RadioTab.svelte";
   import ContextMenu from "$lib/components/common/ContextMenu.svelte";
   import SettingsDialog from "$lib/components/settings/SettingsDialog.svelte";
   import SetFilterDialog from "$lib/components/library/SetFilterDialog.svelte";
@@ -46,6 +47,8 @@
     if (layout.queuePanelW) ui.queuePanelW = layout.queuePanelW;
     if (layout.libraryValueListW) ui.libraryValueListW = layout.libraryValueListW;
     ui.librarySidebarCollapsed = layout.librarySidebarCollapsed === 1;
+    if (layout.radioPanelW) ui.radioPanelW = layout.radioPanelW;
+    ui.radioSidebarCollapsed = layout.radioSidebarCollapsed === 1;
     ui.playlistSidebarCollapsed = layout.playlistSidebarCollapsed === 1;
     ui.queuePanelCollapsed = layout.queuePanelCollapsed === 1;
     // Flush restored layout while transitions are disabled. Otherwise a saved
@@ -134,6 +137,8 @@
       <PlaylistsTab />
     {:else if ui.activeTab === "nowplaying"}
       <NowPlayingTab />
+    {:else if ui.activeTab === "radio"}
+      <RadioTab />
     {/if}
     {#if visualizerMounted}
       <div class="visualizer-host" class:active={ui.activeTab === "visualizer"}>

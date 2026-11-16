@@ -11,13 +11,14 @@
 //! line is the album artist (what the transport bar shows), falling back to
 //! the track artist.
 
-use crate::player::{Cmd, PlayerHandle, PlayerState, Status, RATE_MAX, RATE_MIN};
+use crate::player::{Cmd, PlayerHandle, PlayerState, StationNow, Status, RATE_MAX, RATE_MIN};
 use crate::plugin_bridge::PositionMirror;
 use crescendo_core::art::{ArtData, ArtStore};
 use crescendo_core::db::{has_cjk, Db};
 use crescendo_core::model::Track;
 use crescendo_core::playqueue::RepeatMode;
 use crescendo_core::plugins::PluginManager;
+use crescendo_core::radio::logo::LogoStore;
 use mpris_server::zbus::{self, fdo};
 use mpris_server::{
     LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property, RootInterface,
@@ -57,6 +58,11 @@ impl Mpris {
 
     fn has_track(&self) -> bool {
         self.state().is_some_and(|state| state.track.is_some())
+    }
+
+    /// A track, or a radio station that is loaded (not just remembered).
+    fn has_media(&self) -> bool {
+        self.state().is_some_and(|state| has_media(&state))
     }
 
     fn send(&self, cmd: Cmd) -> fdo::Result<()> {
@@ -277,11 +283,11 @@ impl PlayerInterface for Mpris {
     }
 
     async fn can_go_next(&self) -> fdo::Result<bool> {
-        Ok(self.has_track())
+        Ok(self.has_media())
     }
 
     async fn can_go_previous(&self) -> fdo::Result<bool> {
-        Ok(self.has_track())
+        Ok(self.has_media())
     }
 
     async fn can_play(&self) -> fdo::Result<bool> {
@@ -289,7 +295,7 @@ impl PlayerInterface for Mpris {
     }
 
     async fn can_pause(&self) -> fdo::Result<bool> {
-        Ok(self.has_track())
+        Ok(self.has_media())
     }
 
     async fn can_seek(&self) -> fdo::Result<bool> {
@@ -430,13 +436,43 @@ fn art_url(db: &Db, art: &ArtStore, track: &Track) -> Option<String> {
     file_uri(&path)
 }
 
+fn has_media(state: &PlayerState) -> bool {
+    state.track.is_some() || (state.station.is_some() && state.status != Status::Stopped)
+}
+
+/// A station shows the song it announces, with the station as the album;
+/// before a song is announced, the station's name is the title.
+fn station_metadata(station: &StationNow, logos: &LogoStore) -> Metadata {
+    let id = station.id.unwrap_or(0);
+    let mut builder = Metadata::builder()
+        .trackid(TrackId::try_from(format!("/dev/crescendo/station/{id}")).unwrap_or_default())
+        .title(station.title.clone().unwrap_or_else(|| station.name.clone()))
+        .album(station.name.clone());
+    if let Some(artist) = &station.artist {
+        builder = builder.artist([artist.clone()]);
+    }
+    if let Some(url) = station
+        .logo
+        .as_deref()
+        .and_then(|key| logos.cached(key))
+        .and_then(|path| file_uri(&path))
+    {
+        builder = builder.art_url(url);
+    }
+    builder.build()
+}
+
 fn build_metadata(
     state: &PlayerState,
     db: &Db,
     art: &ArtStore,
+    logos: &LogoStore,
     prefer_romanized: bool,
 ) -> Metadata {
     let Some(track) = &state.track else {
+        if let Some(station) = state.station.as_ref().filter(|_| has_media(state)) {
+            return station_metadata(station, logos);
+        }
         return Metadata::builder()
             .trackid(TrackId::try_from(NO_TRACK).unwrap_or_default())
             .build();
@@ -484,6 +520,10 @@ struct Published {
     /// The track as last published, so a state event that changes nothing
     /// about the song (pause, volume) does not rebuild its metadata.
     track: Option<Track>,
+    /// Likewise for a station, whose announced song changes its metadata.
+    station: Option<StationNow>,
+    /// A track or a loaded station: Next, Previous and Pause apply.
+    has_media: bool,
     stop_after_current: bool,
     metadata: Metadata,
 }
@@ -498,6 +538,8 @@ impl Published {
             rate: state.rate,
             track_id: state.track.as_ref().map(|track| track.id),
             track: state.track.clone(),
+            station: state.station.clone(),
+            has_media: has_media(state),
             stop_after_current: state.stop_after_current,
             metadata,
         }
@@ -515,9 +557,9 @@ impl Published {
                 Property::Shuffle(self.shuffle),
                 Property::Volume(self.volume),
                 Property::Rate(self.rate),
-                Property::CanGoNext(has_track),
-                Property::CanGoPrevious(has_track),
-                Property::CanPause(has_track),
+                Property::CanGoNext(self.has_media),
+                Property::CanGoPrevious(self.has_media),
+                Property::CanPause(self.has_media),
                 Property::CanSeek(has_track),
             ]);
             return changed;
@@ -537,14 +579,16 @@ impl Published {
         if self.rate != previous.rate {
             changed.push(Property::Rate(self.rate));
         }
+        if self.has_media != previous.has_media {
+            changed.extend([
+                Property::CanGoNext(self.has_media),
+                Property::CanGoPrevious(self.has_media),
+                Property::CanPause(self.has_media),
+            ]);
+        }
         let has_track = self.track_id.is_some();
         if has_track != previous.track_id.is_some() {
-            changed.extend([
-                Property::CanGoNext(has_track),
-                Property::CanGoPrevious(has_track),
-                Property::CanPause(has_track),
-                Property::CanSeek(has_track),
-            ]);
+            changed.push(Property::CanSeek(has_track));
         }
         changed
     }
@@ -607,6 +651,7 @@ pub fn start(
     plugins: Arc<PluginManager>,
     db: Arc<Db>,
     art: Arc<ArtStore>,
+    logos: Arc<LogoStore>,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
     // Fill the metadata cache from whatever is already playing.
@@ -650,7 +695,7 @@ pub fn start(
         {
             log::warn!("dev.crescendo.Player unavailable: {error}");
         }
-        run(server, rx, plugins, db, art).await;
+        run(server, rx, plugins, db, art, logos).await;
     });
 }
 
@@ -660,6 +705,7 @@ async fn run(
     plugins: Arc<PluginManager>,
     db: Arc<Db>,
     art: Arc<ArtStore>,
+    logos: Arc<LogoStore>,
 ) {
     let imp = server.imp();
     let mut published: Option<Published> = None;
@@ -672,9 +718,11 @@ async fn run(
                 };
                 // Pause, volume and the like must not wait behind cover-art
                 // resolution: announce them before touching the metadata.
-                let same_track = published
-                    .as_ref()
-                    .is_some_and(|previous| previous.track == state.track);
+                let same_track = published.as_ref().is_some_and(|previous| {
+                    previous.track == state.track
+                        && previous.station == state.station
+                        && previous.has_media == has_media(&state)
+                });
                 let previous_metadata = published
                     .as_ref()
                     .map(|previous| previous.metadata.clone())
@@ -700,9 +748,10 @@ async fn run(
                         .map(|guard| guard.prefer_romanized())
                         .unwrap_or(true);
                     let metadata = {
-                        let (state, db, art) = (state.clone(), db.clone(), art.clone());
+                        let (state, db, art, logos) =
+                            (state.clone(), db.clone(), art.clone(), logos.clone());
                         tauri::async_runtime::spawn_blocking(move || {
-                            build_metadata(&state, &db, &art, prefer_romanized)
+                            build_metadata(&state, &db, &art, &logos, prefer_romanized)
                         })
                         .await
                     };
@@ -724,7 +773,10 @@ async fn run(
             Update::Position(position_ms) => {
                 let track_id = published.as_ref().and_then(|p| p.track_id);
                 let status = published.as_ref().map(|p| p.status);
-                if position_jumped(last_tick.as_ref(), track_id, status, position_ms) {
+                // A station has no position to seek in; a reconnect restarts it.
+                if track_id.is_some()
+                    && position_jumped(last_tick.as_ref(), track_id, status, position_ms)
+                {
                     let signal = Signal::Seeked {
                         position: Time::from_millis(position_ms as i64),
                     };
@@ -808,6 +860,7 @@ mod tests {
         PlayerState {
             status: Status::Playing,
             track: Some(track),
+            station: None,
             context_index: Some(0),
             context_len: 1,
             shuffle: false,
@@ -824,6 +877,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("t.db")).unwrap();
         let art = ArtStore::new(dir.path()).unwrap();
+        let logos = LogoStore::new(dir.path()).unwrap();
         let state = state(track(
             "幽雅に咲かせ",
             Some("Yuuga ni Sakase"),
@@ -831,7 +885,7 @@ mod tests {
             Some("Touhou"),
         ));
 
-        let romaji = build_metadata(&state, &db, &art, true);
+        let romaji = build_metadata(&state, &db, &art, &logos, true);
         assert_eq!(romaji.title(), Some("Yuuga ni Sakase"));
         assert_eq!(romaji.artist(), Some(vec!["Touhou".to_string()]));
         assert_eq!(romaji.album_artist(), Some(vec!["Touhou".to_string()]));
@@ -847,7 +901,7 @@ mod tests {
             Some("file:///music/album/07%20song.flac")
         );
 
-        let original = build_metadata(&state, &db, &art, false);
+        let original = build_metadata(&state, &db, &art, &logos, false);
         assert_eq!(original.title(), Some("幽雅に咲かせ"));
         assert_eq!(original.artist(), Some(vec!["東方".to_string()]));
     }
@@ -857,13 +911,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("t.db")).unwrap();
         let art = ArtStore::new(dir.path()).unwrap();
+        let logos = LogoStore::new(dir.path()).unwrap();
         let mut untitled = track("Latin", Some("Sort"), "Band", Some("Band, The"));
         untitled.title = None;
         untitled.albumartist = None;
         untitled.albumartistsort = None;
         untitled.artist = Some("Someone".into());
 
-        let metadata = build_metadata(&state(untitled), &db, &art, true);
+        let metadata = build_metadata(&state(untitled), &db, &art, &logos, true);
         assert_eq!(metadata.title(), Some("07 song"));
         assert_eq!(metadata.artist(), Some(vec!["Someone".to_string()]));
         assert!(metadata.art_url().is_none());
@@ -875,8 +930,65 @@ mod tests {
             },
             &db,
             &art,
+            &logos,
             true,
         );
         assert_eq!(no_track.trackid(), TrackId::try_from(NO_TRACK).ok());
+    }
+
+    #[test]
+    fn a_station_shows_its_announced_song_and_controls_follow_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).unwrap();
+        let art = ArtStore::new(dir.path()).unwrap();
+        let logos = LogoStore::new(dir.path()).unwrap();
+        let mut station = StationNow {
+            id: Some(3),
+            uuid: None,
+            name: "Gensokyo Radio".into(),
+            logo: None,
+            homepage: None,
+            artist: None,
+            title: None,
+            codec: None,
+            bitrate: None,
+            buffering: None,
+            connecting: false,
+        };
+        let playing = PlayerState {
+            track: None,
+            station: Some(station.clone()),
+            ..state(track("x", None, "y", None))
+        };
+        assert!(has_media(&playing));
+        let before_song = build_metadata(&playing, &db, &art, &logos, true);
+        assert_eq!(before_song.title(), Some("Gensokyo Radio"));
+        assert_eq!(before_song.artist(), None);
+
+        station.artist = Some("Shibayan".into());
+        station.title = Some("Desert Years".into());
+        let with_song = PlayerState {
+            station: Some(station),
+            ..playing.clone()
+        };
+        let metadata = build_metadata(&with_song, &db, &art, &logos, true);
+        assert_eq!(metadata.title(), Some("Desert Years"));
+        assert_eq!(metadata.artist(), Some(vec!["Shibayan".to_string()]));
+        assert_eq!(metadata.album(), Some("Gensokyo Radio"));
+        assert_eq!(
+            metadata.trackid(),
+            TrackId::try_from("/dev/crescendo/station/3").ok()
+        );
+
+        // Stopped, the station is only what Play would resume.
+        let stopped = PlayerState {
+            status: Status::Stopped,
+            ..playing
+        };
+        assert!(!has_media(&stopped));
+        assert_eq!(
+            build_metadata(&stopped, &db, &art, &logos, true).trackid(),
+            TrackId::try_from(NO_TRACK).ok()
+        );
     }
 }

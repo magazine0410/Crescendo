@@ -35,7 +35,31 @@
   /** The album of the song that plays, when it has one. */
   const nowPlayingAlbumId = $derived(player.track?.album_id ?? null);
 
+  /** A station the bar shows: loaded, or the one Play resumes when stopped. */
+  const station = $derived(player.track ? null : player.station);
+  /** What the station is doing, or the song it announces. */
+  const stationLine = $derived.by(() => {
+    const s = station;
+    if (!s) return "";
+    if (player.status !== "stopped") {
+      if (s.connecting) return `Connecting to ${s.name}…`;
+      if (s.buffering != null) return `Buffering ${s.name}… ${s.buffering}%`;
+    }
+    if (s.title) return s.artist ? `${s.artist} - ${s.title}` : s.title;
+    return s.name;
+  });
+  /** The station's name after the song, once the line is the song. */
+  const stationVia = $derived(
+    station && stationLine !== station.name && !stationLine.includes(station.name)
+      ? station.name
+      : "",
+  );
+
   function showAlbum() {
+    if (station) {
+      ui.activeTab = "radio";
+      return;
+    }
     if (nowPlayingAlbumId != null) viewAlbum(nowPlayingAlbumId);
   }
 
@@ -111,13 +135,21 @@
           player.track ? { type: "track_ids", ids: [player.track.id] } : null,
       }}
       class:with-second={useSecondTitle}
-      class:actionable={nowPlayingAlbumId != null}
-      title={nowPlayingAlbumId != null ? "View album" : undefined}
+      class:actionable={nowPlayingAlbumId != null || !!station}
+      title={station ? "Show the Radio tab" : nowPlayingAlbumId != null ? "View album" : undefined}
       onclick={showAlbum}
       oncontextmenu={titleMenu}
     >
-      <div class="title" class:placeholder={!player.track} class:error={!!player.error}>
-        {player.error ? `Playback unavailable: ${player.error}` : player.track ? titleLine : "Nothing played"}
+      <div class="title" class:placeholder={!player.track && !station} class:error={!!player.error}>
+        {#if player.error}
+          Playback unavailable: {player.error}
+        {:else if player.track}
+          {titleLine}
+        {:else if station}
+          {stationLine}{#if stationVia}<span class="via"> · {stationVia}</span>{/if}
+        {:else}
+          Nothing played
+        {/if}
       </div>
       {#if showSecondTitle}
         <div class="title2">{titleLine2}</div>
@@ -134,7 +166,7 @@
           : formatTime(player.positionMs)}
       </button>
       <SeekBar />
-      <span class="time">{formatTime(player.durationMs)}</span>
+      <span class="time">{station && player.status !== "stopped" ? "LIVE" : formatTime(player.durationMs)}</span>
     </div>
   </div>
   <div class="right">
@@ -267,5 +299,8 @@
   }
   .toggle.on {
     opacity: 1;
+  }
+  .via {
+    color: var(--txt-faded);
   }
 </style>

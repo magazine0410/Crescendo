@@ -5,6 +5,7 @@ pub mod misc;
 pub mod player;
 pub mod playlists;
 pub mod plugins;
+pub mod radio;
 pub mod update;
 
 pub mod lastfm;

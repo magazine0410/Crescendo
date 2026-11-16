@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-remove"
+description = "Enables the radio_remove command without any pre-configured scope."
+commands.allow = ["radio_remove"]
+
+[[permission]]
+identifier = "deny-radio-remove"
+description = "Denies the radio_remove command without any pre-configured scope."
+commands.deny = ["radio_remove"]

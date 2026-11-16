@@ -6,6 +6,7 @@
 
 mod audio_filter;
 mod settle;
+mod station;
 
 use crescendo_core::db::Db;
 use crescendo_core::lastfm::scrobble::{now, Scrobbler};
@@ -14,6 +15,9 @@ use crescendo_core::model::{Track, MAX_SEEK_MS};
 pub use crescendo_core::playback::Status;
 use crescendo_core::playback::{Playback, ReloadRetry, StreamStarted};
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
+use crescendo_core::radio::logo::LogoStore;
+use crescendo_core::radio::Station;
+pub use station::StationNow;
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use serde::Serialize;
@@ -88,12 +92,18 @@ pub enum Cmd {
     /// `(position, id)` as the queue view showed them.
     QueueRemove(Vec<(usize, i64)>),
     QueueClear,
+    /// Play an internet radio station: a saved one (id > 0) or a directory
+    /// listing (id 0). Its logo key is already registered.
+    PlayStation(Box<Station>),
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayerState {
     pub status: Status,
+    /// None while a radio station is loaded, which has no library track.
     pub track: Option<Track>,
+    /// The station loaded, or the one Play would resume when stopped.
+    pub station: Option<StationNow>,
     pub context_index: Option<usize>,
     pub context_len: usize,
     pub shuffle: bool,
@@ -209,6 +219,7 @@ fn report_player_failure(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.status = Status::Stopped;
         state.track = None;
+        state.station = None;
         state.context_index = None;
         state.context_len = 0;
         state.stop_after_current = false;
@@ -229,12 +240,14 @@ pub fn spawn(
     app: AppHandle,
     db: Arc<Db>,
     scrobbler: Arc<Scrobbler>,
+    logos: Arc<LogoStore>,
 ) -> anyhow::Result<PlayerHandle> {
     gstreamer::init()?;
     let (tx, rx) = channel::<Cmd>();
     let shared = Arc::new(Mutex::new(PlayerState {
         status: Status::Stopped,
         track: None,
+        station: None,
         context_index: None,
         context_len: 0,
         shuffle: false,
@@ -262,7 +275,7 @@ pub fn spawn(
         .name("player".into())
         .spawn(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                run_player(app, db, scrobbler, rx, shared, queue_shared, projectm_pcm)
+                run_player(app, db, scrobbler, logos, rx, shared, queue_shared, projectm_pcm)
             }));
             let failure = match outcome {
                 Ok(Ok(())) => None,
@@ -340,6 +353,11 @@ struct Engine {
     /// Playback errors since a track last played for a second or the user
     /// last picked a track; see `Playback::failed`.
     consecutive_failures: usize,
+    logos: Arc<LogoStore>,
+    /// The radio station loaded, while `Playback` is in its station phase.
+    station: Option<station::StationSession>,
+    /// The station Play resumes from stopped; cleared when a track starts.
+    last_station: Option<Station>,
 }
 
 fn build_pipeline(
@@ -444,10 +462,12 @@ fn build_pipeline(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_player(
     app: AppHandle,
     db: Arc<Db>,
     scrobbler: Arc<Scrobbler>,
+    logos: Arc<LogoStore>,
     rx: Receiver<Cmd>,
     shared: Arc<Mutex<PlayerState>>,
     queue_shared: Arc<Mutex<Vec<i64>>>,
@@ -491,6 +511,9 @@ fn run_player(
         reload_retry: ReloadRetry::default(),
         current_duration_ms: 0,
         consecutive_failures: 0,
+        logos,
+        station: None,
+        last_station: None,
     };
     engine.apply_volume();
 
@@ -522,6 +545,7 @@ fn run_player(
         if last_tick.elapsed() >= Duration::from_millis(250) {
             last_tick = Instant::now();
             engine.sample_listening();
+            engine.station_tick();
             engine.emit_position();
         }
     }
@@ -545,6 +569,7 @@ mod tests {
             shared: Arc::new(Mutex::new(PlayerState {
                 status: Status::Stopped,
                 track: None,
+                station: None,
                 context_index: None,
                 context_len: 0,
                 shuffle: false,
@@ -579,6 +604,7 @@ mod tests {
             shared: Arc::new(Mutex::new(PlayerState {
                 status: Status::Stopped,
                 track: None,
+                station: None,
                 context_index: None,
                 context_len: 0,
                 shuffle: false,
@@ -635,6 +661,7 @@ impl Engine {
 
     fn handle_cmd(&mut self, cmd: Cmd) {
         self.sample_listening();
+        self.sample_station();
         if matches!(
             cmd,
             Cmd::PlayResolvedContext { .. }
@@ -642,6 +669,7 @@ impl Engine {
                 | Cmd::TogglePause
                 | Cmd::Next
                 | Cmd::Prev
+                | Cmd::PlayStation(_)
         ) {
             // A track the user picks gets tried even after a run of failures.
             self.consecutive_failures = 0;
@@ -664,6 +692,8 @@ impl Engine {
                 };
                 self.start_track(id);
             }
+            Cmd::PlayStation(station) => self.start_station(*station),
+            Cmd::TogglePause if self.playback().is_station() => self.toggle_station(),
             Cmd::TogglePause => {
                 let status = self.playback().status();
                 match status {
@@ -684,6 +714,10 @@ impl Engine {
                         self.publish_state();
                     }
                     Status::Stopped => {
+                        if let Some(station) = self.last_station.clone() {
+                            self.start_station(station);
+                            return;
+                        }
                         let id = self.playback().play_from_stopped();
                         if let Some(id) = id {
                             self.start_track(id);
@@ -692,6 +726,9 @@ impl Engine {
                 }
             }
             Cmd::Stop => self.stop(),
+            Cmd::Next | Cmd::Prev if self.playback().is_station() => {
+                self.step_station(matches!(cmd, Cmd::Next));
+            }
             Cmd::Next => {
                 let id = self.playback().next();
                 self.go_to(id);
@@ -700,6 +737,8 @@ impl Engine {
                 let id = self.playback().previous();
                 self.go_to(id);
             }
+            // A live stream cannot be moved within.
+            Cmd::Seek(_) if self.playback().is_station() => {}
             Cmd::Seek(ms) => {
                 let Some(position) = seek_clock_time(ms) else {
                     log::warn!("ignoring out-of-range seek position");
@@ -714,8 +753,10 @@ impl Engine {
                     return;
                 }
                 self.rate = rate.clamp(RATE_MIN, RATE_MAX);
+                // A station always plays at normal speed; tracks take the rate.
                 let stopped = self.playback().status() == Status::Stopped;
-                if !stopped {
+                let station = self.playback().is_station();
+                if !stopped && !station {
                     self.apply_rate();
                     self.emit_position();
                 }
@@ -756,6 +797,8 @@ impl Engine {
                 self.playback().edit_queue(|q| q.repeat = mode);
                 self.publish_state();
             }
+            // A station never ends, so there is nothing to stop after.
+            Cmd::SetStopAfterCurrent(_) if self.playback().is_station() => {}
             Cmd::SetStopAfterCurrent(on) => {
                 self.playback().set_stop_after_current(on);
                 self.publish_state();
@@ -790,6 +833,12 @@ impl Engine {
 
     fn handle_bus(&mut self, msg: &gstreamer::Message) {
         use gstreamer::MessageView;
+        // Read apart from the call: a guard in the condition would still be
+        // held inside it.
+        let station = self.playback().is_station();
+        if station && self.station_bus(msg) {
+            return;
+        }
         match msg.view() {
             MessageView::Eos(_) => {
                 // Normal end without gapless handoff (e.g. repeat-off at the
@@ -899,6 +948,8 @@ impl Engine {
     }
 
     fn start_track(&mut self, track_id: i64) {
+        self.leave_station();
+        self.last_station = None;
         self.pending_seek = None;
         self.reload_retry.forget();
         // Credit the outgoing track (still live, so its position is queryable)
@@ -938,6 +989,7 @@ impl Engine {
     }
 
     fn stop(&mut self) {
+        self.leave_station();
         self.pending_seek = None;
         self.reload_retry.forget();
         self.playback().begin_stop();
@@ -1200,9 +1252,15 @@ impl Engine {
                 q.repeat,
             )
         };
-        let track = track_id.and_then(|id| self.db.track_by_id(id).ok().flatten());
+        let station = self.station_now(status);
+        let track = if station.is_some() {
+            None
+        } else {
+            track_id.and_then(|id| self.db.track_by_id(id).ok().flatten())
+        };
         let state = PlayerState {
             status,
+            station,
             context_index,
             context_len,
             shuffle,

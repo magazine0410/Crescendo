@@ -273,9 +273,80 @@ export function staleProjectionRevision(reason: unknown): number | null {
 
 export type RepeatMode = "off" | "all" | "one";
 
+/** A saved internet radio station. */
+export interface Station {
+  id: number;
+  name: string;
+  stream_url: string;
+  homepage: string | null;
+  /** Key for {@link logoUrl}; null when the station has no logo. */
+  logo: string | null;
+  /** Comma-separated genre tags. */
+  tags: string | null;
+  country: string | null;
+  codec: string | null;
+  /** kbit/s */
+  bitrate: number | null;
+  /** Radio Browser id, for stations saved from the directory. */
+  uuid: string | null;
+}
+
+/** A station in a Radio Browser listing. */
+export interface DirectoryStation {
+  uuid: string;
+  name: string;
+  stream_url: string;
+  homepage: string | null;
+  logo: string | null;
+  tags: string | null;
+  country: string | null;
+  countrycode: string | null;
+  codec: string | null;
+  bitrate: number | null;
+}
+
+export interface RadioCountry {
+  code: string;
+  name: string;
+  stations: number;
+}
+
+export interface RadioTag {
+  name: string;
+  stations: number;
+}
+
+/** What to look for in the directory; empty fields do not narrow it. */
+export interface RadioSearch {
+  name: string;
+  tag: string;
+  countrycode: string;
+  offset: number;
+}
+
+/** The radio station the player has loaded (or would resume when stopped). */
+export interface StationNow {
+  /** The saved station's id; null for one played from the directory. */
+  id: number | null;
+  uuid: string | null;
+  name: string;
+  logo: string | null;
+  homepage: string | null;
+  /** The song it announces, split at the first " - ". */
+  artist: string | null;
+  title: string | null;
+  codec: string | null;
+  bitrate: number | null;
+  /** Percent while it refills its buffer. */
+  buffering: number | null;
+  connecting: boolean;
+}
+
 export interface PlayerState {
   status: "stopped" | "playing" | "paused";
+  /** null while a radio station is loaded. */
   track: Track | null;
+  station: StationNow | null;
   context_index: number | null;
   context_len: number;
   shuffle: boolean;
@@ -484,6 +555,12 @@ export function artUrl(
 ): string {
   if (!isTauri) return COVER_NONE;
   return `crescendo-art://localhost/${kind}/${id}?size=${size}`;
+}
+
+/** A station logo the backend registered, or null where there is none. */
+export function logoUrl(key: string | null): string | null {
+  if (!isTauri || !key) return null;
+  return `crescendo-art://localhost/logo/${key}`;
 }
 
 /** Loudness-waveform peaks (0..255, ~500 samples) for a track's audio. */

@@ -62,6 +62,10 @@ pub enum Phase {
     /// a seek then reloads the audible one and moves it once it has prerolled.
     /// No handoff may start until then: the same seek would jump into that too.
     Reloading { track: i64, paused: bool },
+    /// An internet radio station is loaded. It is live: it has no track, no
+    /// end and no next uri, so nothing is ever reserved for a handoff and the
+    /// queue stays where the library left it. Pausing disconnects it.
+    Station { paused: bool },
 }
 
 /// What a stream-start message meant.
@@ -105,12 +109,12 @@ impl Playback {
         match self.phase {
             Phase::Stopped => Status::Stopped,
             Phase::Switching { from } => from,
-            Phase::Loaded { paused: true, .. } | Phase::Reloading { paused: true, .. } => {
-                Status::Paused
-            }
-            Phase::Loaded { paused: false, .. } | Phase::Reloading { paused: false, .. } => {
-                Status::Playing
-            }
+            Phase::Loaded { paused: true, .. }
+            | Phase::Reloading { paused: true, .. }
+            | Phase::Station { paused: true } => Status::Paused,
+            Phase::Loaded { paused: false, .. }
+            | Phase::Reloading { paused: false, .. }
+            | Phase::Station { paused: false } => Status::Playing,
         }
     }
 
@@ -120,6 +124,11 @@ impl Playback {
             Phase::Loaded { track, .. } | Phase::Reloading { track, .. } => Some(track),
             _ => None,
         }
+    }
+
+    /// Whether a radio station is loaded rather than a track.
+    pub fn is_station(&self) -> bool {
+        matches!(self.phase, Phase::Station { .. })
     }
 
     /// Whether playbin holds a uri not heard yet. A flushing seek now would
@@ -281,6 +290,18 @@ impl Playback {
         self.begin_switch();
     }
 
+    /// Start replacing the stream with a station. The caller then sets its uri
+    /// and calls [`station_loaded`](Self::station_loaded), or stops.
+    pub fn begin_station(&mut self) {
+        self.begin_switch();
+    }
+
+    /// Call once the station's uri is set, as [`loaded`](Self::loaded) does
+    /// for a track.
+    pub fn station_loaded(&mut self) {
+        self.phase = Phase::Station { paused: false };
+    }
+
     pub fn stopped(&mut self) {
         self.phase = Phase::Stopped;
     }
@@ -297,7 +318,10 @@ impl Playback {
     }
 
     pub fn set_paused(&mut self, on: bool) {
-        if let Phase::Loaded { paused, .. } | Phase::Reloading { paused, .. } = &mut self.phase {
+        if let Phase::Loaded { paused, .. }
+        | Phase::Reloading { paused, .. }
+        | Phase::Station { paused } = &mut self.phase
+        {
             *paused = on;
         }
     }
@@ -393,6 +417,41 @@ impl ReloadRetry {
 mod tests {
     use super::*;
     use crate::playqueue::RepeatMode;
+
+    #[test]
+    fn a_station_has_no_track_reserves_nothing_and_keeps_the_queue() {
+        let mut p = Playback::default();
+        p.play_context(vec![1, 2, 3], 1);
+        p.loaded(2);
+        p.begin_station();
+        assert_eq!(p.status(), Status::Playing, "switching keeps how it was playing");
+        p.station_loaded();
+        assert!(p.is_station());
+        assert_eq!(p.status(), Status::Playing);
+        assert_eq!(p.track(), None);
+        assert_eq!(p.handoff_candidate(), None, "a live stream has no next uri");
+        assert!(!p.reserve_handoff(p.generation));
+        assert!(!p.handoff_reserved());
+        assert_eq!(p.stream_started(), StreamStarted::Opened);
+        assert_eq!(p.begin_reload(), None, "a station is never reloaded to seek");
+        assert_eq!(p.queue().current(), Some(2), "the library walk waits");
+
+        p.set_paused(true);
+        assert_eq!(p.status(), Status::Paused);
+        p.set_paused(false);
+        assert_eq!(p.status(), Status::Playing);
+
+        // Playing from the library again leaves the station.
+        assert_eq!(p.jump_to(2), Some(3));
+        p.loaded(3);
+        assert!(!p.is_station());
+        p.begin_station();
+        p.station_loaded();
+        p.begin_stop();
+        p.stopped();
+        assert!(!p.is_station());
+        assert_eq!(p.status(), Status::Stopped);
+    }
 
     #[test]
     fn an_error_right_after_a_reload_retries_to_the_same_place() {

@@ -7,6 +7,7 @@ import type {
   Album,
   BrowseValue,
   BrowseValuesResult,
+  DirectoryStation,
   CollectionInfo,
   PlaylistInfo,
   PlayContext,
@@ -15,6 +16,7 @@ import type {
   PluginMutationResult,
   PluginSnapshot,
   SortKey,
+  Station,
   Track,
   TrackSort,
   WireBrowseMode,
@@ -1198,6 +1200,82 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       await mockCall("playlist_add_tracks", { id: args.id, trackIds: ids });
       return ids.length as T;
     }
+    case "radio_stations":
+      return structuredClone(mockStations) as T;
+    case "radio_search": {
+      const q = args.search as { name: string; tag: string; countrycode: string; offset: number };
+      const name = q.name.trim().toLowerCase();
+      const found = mockDirectory.filter(
+        (s) =>
+          (!name || s.name.toLowerCase().includes(name)) &&
+          (!q.tag || (s.tags ?? "").split(",").includes(q.tag)) &&
+          (!q.countrycode || s.countrycode === q.countrycode),
+      );
+      return structuredClone(found.slice(q.offset, q.offset + 100)) as T;
+    }
+    case "radio_countries":
+      return [
+        { code: "JP", name: "Japan", stations: 3 },
+        { code: "US", name: "The United States Of America", stations: 4 },
+        { code: "DE", name: "Germany", stations: 2 },
+        { code: "FR", name: "France", stations: 1 },
+      ] as T;
+    case "radio_tags":
+      return ["ambient", "anime", "jazz", "rock", "touhou", "news", "electronic"].map((name) => ({
+        name,
+        stations: mockDirectory.filter((s) => (s.tags ?? "").split(",").includes(name)).length,
+      })) as T;
+    case "radio_save": {
+      const found = mockDirectory.find((s) => s.uuid === args.uuid);
+      if (!found) throw new Error("the directory has no such station");
+      const saved = mockStations.find((s) => s.uuid === found.uuid);
+      if (saved) return structuredClone(saved) as T;
+      const station: Station = { id: nextStationId++, ...found };
+      mockStations.push(station);
+      return structuredClone(station) as T;
+    }
+    case "radio_add_url": {
+      const url = String(args.url ?? "").trim();
+      if (!/^https?:\/\/\S+/.test(url)) throw new Error("a station address must start with http:// or https://");
+      const name = String(args.name ?? "").trim();
+      if (!name) throw new Error("a station needs a name");
+      const station: Station = {
+        id: nextStationId++, name, stream_url: url, homepage: null, logo: null,
+        tags: null, country: null, codec: null, bitrate: null, uuid: null,
+      };
+      mockStations.push(station);
+      return structuredClone(station) as T;
+    }
+    case "radio_rename": {
+      const station = mockStations.find((s) => s.id === args.id);
+      if (station) station.name = String(args.name).trim() || station.name;
+      return undefined as T;
+    }
+    case "radio_remove":
+      mockStations = mockStations.filter((s) => s.id !== args.id);
+      return undefined as T;
+    case "player_play_station": {
+      const station =
+        args.id != null
+          ? mockStations.find((s) => s.id === args.id)
+          : mockDirectory.find((s) => s.uuid === args.uuid);
+      if (!station) throw new Error("no such station");
+      return {
+        id: "id" in station ? station.id : null,
+        uuid: station.uuid,
+        name: station.name,
+        logo: station.logo,
+        homepage: station.homepage,
+        artist: "Shibayan",
+        title: "Desert Years",
+        codec: station.codec,
+        bitrate: station.bitrate,
+        buffering: null,
+        connecting: false,
+      } as T;
+    }
+    case "lyrics_for_song":
+      return null as T;
     case "player_jump_to":
     case "player_set_rate":
       return undefined as T;
@@ -1206,6 +1284,35 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return undefined as T;
   }
 }
+
+function mockDirectoryStation(
+  uuid: string, name: string, tags: string, countrycode: string, country: string,
+  codec: string, bitrate: number,
+): DirectoryStation {
+  return {
+    uuid, name, stream_url: `https://stream.example/${uuid}`, homepage: `https://${uuid}.example/`,
+    logo: null, tags, country, countrycode, codec, bitrate,
+  };
+}
+
+/** A small stand-in for the Radio Browser directory, for `npm run dev`. */
+const mockDirectory: DirectoryStation[] = [
+  mockDirectoryStation("gensokyo", "Gensokyo Radio", "anime,touhou", "JP", "Japan", "MP3", 256),
+  mockDirectoryStation("j1hits", "J1 Hits", "anime,jpop", "JP", "Japan", "AAC", 128),
+  mockDirectoryStation("touhou-mix", "Touhou Mix Radio", "touhou,electronic", "JP", "Japan", "MP3", 192),
+  mockDirectoryStation("paradise", "Radio Paradise", "rock,eclectic", "US", "The United States Of America", "FLAC", 1411),
+  mockDirectoryStation("groove", "SomaFM Groove Salad", "ambient,electronic", "US", "The United States Of America", "MP3", 128),
+  mockDirectoryStation("dronezone", "SomaFM Drone Zone", "ambient", "US", "The United States Of America", "AAC", 128),
+  mockDirectoryStation("jazz24", "Jazz24", "jazz", "US", "The United States Of America", "AAC", 64),
+  mockDirectoryStation("dlf", "Deutschlandfunk", "news", "DE", "Germany", "MP3", 128),
+  mockDirectoryStation("radioeins", "radioeins", "rock,pop", "DE", "Germany", "MP3", 128),
+  mockDirectoryStation("fip", "FIP", "jazz,eclectic", "FR", "France", "AAC", 192),
+];
+
+let mockStations: Station[] = mockDirectory
+  .filter((s) => ["paradise", "groove", "gensokyo"].includes(s.uuid))
+  .map((s, i) => ({ id: i + 1, ...s }));
+let nextStationId = mockStations.length + 1;
 
 export const mockNowPlaying: Track = {
   id: 1,

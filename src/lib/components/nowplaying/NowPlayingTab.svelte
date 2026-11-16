@@ -5,6 +5,7 @@
   import {
     call,
     artUrl,
+    logoUrl,
     isTauri,
     type Album,
     type ArtistInfo,
@@ -15,6 +16,7 @@
   import { COVER_MISSING } from "$lib/icons";
   import { formatTime, displayOriginalTitle, displayAlbumartist, displayName, latinTitleSort } from "$lib/format";
   import { fileDrag } from "$lib/fileDrag";
+  import Icon from "../common/Icon.svelte";
 
   let artistInfo = $state<ArtistInfo | null>(null);
   let albumInfo = $state<AlbumInfo | null>(null);
@@ -176,6 +178,49 @@
     });
   });
 
+  // ---- A radio station: its announced song drives the lookups. ----
+  const station = $derived(player.track ? null : player.station);
+  let songArtistInfo = $state<ArtistInfo | null>(null);
+  /** Plain `let`, like lyricsFor: guards against the state events that do
+      not change the song. */
+  let songInfoFor = "";
+  let songLyrics = $state<LyricsResult | null>(null);
+  let songLyricsLoading = $state(false);
+  let songLyricsFor = "";
+
+  $effect(() => {
+    const artist = station?.artist ?? "";
+    if (artist === songInfoFor) return;
+    songInfoFor = artist;
+    songArtistInfo = null;
+    if (!artist || !isTauri) return;
+    call<ArtistInfo | null>("lastfm_artist_info", { artist })
+      .then((r) => {
+        if (songInfoFor === artist) songArtistInfo = r;
+      })
+      .catch(() => {});
+  });
+
+  $effect(() => {
+    const artist = station?.artist ?? "";
+    const title = station?.title ?? "";
+    const key = artist && title ? `${artist}\u001f${title}\u001f${ui.lyricsEpoch}` : "";
+    if (key === songLyricsFor) return;
+    songLyricsFor = key;
+    songLyrics = null;
+    songLyricsLoading = !!key;
+    if (!key) return;
+    call<LyricsResult | null>("lyrics_for_song", { artist, title })
+      .then((r) => {
+        if (songLyricsFor !== key) return;
+        songLyrics = r;
+        songLyricsLoading = false;
+      })
+      .catch(() => {
+        if (songLyricsFor === key) songLyricsLoading = false;
+      });
+  });
+
   const track = $derived(player.track);
   const romanizedTitle = $derived(track ? latinTitleSort(track) : null);
   const originalTitle = $derived(track ? displayOriginalTitle(track) : "");
@@ -207,7 +252,67 @@
   }
 </script>
 
-{#if !track}
+{#if !track && station}
+  {@const logo = logoUrl(station.logo)}
+  <div class="np" style:padding-bottom={`${ui.bottombarH + 16}px`}>
+    <div class="left">
+      {#if logo}
+        <img class="bigcover logo" src={logo} alt="Station logo" onerror={onImgError} />
+      {:else}
+        <div class="bigcover nologo"><Icon name="radio" size={110} /></div>
+      {/if}
+      <div class="local">
+        <div class="row"><span>Station</span><b>{station.name}</b></div>
+        {#if station.codec}<div class="row"><span>Codec</span><b>{station.codec}</b></div>{/if}
+        {#if station.bitrate}<div class="row"><span>Bitrate</span><b>{station.bitrate} kbps</b></div>{/if}
+        {#if station.homepage}<div class="row"><span>Website</span><b title={station.homepage}>{station.homepage}</b></div>{/if}
+      </div>
+    </div>
+    <div class="right">
+      <h1>{station.artist ?? station.name}</h1>
+      <h2>{station.title ?? (player.status === "stopped" ? "Stopped" : "Live")}</h2>
+
+      {#if songArtistInfo?.tags?.length}
+        <div class="tags">
+          {#each songArtistInfo.tags.slice(0, 6) as tag (tag)}
+            <span class="tag">{tag}</span>
+          {/each}
+        </div>
+      {/if}
+      {#if songArtistInfo?.bio_full || songArtistInfo?.bio_summary}
+        <section>
+          <h3>About the artist</h3>
+          <p class="bio">{songArtistInfo.bio_full || songArtistInfo.bio_summary}</p>
+        </section>
+      {/if}
+      {#if songArtistInfo?.similar?.length}
+        <section>
+          <h3>Similar artists</h3>
+          <p class="similar">{songArtistInfo.similar.join(" · ")}</p>
+        </section>
+      {/if}
+      {#if !songArtistInfo}
+        <p class="offline">
+          {station.artist
+            ? `No Last.fm info${isTauri ? "" : " (browser preview)"} for this artist.`
+            : "The station has not announced a song yet."}
+        </p>
+      {/if}
+    </div>
+    {#if songLyrics}
+      <!-- A radio song's position is unknown, so lyrics never follow it. -->
+      <div class="lyrics-pane">
+        <h3>Lyrics · {songLyrics.source}</h3>
+        <div class="lyrics-scroll"><p class="lyrics">{songLyrics.text}</p></div>
+      </div>
+    {:else if songLyricsLoading}
+      <div class="lyrics-pane">
+        <h3>Lyrics</h3>
+        <p class="lyrics searching">Searching…</p>
+      </div>
+    {/if}
+  </div>
+{:else if !track}
   <div class="nothing">
     <p>Nothing played</p>
   </div>
@@ -389,6 +494,14 @@
     object-fit: cover;
     background: var(--bg-panel);
     margin-bottom: 18px;
+  }
+  .bigcover.logo {
+    object-fit: contain;
+  }
+  .bigcover.nologo {
+    display: grid;
+    place-items: center;
+    color: var(--txt-faded);
   }
   .local .row {
     display: flex;

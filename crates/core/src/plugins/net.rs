@@ -256,7 +256,10 @@ impl Resolver for GuardedResolver {
         timeout: NextTimeout,
     ) -> std::result::Result<ResolvedSocketAddrs, ureq::Error> {
         let host = uri.host().ok_or(ureq::Error::HostNotFound)?;
-        let port = uri.port_u16().unwrap_or(443);
+        // Plugin requests are https only; station logos may also use http,
+        // whose default port is 80, not 443.
+        let default_port = if uri.scheme_str() == Some("http") { 80 } else { 443 };
+        let port = uri.port_u16().unwrap_or(default_port);
         // `not_zero` is None when ureq has no deadline for this step; the
         // module's own ceiling still applies.
         let budget = timeout
@@ -399,6 +402,21 @@ pub fn fetch(
         return read_response(response);
     }
     bail!("too many redirects")
+}
+
+/// An agent that can reach public addresses only: every connection,
+/// redirects included, resolves through [`GuardedResolver`], and no proxy is
+/// used. For fetches whose address came from outside, such as station logos.
+pub(crate) fn public_only_agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::with_parts(
+        ureq::Agent::config_builder()
+            .proxy(None)
+            .timeout_global(Some(timeout))
+            .max_redirects(3)
+            .build(),
+        ureq::unversioned::transport::DefaultConnector::default(),
+        GuardedResolver,
+    )
 }
 
 fn request_config() -> ureq::config::Config {

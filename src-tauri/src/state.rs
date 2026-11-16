@@ -50,6 +50,7 @@ pub struct AppState {
     /// these, so the webview can pass on a drop but cannot name a path of
     /// its own, such as `/`, for the importer to walk.
     pub dropped_paths: Arc<Mutex<HashSet<PathBuf>>>,
+    pub radio: Arc<crate::commands::radio::Radio>,
 }
 
 pub fn data_dir() -> PathBuf {

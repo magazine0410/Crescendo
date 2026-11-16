@@ -7,12 +7,17 @@ import {
   type Track,
   type RepeatMode,
   type PlayContext,
+  type StationNow,
 } from "../api";
 import { mockNowPlaying } from "../mock";
 
 class PlayerStore {
   status = $state<"stopped" | "playing" | "paused">("stopped");
   track = $state<Track | null>(null);
+  /** The radio station loaded, or the one Play resumes when stopped. */
+  station = $state<StationNow | null>(null);
+  /** Why the last station stopped playing, until another plays. */
+  stationError = $state<string | null>(null);
   positionMs = $state(0);
   durationMs = $state(0);
   volume = $state(0.8);
@@ -32,6 +37,8 @@ class PlayerStore {
     this.error = null;
     this.status = s.status;
     this.track = s.track;
+    this.station = s.station;
+    if (s.station && s.status !== "stopped") this.stationError = null;
     this.shuffle = s.shuffle;
     this.repeat = s.repeat;
     this.stopAfterCurrent = s.stop_after_current;
@@ -41,15 +48,23 @@ class PlayerStore {
     this.contextIndex = s.context_index;
     this.contextLen = s.context_len;
     if (s.track) this.durationMs = s.track.duration_ms;
+    // A station has no length; the last track's must not linger on the bar.
+    else if (s.station) this.durationMs = 0;
     if (s.status === "stopped") {
       this.positionMs = 0;
       this.durationMs = 0;
     }
   }
 
+  /** A station is loaded (playing, paused or reconnecting), not just remembered. */
+  get onStation(): boolean {
+    return this.station !== null && this.status !== "stopped";
+  }
+
   fail(message: string) {
     this.status = "stopped";
     this.track = null;
+    this.station = null;
     this.positionMs = 0;
     this.durationMs = 0;
     this.stopAfterCurrent = false;
@@ -76,6 +91,23 @@ class PlayerStore {
     }
   }
 
+  /** Play a saved station by id, or a directory listing by uuid. */
+  async playStation(target: { id: number } | { uuid: string }) {
+    this.stationError = null;
+    const result = await call<StationNow | null>("player_play_station", {
+      id: "id" in target ? target.id : null,
+      uuid: "uuid" in target ? target.uuid : null,
+    });
+    if (!isTauri && result) {
+      // The browser preview has no player thread: show the station directly.
+      this.track = null;
+      this.station = result;
+      this.status = "playing";
+      this.positionMs = 0;
+      this.durationMs = 0;
+    }
+  }
+
   /** Jump within the current context (double-click on an already-active view). */
   async jumpTo(index: number) {
     await call("player_jump_to", { index });
@@ -84,7 +116,7 @@ class PlayerStore {
   async togglePause() {
     if (!isTauri) {
       if (this.status === "playing") this.status = "paused";
-      else if (this.track) this.status = "playing";
+      else if (this.track || this.station) this.status = "playing";
       return;
     }
     await call("player_toggle_pause");

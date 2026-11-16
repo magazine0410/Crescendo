@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-countries"
+description = "Enables the radio_countries command without any pre-configured scope."
+commands.allow = ["radio_countries"]
+
+[[permission]]
+identifier = "deny-radio-countries"
+description = "Denies the radio_countries command without any pre-configured scope."
+commands.deny = ["radio_countries"]

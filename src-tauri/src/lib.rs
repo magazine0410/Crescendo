@@ -67,7 +67,19 @@ pub fn run() {
                 db.clone(),
                 state::data_dir().join("lastfm-credentials.json"),
             )?;
-            let player = player::spawn(app.handle().clone(), db.clone(), scrobbler.clone())?;
+            let logos = Arc::new(crescendo_core::radio::logo::LogoStore::new(
+                &state::cache_dir(),
+            )?);
+            let radio = Arc::new(commands::radio::Radio::new(
+                format!("Crescendo/{}", env!("CARGO_PKG_VERSION")),
+                logos.clone(),
+            ));
+            let player = player::spawn(
+                app.handle().clone(),
+                db.clone(),
+                scrobbler.clone(),
+                logos.clone(),
+            )?;
             // The manager starts before the player thread exists, so the
             // bridge is installed here; player.* calls before this point
             // answer Unavailable rather than blocking.
@@ -86,6 +98,7 @@ pub fn run() {
                 plugins.clone(),
                 db.clone(),
                 art.clone(),
+                logos.clone(),
             );
             // The track currently being reported, shared by the two listeners
             // below: `player:position` carries no track id, so the mirror has
@@ -175,6 +188,7 @@ pub fn run() {
                 library_lock: Default::default(),
                 scan_cancel: Arc::new(AtomicBool::new(false)),
                 dropped_paths: Default::default(),
+                radio,
             });
             commands::forte::start_listener(app.handle().clone());
             Ok(())
@@ -196,6 +210,16 @@ pub fn run() {
             commands::library::search_highlight,
             commands::file_drag::plugin_file_drag_start,
             commands::player::player_play_context,
+            commands::radio::radio_stations,
+            commands::radio::radio_search,
+            commands::radio::radio_countries,
+            commands::radio::radio_tags,
+            commands::radio::radio_save,
+            commands::radio::radio_add_url,
+            commands::radio::radio_rename,
+            commands::radio::radio_remove,
+            commands::radio::player_play_station,
+            commands::radio::lyrics_for_song,
             commands::player::player_jump_to,
             commands::player::player_toggle_pause,
             commands::player::player_stop,

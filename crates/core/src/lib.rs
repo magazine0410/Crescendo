@@ -14,6 +14,7 @@ pub mod model;
 pub mod playback;
 pub mod playqueue;
 pub mod plugins;
+pub mod radio;
 pub mod replaygain;
 pub mod scanner;
 pub mod search;

@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { isTauri, call, artUrl } from "$lib/api";
+  import { isTauri, call, artUrl, logoUrl } from "$lib/api";
   import { COVER_MISSING } from "$lib/icons";
   import { player } from "$lib/stores/player.svelte";
   import Icon from "$lib/components/common/Icon.svelte";
 
   const src = $derived.by(() => {
     const t = player.track;
-    if (!t) return null;
+    if (!t) return logoUrl(player.station?.logo ?? null);
     if (isTauri && t.album_id != null) return artUrl("album", t.album_id, "thumb");
     if (isTauri) return artUrl("track", t.id, "thumb");
     return null;
@@ -26,7 +26,7 @@
   {#if src}
     <img {src} alt="Cover art" onerror={onError} />
   {:else}
-    <span class="empty"><Icon name="image" size={40} /></span>
+    <span class="empty"><Icon name={player.station && !player.track ? "radio" : "image"} size={40} /></span>
   {/if}
 </button>
 

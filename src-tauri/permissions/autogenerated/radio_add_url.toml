@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-add-url"
+description = "Enables the radio_add_url command without any pre-configured scope."
+commands.allow = ["radio_add_url"]
+
+[[permission]]
+identifier = "deny-radio-add-url"
+description = "Denies the radio_add_url command without any pre-configured scope."
+commands.deny = ["radio_add_url"]

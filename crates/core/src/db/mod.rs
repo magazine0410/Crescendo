@@ -5,6 +5,7 @@ pub mod plugins;
 pub mod prefs;
 pub mod queries;
 mod schema;
+pub mod stations;
 
 use anyhow::Result;
 use rusqlite::Connection;

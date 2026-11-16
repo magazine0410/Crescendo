@@ -104,27 +104,47 @@ enum OnlineResult {
     Failed,
 }
 
+/// Lyrics for a song a radio station announced. It has no file and no
+/// library id, so only the online sources are asked and nothing is cached.
+pub fn for_song(db: &Db, artist: &str, title: &str) -> Result<Option<LyricsResult>> {
+    let song = crate::radio::RadioSong {
+        artist: Some(artist.to_string()),
+        title: title.to_string(),
+        started_at: 0,
+        heard_ms: 0,
+        from_start: false,
+        scrobbled: false,
+    };
+    for_track(db, &song.as_track())
+}
+
 pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
+    // A track outside the library (a radio song) has no file and no cache row.
+    let in_library = track.id > 0 && !track.path.is_empty();
     // Every local source goes through the LRC parser: whether the lyrics are
     // synced is decided by what the text contains, not by where it came from
     // or what the file is called.
-    if let Some(raw) = read_sidecar(&track.path) {
-        if let Some(result) = parse_lyrics(&raw, "Sidecar") {
-            return Ok(Some(result));
+    if in_library {
+        if let Some(raw) = read_sidecar(&track.path) {
+            if let Some(result) = parse_lyrics(&raw, "Sidecar") {
+                return Ok(Some(result));
+            }
         }
-    }
-    if let Some(raw) = embedded_lyrics(&track.path) {
-        if let Some(result) = parse_lyrics(&raw, "Embedded tag") {
-            return Ok(Some(result));
+        if let Some(raw) = embedded_lyrics(&track.path) {
+            if let Some(result) = parse_lyrics(&raw, "Embedded tag") {
+                return Ok(Some(result));
+            }
         }
     }
 
     if !db.lyrics_online() {
         return Ok(None);
     }
-    if let Some((raw, source, age)) = db.lyrics_cache_get(track.id)? {
-        if age < cache_ttl(&source) {
-            return Ok(parse_lyrics(&raw, &source));
+    if in_library {
+        if let Some((raw, source, age)) = db.lyrics_cache_get(track.id)? {
+            if age < cache_ttl(&source) {
+                return Ok(parse_lyrics(&raw, &source));
+            }
         }
     }
 
@@ -144,6 +164,9 @@ pub fn for_track(db: &Db, track: &Track) -> Result<Option<LyricsResult>> {
     }
     if found.is_none() {
         take(lrclib_lyrics(track), &mut found, &mut any_failed);
+    }
+    if !in_library {
+        return Ok(found.and_then(|(raw, source)| parse_lyrics(&raw, &source)));
     }
     match found {
         Some((raw, source)) => {

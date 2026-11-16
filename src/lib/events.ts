@@ -39,6 +39,10 @@ export async function initEvents() {
     console.error("playback error:", e.payload);
   });
   await listen<string>("player:fatal", (e) => player.fail(e.payload));
+  await listen<string>("radio:error", (e) => {
+    console.warn("radio:", e.payload);
+    player.stationError = e.payload;
+  });
   await listen<ScanProgress>("scan:progress", (e) => library.onScanProgress(e.payload));
   await listen<ScanProgress>("scan:done", (e) => {
     library.onScanProgress(e.payload);

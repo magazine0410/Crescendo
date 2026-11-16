@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -419,6 +419,26 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
         if !has_column {
             tx.execute_batch("ALTER TABLE tracks ADD COLUMN added_at INTEGER;")?;
         }
+    }
+    if version < 16 {
+        // Saved internet radio stations (see crate::radio). Not tracks: they
+        // never enter library views, playlists or the queue. `position` is
+        // the list order, which Next and Previous follow.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS stations (
+               id INTEGER PRIMARY KEY,
+               name TEXT NOT NULL,
+               stream_url TEXT NOT NULL,
+               homepage TEXT,
+               logo_url TEXT,
+               tags TEXT,
+               country TEXT,
+               codec TEXT,
+               bitrate INTEGER,
+               uuid TEXT UNIQUE,
+               position INTEGER NOT NULL
+             );",
+        )?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;

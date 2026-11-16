@@ -1,4 +1,4 @@
-export type Tab = "library" | "playlists" | "nowplaying" | "visualizer";
+export type Tab = "library" | "playlists" | "nowplaying" | "visualizer" | "radio";
 
 export type SearchSpan = { start: number; end: number; kind: "plain" | "syntax" | "invalid" };
 
@@ -21,6 +21,8 @@ class UiStore {
   libraryValueListW = $state(230);
   /** Side-panel visibility is persisted separately from the last open width. */
   librarySidebarCollapsed = $state(false);
+  radioPanelW = $state(240);
+  radioSidebarCollapsed = $state(false);
   playlistSidebarCollapsed = $state(false);
   /** The same queue panel is shown in both Library and Playlists. */
   queuePanelCollapsed = $state(false);

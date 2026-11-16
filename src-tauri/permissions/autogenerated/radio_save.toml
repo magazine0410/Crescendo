@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-save"
+description = "Enables the radio_save command without any pre-configured scope."
+commands.allow = ["radio_save"]
+
+[[permission]]
+identifier = "deny-radio-save"
+description = "Denies the radio_save command without any pre-configured scope."
+commands.deny = ["radio_save"]

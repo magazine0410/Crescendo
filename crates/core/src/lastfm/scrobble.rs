@@ -742,8 +742,11 @@ impl Scrobbler {
             ("artist".into(), track.artist.clone().unwrap_or_default()),
             ("track".into(), track.title.clone().unwrap_or_default()),
             ("timestamp".into(), started_at.to_string()),
-            ("duration".into(), (track.duration_ms / 1000).to_string()),
         ]);
+        // A radio song's length is unknown; Last.fm takes the field as optional.
+        if track.duration_ms > 0 {
+            params.insert("duration".into(), (track.duration_ms / 1000).to_string());
+        }
         if let Some(album) = &track.album {
             params.insert("album".into(), album.clone());
         }

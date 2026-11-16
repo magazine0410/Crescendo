@@ -18,6 +18,9 @@ static GEN_PERMITS: Semaphore = Semaphore::const_new(4);
 /// shows about 300 tiles, and lazy loading also fetches the rows just past
 /// the edge. A waiting request costs a few KB; decoding is bounded below.
 static ADMISSION_PERMITS: Semaphore = Semaphore::const_new(1024);
+/// Station logos are fetched from the stations' websites, which can be slow;
+/// they get their own permits so they never hold up album covers.
+static LOGO_PERMITS: Semaphore = Semaphore::const_new(2);
 
 fn respond_empty(responder: UriSchemeResponder, status: StatusCode) {
     let response = Response::builder()
@@ -44,6 +47,10 @@ pub fn handle(
     let uri = request.uri().clone();
     tauri::async_runtime::spawn(async move {
         let _admission = admission;
+        if let Some(key) = uri.path().strip_prefix("/logo/").map(str::to_string) {
+            serve_logo(&app, key, responder).await;
+            return;
+        }
         let _generation = match GEN_PERMITS.acquire().await {
             Ok(permit) => permit,
             Err(_) => {
@@ -79,6 +86,39 @@ pub fn handle(
             }
         }
     });
+}
+
+/// `/logo/{key}`: a station logo the radio commands registered.
+async fn serve_logo(app: &tauri::AppHandle, key: String, responder: UriSchemeResponder) {
+    let Ok(_permit) = LOGO_PERMITS.acquire().await else {
+        respond_empty(responder, StatusCode::SERVICE_UNAVAILABLE);
+        return;
+    };
+    let Some(logos) = app
+        .try_state::<AppState>()
+        .map(|state| state.radio.logos.clone())
+    else {
+        respond_empty(responder, StatusCode::SERVICE_UNAVAILABLE);
+        return;
+    };
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        std::fs::read(logos.get(&key)?).ok()
+    })
+    .await
+    .ok()
+    .flatten();
+    match bytes {
+        Some(bytes) => {
+            let resp = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "image/png")
+                .header(header::CACHE_CONTROL, "max-age=86400")
+                .body(bytes)
+                .unwrap_or_else(|_| Response::new(Vec::new()));
+            responder.respond(resp);
+        }
+        None => respond_empty(responder, StatusCode::NOT_FOUND),
+    }
 }
 
 /// Path shapes: /album/{id} and /track/{id}, query `size=thumb|full`.

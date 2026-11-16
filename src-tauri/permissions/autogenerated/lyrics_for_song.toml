@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-lyrics-for-song"
+description = "Enables the lyrics_for_song command without any pre-configured scope."
+commands.allow = ["lyrics_for_song"]
+
+[[permission]]
+identifier = "deny-lyrics-for-song"
+description = "Denies the lyrics_for_song command without any pre-configured scope."
+commands.deny = ["lyrics_for_song"]
