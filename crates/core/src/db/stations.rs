@@ -27,8 +27,9 @@ impl Db {
     /// Saved stations in list order.
     pub fn stations(&self) -> Result<Vec<Station>> {
         self.with(|conn| {
-            let mut stmt =
-                conn.prepare(&format!("SELECT {COLS} FROM stations ORDER BY position, id"))?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {COLS} FROM stations ORDER BY position, id"
+            ))?;
             let rows = stmt.query_map([], station_from_row)?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
@@ -92,7 +93,10 @@ impl Db {
             bail!("a station needs a name");
         }
         self.with(|conn| {
-            if conn.execute("UPDATE stations SET name = ?2 WHERE id = ?1", params![id, name])? == 0
+            if conn.execute(
+                "UPDATE stations SET name = ?2 WHERE id = ?1",
+                params![id, name],
+            )? == 0
             {
                 bail!("station {id} is not saved");
             }

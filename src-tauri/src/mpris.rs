@@ -446,7 +446,12 @@ fn station_metadata(station: &StationNow, logos: &LogoStore) -> Metadata {
     let id = station.id.unwrap_or(0);
     let mut builder = Metadata::builder()
         .trackid(TrackId::try_from(format!("/dev/crescendo/station/{id}")).unwrap_or_default())
-        .title(station.title.clone().unwrap_or_else(|| station.name.clone()))
+        .title(
+            station
+                .title
+                .clone()
+                .unwrap_or_else(|| station.name.clone()),
+        )
         .album(station.name.clone());
     if let Some(artist) = &station.artist {
         builder = builder.artist([artist.clone()]);

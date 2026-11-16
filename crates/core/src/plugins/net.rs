@@ -258,7 +258,11 @@ impl Resolver for GuardedResolver {
         let host = uri.host().ok_or(ureq::Error::HostNotFound)?;
         // Plugin requests are https only; station logos may also use http,
         // whose default port is 80, not 443.
-        let default_port = if uri.scheme_str() == Some("http") { 80 } else { 443 };
+        let default_port = if uri.scheme_str() == Some("http") {
+            80
+        } else {
+            443
+        };
         let port = uri.port_u16().unwrap_or(default_port);
         // `not_zero` is None when ureq has no deadline for this step; the
         // module's own ceiling still applies.

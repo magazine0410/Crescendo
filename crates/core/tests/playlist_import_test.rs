@@ -7,7 +7,11 @@ use std::path::Path;
 /// Tracks under `root`: "A/01 Song.flac", "東方/幽雅に咲かせ.flac" and
 /// "B/Rock & Roll.flac". Returns their ids in that order.
 fn library(db: &Db, root: &Path) -> Vec<i64> {
-    let files = ["A/01 Song.flac", "東方/幽雅に咲かせ.flac", "B/Rock & Roll.flac"];
+    let files = [
+        "A/01 Song.flac",
+        "東方/幽雅に咲かせ.flac",
+        "B/Rock & Roll.flac",
+    ];
     db.with(|conn| {
         let mut ids = Vec::new();
         for file in files {
@@ -64,7 +68,10 @@ fn a_pls_playlist_imports_in_its_numbered_order() {
     assert_eq!(result.added, 3);
     assert_eq!(imported_ids(&db, result.playlist_id), ids);
     assert_eq!(result.missing.len(), 2, "{:?}", result.missing);
-    assert_eq!(result.missing[0], "http://radio.example/stream", "reported as written");
+    assert_eq!(
+        result.missing[0], "http://radio.example/stream",
+        "reported as written"
+    );
     assert!(result.missing[1].ends_with("gone.flac"));
 }
 

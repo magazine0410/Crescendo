@@ -222,9 +222,8 @@ pub fn scan(
     let scan_root = std::path::absolute(&opts.root)?;
     let mut known = HashMap::new();
     {
-        let mut stmt = conn.prepare(
-            "SELECT path, mtime, size, missing, added_at IS NOT NULL FROM tracks",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT path, mtime, size, missing, added_at IS NOT NULL FROM tracks")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -334,8 +333,8 @@ pub fn scan(
 /// Set `added_at` on rows that predate the column, in batches that leave the
 /// main connection room to write between them.
 fn backfill_added(conn: &rusqlite::Connection, rows: &[(String, i64)]) -> Result<()> {
-    let mut set = conn
-        .prepare("UPDATE tracks SET added_at = ?2 WHERE path = ?1 AND added_at IS NULL")?;
+    let mut set =
+        conn.prepare("UPDATE tracks SET added_at = ?2 WHERE path = ?1 AND added_at IS NULL")?;
     for (i, batch) in rows.chunks(BATCH_SIZE).enumerate() {
         if i > 0 {
             std::thread::sleep(WRITER_YIELD);

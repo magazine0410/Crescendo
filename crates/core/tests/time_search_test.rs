@@ -78,7 +78,10 @@ fn units_may_be_attached_plural_or_capitalised() {
     assert_eq!(ids(&db, "added<1day"), [1]);
     assert_eq!(ids(&db, "added < 2 Hours"), [1]);
     assert_eq!(ids(&db, "added < 90 minutes"), [1]);
-    assert!(ids(&db, "added < 3600 seconds").is_empty(), "an hour and a bit ago");
+    assert!(
+        ids(&db, "added < 3600 seconds").is_empty(),
+        "an hour and a bit ago"
+    );
     assert_eq!(ids(&db, "#(added < 1 month)"), [1, 2]);
     assert_eq!(ids(&db, "added >= 1.5years"), [3]);
 }
@@ -117,7 +120,9 @@ fn a_scan_fills_in_the_date_added_and_keeps_it() {
     };
     let added = || -> Option<i64> {
         db.with(|conn| {
-            Ok(conn.query_row("SELECT added_at FROM tracks", [], |r| r.get::<_, Option<i64>>(0))?)
+            Ok(conn.query_row("SELECT added_at FROM tracks", [], |r| {
+                r.get::<_, Option<i64>>(0)
+            })?)
         })
         .unwrap()
     };

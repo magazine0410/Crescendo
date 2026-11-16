@@ -21,7 +21,8 @@ impl Db {
     /// Every rated track's rating in stars.
     pub fn ratings(&self) -> Result<HashMap<i64, f64>> {
         self.with(|conn| {
-            let mut stmt = conn.prepare("SELECT id, rating FROM tracks WHERE rating IS NOT NULL")?;
+            let mut stmt =
+                conn.prepare("SELECT id, rating FROM tracks WHERE rating IS NOT NULL")?;
             let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })

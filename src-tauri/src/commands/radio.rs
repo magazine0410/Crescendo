@@ -38,7 +38,10 @@ impl Radio {
     }
 
     fn with_logo(&self, mut station: Station) -> Station {
-        station.logo = station.logo_url.as_deref().map(|url| self.logos.register(url));
+        station.logo = station
+            .logo_url
+            .as_deref()
+            .map(|url| self.logos.register(url));
         station
     }
 
@@ -48,7 +51,10 @@ impl Radio {
             listed.clear();
         }
         for station in stations.iter_mut() {
-            station.logo = station.logo_url.as_deref().map(|url| self.logos.register(url));
+            station.logo = station
+                .logo_url
+                .as_deref()
+                .map(|url| self.logos.register(url));
             listed.insert(station.uuid.clone(), station.clone());
         }
     }
@@ -56,7 +62,10 @@ impl Radio {
     /// A directory station by id: from the last listings, else asked for.
     fn directory_station(&self, uuid: &str) -> anyhow::Result<DirectoryStation> {
         // It goes into a URL path, and Radio Browser ids are UUIDs.
-        if uuid.is_empty() || uuid.len() > 64 || !uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        if uuid.is_empty()
+            || uuid.len() > 64
+            || !uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        {
             anyhow::bail!("not a directory station id");
         }
         if let Some(station) = self.listed.lock().unwrap().get(uuid).cloned() {
@@ -82,7 +91,14 @@ async fn blocking<T: Send + 'static>(
 pub async fn radio_stations(state: State<'_, AppState>) -> Result<Vec<Station>, String> {
     let db = state.db.clone();
     let radio = state.radio.clone();
-    blocking(move || Ok(db.stations()?.into_iter().map(|s| radio.with_logo(s)).collect())).await
+    blocking(move || {
+        Ok(db
+            .stations()?
+            .into_iter()
+            .map(|s| radio.with_logo(s))
+            .collect())
+    })
+    .await
 }
 
 /// Search the directory. Empty fields do not narrow it; an empty search

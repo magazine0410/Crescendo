@@ -97,7 +97,9 @@ pub fn import(db: &Db, m3u_path: &Path) -> Result<M3uImportResult> {
             let web = matches!(entry, Entry::Path(p) if is_web_address(p));
             let line = match (&decoded, entry) {
                 (Some(path), _) => path.as_str(),
-                (None, Entry::Path(text) | Entry::Uri(text) | Entry::Untitled(text)) => text.as_str(),
+                (None, Entry::Path(text) | Entry::Uri(text) | Entry::Untitled(text)) => {
+                    text.as_str()
+                }
             };
             if web
                 || matches!(entry, Entry::Untitled(_))
@@ -220,7 +222,10 @@ fn pls_entries(content: &str) -> Vec<Entry> {
         })
         .collect();
     numbered.sort_by_key(|(n, _)| *n);
-    numbered.into_iter().map(|(_, value)| Entry::Path(value)).collect()
+    numbered
+        .into_iter()
+        .map(|(_, value)| Entry::Path(value))
+        .collect()
 }
 
 /// The playlist's `<title>` and each track's first `<location>`, read with
@@ -275,7 +280,9 @@ fn xspf_entries(content: &str) -> Result<(Option<String>, Vec<Entry>)> {
                     [.., "track"] => entries.push(match location.take() {
                         Some(uri) => Entry::Uri(uri),
                         None => Entry::Untitled(
-                            track_title.take().unwrap_or_else(|| "(a track with no location)".into()),
+                            track_title
+                                .take()
+                                .unwrap_or_else(|| "(a track with no location)".into()),
                         ),
                     }),
                     _ => {}
@@ -458,7 +465,9 @@ pub fn export_playlist(db: &Db, playlist_id: i64, file: &Path) -> Result<M3uExpo
     let text = render(&tracks, dir);
     let tmp = dir.join(format!(
         ".{}.crescendo-tmp",
-        file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+        file.file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default()
     ));
     std::fs::write(&tmp, text)?;
     if let Err(error) = std::fs::rename(&tmp, &file) {
@@ -506,7 +515,13 @@ pub fn export_playlists_to_folder(db: &Db, ids: &[i64], folder: &Path) -> Result
 pub fn file_stem_for(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c })
+        .map(|c| {
+            if c == '/' || c == '\\' || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().trim_start_matches('.').trim().to_string();
     if cleaned.is_empty() {

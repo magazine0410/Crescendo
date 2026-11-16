@@ -98,7 +98,13 @@ pub fn neighbour(ids: &[i64], current: Option<i64>, forward: bool) -> Option<i64
     let Some(i) = current.and_then(|id| ids.iter().position(|&x| x == id)) else {
         return Some(ids[if forward { 0 } else { n - 1 }]);
     };
-    Some(ids[if forward { (i + 1) % n } else { (i + n - 1) % n }])
+    Some(
+        ids[if forward {
+            (i + 1) % n
+        } else {
+            (i + n - 1) % n
+        }],
+    )
 }
 
 /// A song a station announced, while it is being heard.
@@ -121,7 +127,8 @@ impl RadioSong {
     pub fn scrobble_due(&self, ended: bool) -> bool {
         !self.scrobbled
             && self.artist.is_some()
-            && (self.heard_ms >= 4 * 60_000 || (ended && self.from_start && self.heard_ms >= 30_000))
+            && (self.heard_ms >= 4 * 60_000
+                || (ended && self.from_start && self.heard_ms >= 30_000))
     }
 
     /// The song as a track for the scrobbler. It is not in the library: id 0,
@@ -219,8 +226,14 @@ mod tests {
             (Some("A".into()), Some("B - C".into()))
         );
         assert_eq!(split_stream_title("Jingle"), (None, Some("Jingle".into())));
-        assert_eq!(split_stream_title("Up-Tempo"), (None, Some("Up-Tempo".into())));
-        assert_eq!(split_stream_title(" - Title"), (None, Some("- Title".into())));
+        assert_eq!(
+            split_stream_title("Up-Tempo"),
+            (None, Some("Up-Tempo".into()))
+        );
+        assert_eq!(
+            split_stream_title(" - Title"),
+            (None, Some("- Title".into()))
+        );
         assert_eq!(split_stream_title("  "), (None, None));
     }
 
@@ -234,7 +247,10 @@ mod tests {
             song_from_tags("Shibayan - Desert Years", Some("  ")),
             (Some("Shibayan".into()), Some("Desert Years".into()))
         );
-        assert_eq!(song_from_tags("Shibayan - Desert Years", None).0.as_deref(), Some("Shibayan"));
+        assert_eq!(
+            song_from_tags("Shibayan - Desert Years", None).0.as_deref(),
+            Some("Shibayan")
+        );
         assert_eq!(song_from_tags("", Some("Shibayan")), (None, None));
     }
 
@@ -278,9 +294,15 @@ mod tests {
     #[test]
     fn playlists_give_their_first_stream() {
         let pls = "[playlist]\nNumberOfEntries=2\nFile1=https://a.example/stream\nTitle1=A\nFile2=http://b.example/\n";
-        assert_eq!(playlist_entry(pls).as_deref(), Some("https://a.example/stream"));
+        assert_eq!(
+            playlist_entry(pls).as_deref(),
+            Some("https://a.example/stream")
+        );
         let m3u = "#EXTM3U\n#EXTINF:-1,Radio\nhttp://c.example:8000/live\n";
-        assert_eq!(playlist_entry(m3u).as_deref(), Some("http://c.example:8000/live"));
+        assert_eq!(
+            playlist_entry(m3u).as_deref(),
+            Some("http://c.example:8000/live")
+        );
         assert_eq!(playlist_entry("#EXTM3U\nfile:///etc/passwd\n"), None);
     }
 

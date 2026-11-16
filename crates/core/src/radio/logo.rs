@@ -141,7 +141,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = LogoStore::new(dir.path()).unwrap();
         assert_eq!(store.get("../../etc/passwd"), None);
-        assert_eq!(store.get(&key_for("https://unregistered.example/a.png")), None);
+        assert_eq!(
+            store.get(&key_for("https://unregistered.example/a.png")),
+            None
+        );
         let key = store.register("https://x.example/logo.png");
         assert_eq!(key, key_for("https://x.example/logo.png"));
         assert_eq!(key.len(), 32);

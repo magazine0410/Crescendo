@@ -6,7 +6,12 @@ use crescendo_core::model::BrowseMode;
 use crescendo_core::search::{self, QueryKind};
 
 /// (genre, year, composer, last_played)
-type Row = (Option<&'static str>, Option<i64>, Option<&'static str>, Option<i64>);
+type Row = (
+    Option<&'static str>,
+    Option<i64>,
+    Option<&'static str>,
+    Option<i64>,
+);
 
 /// Tracks 1..=5, one per row below.
 fn make_db() -> (tempfile::TempDir, Db) {
@@ -67,7 +72,11 @@ fn number_and_time_tags_can_be_missing() {
     let (_dir, db) = make_db();
     assert_eq!(ids(&db, "@(missing: year)"), [3, 4]);
     assert_eq!(ids(&db, "@(missing: date)"), [3, 4], "date is year's alias");
-    assert_eq!(ids(&db, "@(missing: lastplayed)"), [2, 3, 4, 5], "never played");
+    assert_eq!(
+        ids(&db, "@(missing: lastplayed)"),
+        [2, 3, 4, 5],
+        "never played"
+    );
 }
 
 #[test]
@@ -77,7 +86,10 @@ fn aliases_case_spacing_and_combining() {
     assert_eq!(ids(&db, "@( MISSING :Genre )"), [2, 3, 4]);
     assert_eq!(ids(&db, "!@(missing: genre)"), [1, 5]);
     assert_eq!(ids(&db, "&(@(missing: genre), year>2000)"), [2]);
-    assert_eq!(ids(&db, "|(@(missing: genre), @(missing: year))"), [2, 3, 4]);
+    assert_eq!(
+        ids(&db, "|(@(missing: genre), @(missing: year))"),
+        [2, 3, 4]
+    );
 }
 
 #[test]

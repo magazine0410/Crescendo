@@ -424,7 +424,11 @@ mod tests {
         p.play_context(vec![1, 2, 3], 1);
         p.loaded(2);
         p.begin_station();
-        assert_eq!(p.status(), Status::Playing, "switching keeps how it was playing");
+        assert_eq!(
+            p.status(),
+            Status::Playing,
+            "switching keeps how it was playing"
+        );
         p.station_loaded();
         assert!(p.is_station());
         assert_eq!(p.status(), Status::Playing);
@@ -433,7 +437,11 @@ mod tests {
         assert!(!p.reserve_handoff(p.generation));
         assert!(!p.handoff_reserved());
         assert_eq!(p.stream_started(), StreamStarted::Opened);
-        assert_eq!(p.begin_reload(), None, "a station is never reloaded to seek");
+        assert_eq!(
+            p.begin_reload(),
+            None,
+            "a station is never reloaded to seek"
+        );
         assert_eq!(p.queue().current(), Some(2), "the library walk waits");
 
         p.set_paused(true);

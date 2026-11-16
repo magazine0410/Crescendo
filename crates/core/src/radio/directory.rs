@@ -260,7 +260,11 @@ impl Directory {
     pub fn countries(&self) -> Result<Vec<Country>> {
         let raw: Vec<RawCountry> = self.get(
             "/json/countries",
-            &[("order", "stationcount"), ("reverse", "true"), ("hidebroken", "true")],
+            &[
+                ("order", "stationcount"),
+                ("reverse", "true"),
+                ("hidebroken", "true"),
+            ],
         )?;
         Ok(raw
             .into_iter()

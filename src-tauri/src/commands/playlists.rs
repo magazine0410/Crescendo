@@ -325,7 +325,10 @@ pub async fn playlist_export_m3u(
                 let _ = sender.send(path);
             }),
         None => dialog
-            .set_title(format!("Export {} playlists as M3U into a folder", ids.len()))
+            .set_title(format!(
+                "Export {} playlists as M3U into a folder",
+                ids.len()
+            ))
             .pick_folder(move |path| {
                 let _ = sender.send(path);
             }),

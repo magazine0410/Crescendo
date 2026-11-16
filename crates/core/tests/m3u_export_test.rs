@@ -5,16 +5,40 @@ use crescendo_core::m3u::{
 use std::path::Path;
 
 /// (path, title, artist, duration_ms, missing)
-type Row = (String, Option<&'static str>, Option<&'static str>, i64, bool);
+type Row = (
+    String,
+    Option<&'static str>,
+    Option<&'static str>,
+    i64,
+    bool,
+);
 
 /// A library whose "music folder" is `root`, plus one track outside it.
 /// Returns the track ids in insertion order.
 fn library(db: &Db, root: &Path) -> Vec<i64> {
     let rows: [Row; 4] = [
-        (format!("{}/A/01 Song.flac", root.display()), Some("Song"), Some("Band"), 245_400, false),
-        (format!("{}/東方/幽雅に咲かせ.flac", root.display()), Some("幽雅に咲かせ"), Some("ZUN"), 180_000, false),
+        (
+            format!("{}/A/01 Song.flac", root.display()),
+            Some("Song"),
+            Some("Band"),
+            245_400,
+            false,
+        ),
+        (
+            format!("{}/東方/幽雅に咲かせ.flac", root.display()),
+            Some("幽雅に咲かせ"),
+            Some("ZUN"),
+            180_000,
+            false,
+        ),
         ("/elsewhere/untitled.mp3".into(), None, None, 0, false),
-        (format!("{}/B/gone.flac", root.display()), Some("Gone"), Some("Line\nBreak"), 61_000, true),
+        (
+            format!("{}/B/gone.flac", root.display()),
+            Some("Gone"),
+            Some("Line\nBreak"),
+            61_000,
+            true,
+        ),
     ];
     db.with(|conn| {
         let mut ids = Vec::new();
@@ -127,8 +151,15 @@ fn a_folder_export_names_files_after_playlists_and_never_overwrites() {
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
         .collect();
     names.sort();
-    assert_eq!(names, ["Chill (2).m3u", "Chill.m3u", "_AC_DC.m3u"], "no way out of the folder");
-    assert_eq!(std::fs::read_to_string(out.join("Chill.m3u")).unwrap(), "keep me");
+    assert_eq!(
+        names,
+        ["Chill (2).m3u", "Chill.m3u", "_AC_DC.m3u"],
+        "no way out of the folder"
+    );
+    assert_eq!(
+        std::fs::read_to_string(out.join("Chill.m3u")).unwrap(),
+        "keep me"
+    );
     assert!(export_playlists_to_folder(&db, &[chill], &out.join("nope")).is_err());
 }
 
@@ -138,7 +169,16 @@ fn file_names_and_extensions() {
     assert_eq!(file_stem_for("a/b\\c\td"), "a_b_c_d");
     assert_eq!(file_stem_for(" / "), "_");
     assert_eq!(file_stem_for(""), "Playlist");
-    assert_eq!(with_m3u_extension(Path::new("/x/Mix")), Path::new("/x/Mix.m3u"));
-    assert_eq!(with_m3u_extension(Path::new("/x/Mix.M3U")), Path::new("/x/Mix.M3U"));
-    assert_eq!(with_m3u_extension(Path::new("/x/Mix.txt")), Path::new("/x/Mix.txt.m3u"));
+    assert_eq!(
+        with_m3u_extension(Path::new("/x/Mix")),
+        Path::new("/x/Mix.m3u")
+    );
+    assert_eq!(
+        with_m3u_extension(Path::new("/x/Mix.M3U")),
+        Path::new("/x/Mix.M3U")
+    );
+    assert_eq!(
+        with_m3u_extension(Path::new("/x/Mix.txt")),
+        Path::new("/x/Mix.txt.m3u")
+    );
 }

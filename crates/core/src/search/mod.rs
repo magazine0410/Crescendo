@@ -175,11 +175,9 @@ pub fn classify(query: &str) -> QueryKind {
 fn uses_syntax(node: &Node) -> bool {
     match node {
         Node::FreeText(_) => false,
-        Node::Tag { .. }
-        | Node::Numeric { .. }
-        | Node::Missing(_)
-        | Node::Not(_)
-        | Node::Or(_) => true,
+        Node::Tag { .. } | Node::Numeric { .. } | Node::Missing(_) | Node::Not(_) | Node::Or(_) => {
+            true
+        }
         Node::And(items) => items.iter().any(uses_syntax),
     }
 }

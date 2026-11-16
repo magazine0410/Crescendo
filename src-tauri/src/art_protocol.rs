@@ -101,12 +101,10 @@ async fn serve_logo(app: &tauri::AppHandle, key: String, responder: UriSchemeRes
         respond_empty(responder, StatusCode::SERVICE_UNAVAILABLE);
         return;
     };
-    let bytes = tauri::async_runtime::spawn_blocking(move || {
-        std::fs::read(logos.get(&key)?).ok()
-    })
-    .await
-    .ok()
-    .flatten();
+    let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(logos.get(&key)?).ok())
+        .await
+        .ok()
+        .flatten();
     match bytes {
         Some(bytes) => {
             let resp = Response::builder()

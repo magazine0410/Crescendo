@@ -17,11 +17,11 @@ use crescendo_core::playback::{Playback, ReloadRetry, StreamStarted};
 use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use crescendo_core::radio::logo::LogoStore;
 use crescendo_core::radio::Station;
-pub use station::StationNow;
 use crescendo_core::rating::ShuffleMode;
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use serde::Serialize;
+pub use station::StationNow;
 use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -280,7 +280,16 @@ pub fn spawn(
         .name("player".into())
         .spawn(move || {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                run_player(app, db, scrobbler, logos, rx, shared, queue_shared, projectm_pcm)
+                run_player(
+                    app,
+                    db,
+                    scrobbler,
+                    logos,
+                    rx,
+                    shared,
+                    queue_shared,
+                    projectm_pcm,
+                )
             }));
             let failure = match outcome {
                 Ok(Ok(())) => None,

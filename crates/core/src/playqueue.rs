@@ -399,7 +399,11 @@ mod tests {
         for seed in 0..runs {
             let mut items: Vec<usize> = (0..n).collect();
             let mut rng = Xorshift::new(seed * 0x9e37_79b9 + 1);
-            weighted_order(&mut items, |i| weights.get(&i).copied().unwrap_or(1.0), &mut rng);
+            weighted_order(
+                &mut items,
+                |i| weights.get(&i).copied().unwrap_or(1.0),
+                &mut rng,
+            );
             total += items.iter().position(|&i| i == track).unwrap();
         }
         total as f64 / runs as f64
@@ -414,8 +418,14 @@ mod tests {
         let neutral = mean_position(100, &weights, 50);
         let disliked = mean_position(100, &weights, 3);
         let hated = mean_position(100, &weights, 2);
-        assert!(loved < liked && liked < neutral, "{loved} {liked} {neutral}");
-        assert!(neutral < disliked && disliked < hated, "{neutral} {disliked} {hated}");
+        assert!(
+            loved < liked && liked < neutral,
+            "{loved} {liked} {neutral}"
+        );
+        assert!(
+            neutral < disliked && disliked < hated,
+            "{neutral} {disliked} {hated}"
+        );
         assert!(hated > 90.0, "a 1-star track comes near the end: {hated}");
     }
 
@@ -458,7 +468,11 @@ mod tests {
             seen.push(id);
         }
         seen.sort();
-        assert_eq!(seen, (0..50).collect::<Vec<_>>(), "every track still plays once");
+        assert_eq!(
+            seen,
+            (0..50).collect::<Vec<_>>(),
+            "every track still plays once"
+        );
     }
 
     #[test]

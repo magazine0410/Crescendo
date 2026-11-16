@@ -109,7 +109,9 @@ impl StationSession {
             return;
         };
         if song.scrobble_due(ended) {
-            if let Err(error) = scrobbler.enqueue(&song.as_track(), song.started_at, self.song_generation) {
+            if let Err(error) =
+                scrobbler.enqueue(&song.as_track(), song.started_at, self.song_generation)
+            {
                 log::warn!("Cannot queue Last.fm scrobble: {error}");
             }
         }
@@ -136,7 +138,9 @@ fn buffer_hold(playbin: &gstreamer::Element, target: gstreamer::State) {
 impl Engine {
     pub(super) fn start_station(&mut self, station: Station) {
         if let Err(error) = check_stream_url(&station.stream_url) {
-            let _ = self.app.emit("radio:error", format!("{}: {error}", station.name));
+            let _ = self
+                .app
+                .emit("radio:error", format!("{}: {error}", station.name));
             return;
         }
         self.leave_station();
@@ -423,7 +427,10 @@ impl Engine {
             song.heard_ms += elapsed;
             if song.scrobble_due(false) {
                 song.scrobbled = true;
-                if let Err(error) = self.scrobbler.enqueue(&song.as_track(), song.started_at, generation) {
+                if let Err(error) =
+                    self.scrobbler
+                        .enqueue(&song.as_track(), song.started_at, generation)
+                {
                     log::warn!("Cannot queue Last.fm scrobble: {error}");
                 }
             }
