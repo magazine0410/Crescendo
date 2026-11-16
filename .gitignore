@@ -30,8 +30,8 @@ vite.config.ts.timestamp-*
 # not part of the tracked codebase.
 /CHANGELOG.md
 
-# Local notes: Quod Libet features Crescendo lacks.
-/QUODLIBET_GAPS.md
+# Local notes: Quod Libet and Winamp features Crescendo lacks.
+/MUSIC_PLAYER_GAPS.md
 
 # Local tool state (SQLite db + WAL), not part of the project.
 /.freebuff/
