@@ -7,6 +7,7 @@
   import { call, type FileDragSource, type PlayContext, type SortKey, type Track } from "$lib/api";
   import { fileDrag, FILE_DRAG_LIMIT } from "$lib/fileDrag";
   import Icon from "../common/Icon.svelte";
+  import RatingStars from "../common/RatingStars.svelte";
   import Select from "../common/Select.svelte";
   import { formatTime, formatTitle, displayTitle, displayArtist, displayAlbumartist, displayName, playsText } from "$lib/format";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
@@ -315,6 +316,7 @@
           </div>
           {#if playsText(t)}<span class="tplays">{playsText(t)}</span>{/if}
         </div>
+        <RatingStars track={t} />
         <div class="tdetails">
           <span class="tdetail" title={detail}>{detail}</span>
           {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}

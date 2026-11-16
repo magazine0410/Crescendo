@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-track-set-rating"
+description = "Enables the track_set_rating command without any pre-configured scope."
+commands.allow = ["track_set_rating"]
+
+[[permission]]
+identifier = "deny-track-set-rating"
+description = "Denies the track_set_rating command without any pre-configured scope."
+commands.deny = ["track_set_rating"]

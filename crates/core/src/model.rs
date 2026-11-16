@@ -30,7 +30,8 @@ pub struct Track {
     pub duration_ms: i64,
     pub format: String,
     pub album_id: Option<i64>,
-    pub rating: Option<i64>,
+    /// Stars, 0.5 to 5 in half steps; None when unrated (see `crate::rating`).
+    pub rating: Option<f64>,
     /// Times this track has been played (>50% heard). See `Db::record_play`.
     pub play_count: i64,
     /// The file was not on disk at the last scan. Playlists keep such tracks

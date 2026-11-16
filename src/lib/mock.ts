@@ -341,7 +341,8 @@ function build() {
         duration_ms: dur,
         format: "FLAC",
         album_id: a + 1,
-        rating: null,
+        // A few rated tracks, so the star scale shows in `npm run dev`.
+        rating: (a + t) % 5 === 0 ? (((a * 3 + t) % 10) + 1) / 2 : null,
         // Sprinkle some non-zero play counts so the "Plays: N" line is visible
         // in `npm run dev`.
         play_count: (a + t) % 3 === 0 ? ((a * 5 + t) % 4) + 1 : 0,
@@ -1115,6 +1116,15 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     case "lastfm_set_enabled":
     case "lastfm_disconnect":
       throw new Error("Last.fm account connection is available in the desktop app.");
+    case "track_set_rating": {
+      const { trackId, rating } = args as { trackId: number; rating: number | null };
+      if (rating != null && !(rating >= 0.5 && rating <= 5 && Number.isInteger(rating * 2)))
+        throw new Error("a rating must be a whole or half number of stars from 0.5 to 5");
+      const track = tracks.find((track) => track.id === trackId);
+      if (!track) throw new Error(`track ${trackId} is not in the library`);
+      track.rating = rating;
+      return undefined as T;
+    }
     case "song_history": {
       const before = (args as { before?: number } | undefined)?.before ?? 121;
       return Array.from({ length: 120 }, (_, i) => ({

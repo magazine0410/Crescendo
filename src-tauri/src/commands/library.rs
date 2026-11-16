@@ -427,3 +427,22 @@ pub async fn search_highlight(
 ) -> Result<Vec<crescendo_core::search::QuerySpan>, String> {
     Ok(crescendo_core::search::highlight(&query))
 }
+
+/// Set a track's rating in stars (0.5 to 5 in half steps), or clear it with
+/// `null`. The player is told, so weighted shuffle follows the change.
+#[tauri::command]
+pub async fn track_set_rating(
+    state: State<'_, AppState>,
+    track_id: i64,
+    rating: Option<f64>,
+) -> Result<(), String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || db.set_rating(track_id, rating))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("{e:#}"))?;
+    if let Err(error) = state.player.send(crate::player::Cmd::RatingsChanged) {
+        log::warn!("player not told of a rating change: {error}");
+    }
+    Ok(())
+}

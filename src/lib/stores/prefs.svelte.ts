@@ -16,6 +16,8 @@ export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "pro
     affected. */
 export type AnimationLevel = "disabled" | "partial" | "full";
 
+export type ShuffleMode = "random" | "weighted";
+
 /** How many past searches the search field's history keeps. */
 export const SEARCH_HISTORY_MAX = 5;
 /** How many searches can be saved as favorites. */
@@ -44,6 +46,9 @@ export interface Prefs {
   scan_threads: number;
   show_waveform: boolean;
   replaygain_enabled: boolean;
+  /** Random makes every shuffled order equally likely; weighted draws
+      higher-rated tracks earlier in each pass (see rating.rs). */
+  shuffle_mode: ShuffleMode;
   library_view: "album_wall" | "track_list";
   /** Which tab opens on launch. */
   default_tab: "library" | "playlists";
@@ -112,6 +117,7 @@ const DEFAULTS: Prefs = {
   scan_threads: 4,
   show_waveform: false,
   replaygain_enabled: false,
+  shuffle_mode: "random",
   library_view: "album_wall",
   default_tab: "playlists",
   track_separators: false,
@@ -204,6 +210,8 @@ class PrefsStore {
     if (raw.scan_threads) v.scan_threads = clampScanThreads(parseInt(raw.scan_threads, 10));
     if (raw.show_waveform) v.show_waveform = raw.show_waveform === "true";
     if (raw.replaygain_enabled) v.replaygain_enabled = raw.replaygain_enabled === "true";
+    if (raw.shuffle_mode === "random" || raw.shuffle_mode === "weighted")
+      v.shuffle_mode = raw.shuffle_mode;
     if (raw.library_view === "track_list" || raw.library_view === "album_wall")
       v.library_view = raw.library_view;
     if (raw.default_tab === "library" || raw.default_tab === "playlists")

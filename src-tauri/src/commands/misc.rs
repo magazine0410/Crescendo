@@ -1,7 +1,9 @@
+use crate::player::Cmd;
 use crate::state::AppState;
 use crescendo_core::lastfm::credits::{Credit, CreditTags};
 use crescendo_core::lastfm::{AlbumInfo, ArtistInfo};
 use crescendo_core::lyrics::LyricsResult;
+use crescendo_core::rating::ShuffleMode;
 use std::collections::HashMap;
 use tauri::{AppHandle, Manager, State, WebviewUrl};
 use tokio::sync::Semaphore;
@@ -58,10 +60,20 @@ pub async fn prefs_set(
     if key == "visualizer_import_path" {
         return Err("that preference is managed by the projectM folder chooser".into());
     }
-    if key == "replaygain_enabled" && value != "true" && value != "false" {
-        return Err("ReplayGain must be enabled or disabled".into());
-    }
-    let previous_replaygain = if key == "replaygain_enabled" {
+    // Preferences the player thread applies as well as stores.
+    let player_cmd = match key.as_str() {
+        "replaygain_enabled" => match value.as_str() {
+            "true" => Some(Cmd::SetReplayGain(true)),
+            "false" => Some(Cmd::SetReplayGain(false)),
+            _ => return Err("ReplayGain must be enabled or disabled".into()),
+        },
+        ShuffleMode::PREF_KEY => match ShuffleMode::parse(&value) {
+            Some(mode) => Some(Cmd::SetShuffleMode(mode)),
+            None => return Err("the shuffle mode must be random or weighted".into()),
+        },
+        _ => None,
+    };
+    let previous = if player_cmd.is_some() {
         state.db.prefs_get(&key).map_err(|e| e.to_string())?
     } else {
         None
@@ -85,14 +97,11 @@ pub async fn prefs_set(
         .db
         .prefs_set(&key, &value)
         .map_err(|e| e.to_string())?;
-    if key == "replaygain_enabled" {
-        if let Err(error) = state
-            .player
-            .send(crate::player::Cmd::SetReplayGain(value == "true"))
-        {
+    if let Some(cmd) = player_cmd {
+        if let Err(error) = state.player.send(cmd) {
             // Keep the saved preference consistent with the UI's rollback
             // if the player thread has stopped and cannot accept the change.
-            match previous_replaygain {
+            match previous {
                 Some(previous) => state.db.prefs_set(&key, &previous),
                 None => state.db.prefs_delete(&key),
             }

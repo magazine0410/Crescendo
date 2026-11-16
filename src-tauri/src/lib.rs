@@ -192,6 +192,7 @@ pub fn run() {
             commands::library::tracks_range,
             commands::library::track_groups,
             commands::library::track_index,
+            commands::library::track_set_rating,
             commands::library::album_by_id,
             commands::library::search_highlight,
             commands::file_drag::plugin_file_drag_start,

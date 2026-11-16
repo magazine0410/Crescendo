@@ -26,6 +26,7 @@ const COMMANDS: &[&str] = &[
     "tracks_range",
     "track_groups",
     "track_index",
+    "track_set_rating",
     "album_by_id",
     "search_highlight",
     "plugin_file_drag_start",

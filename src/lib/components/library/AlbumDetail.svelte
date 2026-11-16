@@ -11,6 +11,7 @@
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { addToPlaylistItem, openTrackInFileManagerItem, tagEditItem } from "$lib/menu";
   import { fileDrag } from "$lib/fileDrag";
+  import RatingStars from "../common/RatingStars.svelte";
 
   const album = $derived(library.selectedAlbum);
   let selectedIds = $state<number[]>([]);
@@ -118,6 +119,7 @@
             </div>
             {#if playsText(t)}<span class="tplays">{playsText(t)}</span>{/if}
           </div>
+          <RatingStars track={t} />
           <div class="tdetails">
             <span class="tdetail" title={detail}>{detail}</span>
             {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}

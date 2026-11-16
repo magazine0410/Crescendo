@@ -3,6 +3,7 @@
 //! walk order) and repeat (off / all / one).
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Resolve a clicked row against the concrete context being sent to playback.
 /// A history write can reorder/filter the database between rendering and the
@@ -55,6 +56,9 @@ pub struct PlayQueue {
     pub repeat: RepeatMode,
     /// Set when the current track came from the ad-hoc queue.
     playing_adhoc: Option<i64>,
+    /// Shuffle weight by track id; unlisted tracks weigh 1. Empty means every
+    /// shuffled order is equally likely.
+    weights: HashMap<i64, f64>,
 }
 
 impl PlayQueue {
@@ -102,28 +106,57 @@ impl PlayQueue {
 
     fn rebuild_order(&mut self, first: Option<usize>) {
         let n = self.context.len();
-        self.order = (0..n).collect();
+        let mut order: Vec<usize> = (0..n).collect();
         if self.shuffle && n > 1 {
-            // Fisher-Yates with a cheap PRNG (no rand dep needed).
-            let mut seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0x9e3779b97f4a7c15)
-                | 1;
-            for i in (1..n).rev() {
-                seed ^= seed << 13;
-                seed ^= seed >> 7;
-                seed ^= seed << 17;
-                let j = (seed % (i as u64 + 1)) as usize;
-                self.order.swap(i, j);
-            }
+            self.shuffle_slice(&mut order, &mut Xorshift::from_clock());
             // Current/starting track walks first so "shuffle then play" is
             // deterministic from the chosen track.
             if let Some(first) = first {
-                if let Some(fpos) = self.order.iter().position(|&i| i == first) {
-                    self.order.swap(0, fpos);
+                if let Some(fpos) = order.iter().position(|&i| i == first) {
+                    if self.weights.is_empty() {
+                        order.swap(0, fpos);
+                    } else {
+                        // A swap would send the first draw to a random place.
+                        order[..=fpos].rotate_right(1);
+                    }
                 }
             }
+        }
+        self.order = order;
+    }
+
+    /// Shuffle context indexes in place: uniformly, or by weight when any
+    /// track has one.
+    fn shuffle_slice(&self, indexes: &mut [usize], rng: &mut Xorshift) {
+        if self.weights.is_empty() {
+            // Fisher-Yates.
+            for i in (1..indexes.len()).rev() {
+                let j = (rng.next() % (i as u64 + 1)) as usize;
+                indexes.swap(i, j);
+            }
+        } else {
+            weighted_order(indexes, |i| self.weight_of(i), rng);
+        }
+    }
+
+    fn weight_of(&self, index: usize) -> f64 {
+        self.weights
+            .get(&self.context[index])
+            .copied()
+            .unwrap_or(1.0)
+    }
+
+    /// Set the shuffle weight of each track id; unlisted tracks weigh 1, and
+    /// an empty map makes every order equally likely. Under shuffle, the part
+    /// of the walk not played yet is drawn again with the new weights, while
+    /// the tracks already played and the current one keep their places.
+    pub fn set_weights(&mut self, weights: HashMap<i64, f64>) {
+        self.weights = weights;
+        if self.shuffle {
+            let start = self.pos.map_or(0, |p| p + 1).min(self.order.len());
+            let mut rest = self.order.split_off(start);
+            self.shuffle_slice(&mut rest, &mut Xorshift::from_clock());
+            self.order.extend(rest);
         }
     }
 
@@ -311,9 +344,122 @@ impl PlayQueue {
     }
 }
 
+/// Cheap PRNG for shuffling (no rand dependency needed).
+struct Xorshift(u64);
+
+impl Xorshift {
+    fn new(seed: u64) -> Self {
+        Self(seed | 1)
+    }
+
+    fn from_clock() -> Self {
+        Self::new(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0x9e3779b97f4a7c15),
+        )
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    /// Uniform in (0, 1), never exactly 0 or 1.
+    fn unit(&mut self) -> f64 {
+        ((self.next() >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    }
+}
+
+/// Reorder `items` so that each position is drawn from the items not drawn
+/// yet with probability proportional to its weight (Efraimidis-Spirakis:
+/// sort by `u^(1/w)`, compared here as `ln(u) / w`). Weights must be above 0.
+fn weighted_order(items: &mut [usize], weight: impl Fn(usize) -> f64, rng: &mut Xorshift) {
+    let mut keyed: Vec<(f64, usize)> = items
+        .iter()
+        .map(|&i| (rng.unit().ln() / weight(i), i))
+        .collect();
+    keyed.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (slot, (_, i)) in items.iter_mut().zip(keyed) {
+        *slot = i;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mean position of `track` over many weighted orders of 0..n.
+    fn mean_position(n: usize, weights: &HashMap<usize, f64>, track: usize) -> f64 {
+        let runs = 4000;
+        let mut total = 0;
+        for seed in 0..runs {
+            let mut items: Vec<usize> = (0..n).collect();
+            let mut rng = Xorshift::new(seed * 0x9e37_79b9 + 1);
+            weighted_order(&mut items, |i| weights.get(&i).copied().unwrap_or(1.0), &mut rng);
+            total += items.iter().position(|&i| i == track).unwrap();
+        }
+        total as f64 / runs as f64
+    }
+
+    #[test]
+    fn weighted_order_draws_heavier_tracks_earlier() {
+        let w = |s| crate::rating::shuffle_weight(Some(s));
+        let weights = HashMap::from([(0, w(5.0)), (1, w(4.0)), (2, w(1.0)), (3, w(2.0))]);
+        let loved = mean_position(100, &weights, 0);
+        let liked = mean_position(100, &weights, 1);
+        let neutral = mean_position(100, &weights, 50);
+        let disliked = mean_position(100, &weights, 3);
+        let hated = mean_position(100, &weights, 2);
+        assert!(loved < liked && liked < neutral, "{loved} {liked} {neutral}");
+        assert!(neutral < disliked && disliked < hated, "{neutral} {disliked} {hated}");
+        assert!(hated > 90.0, "a 1-star track comes near the end: {hated}");
+    }
+
+    #[test]
+    fn weighted_shuffle_keeps_current_first_and_visits_all() {
+        let mut q = PlayQueue::default();
+        q.set_context((0..50).collect(), 7);
+        q.weights = HashMap::from([(3, 4.0), (7, 0.02), (9, 0.5)]);
+        q.set_shuffle(true);
+        assert_eq!(q.current(), Some(7));
+        let mut seen = vec![7];
+        while let Some(id) = q.advance() {
+            seen.push(id);
+        }
+        seen.sort();
+        assert_eq!(seen, (0..50).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn new_weights_redraw_only_the_unplayed_rest() {
+        let mut q = PlayQueue::default();
+        q.set_context((0..50).collect(), 7);
+        q.set_shuffle(true);
+        let mut played = vec![7];
+        for _ in 0..10 {
+            played.push(q.advance().unwrap());
+        }
+        q.set_weights(HashMap::from([(1, 4.0), (2, 0.02)]));
+        assert_eq!(q.current(), played.last().copied());
+        let mut previous = played.clone();
+        previous.pop();
+        for &id in previous.iter().rev() {
+            assert_eq!(q.previous(), Some(id), "played tracks keep their places");
+        }
+        for _ in 0..previous.len() {
+            q.advance();
+        }
+        let mut seen = played.clone();
+        while let Some(id) = q.advance() {
+            seen.push(id);
+        }
+        seen.sort();
+        assert_eq!(seen, (0..50).collect::<Vec<_>>(), "every track still plays once");
+    }
 
     #[test]
     fn queue_takes_precedence_then_context_resumes() {
