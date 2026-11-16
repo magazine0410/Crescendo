@@ -3,14 +3,14 @@
   "id": "dev.crescendo.wasm-demo",
   "name": "Wasm Demo Tools",
   "version": "0.2.0",
-  "description": "Canonical sandboxed Wasm plugin example. Demonstrates host-rendered settings and a menu action, namespaced storage, windowed library reads, and the denials a plugin sees for capabilities it did not request.",
+  "description": "Canonical sandboxed Wasm plugin example. Demonstrates host-rendered settings and a menu action, a playlist exporter, namespaced storage, windowed library reads, and the denials a plugin sees for capabilities it did not request.",
   "authors": ["magazine"],
   "license": "MIT",
   "homepage": "https://github.com/magazine0410/Crescendo",
   "kind": "wasm",
-  "api_version": "0.2.1",
+  "api_version": "0.2.2",
   "min_crescendo_version": "0.8.0",
-  "permissions": ["library.read", "storage"],
+  "permissions": ["library.read", "library.paths", "playlists.read", "storage"],
   "contributes": {
     "settings": [
       {
@@ -41,7 +41,11 @@
       { "id": "playlists_all" },
       { "id": "playlist_create" },
       { "id": "net_fetch" },
-      { "id": "spin" }
+      { "id": "spin" },
+      { "id": "export_titles" }
+    ],
+    "playlist_exporters": [
+      { "id": "titles", "label": "Demo chunk list", "extension": "txt", "command": "export_titles" }
     ]
   }
 }

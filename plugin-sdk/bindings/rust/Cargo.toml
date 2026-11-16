@@ -2,7 +2,7 @@
 name = "crescendo-plugin-sdk"
 # Tracks the Wasm runtime API this binding set was generated from. Keep it
 # equal to `WASM_API_VERSION` and to the `api_version` a plugin declares.
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Generated Rust bindings for Crescendo's sandboxed plugin world"
 license = "MIT"

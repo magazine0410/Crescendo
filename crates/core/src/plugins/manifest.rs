@@ -47,7 +47,33 @@ pub struct PluginContributions {
     /// Wasm-only: commands the host may dispatch to the plugin's module.
     /// Declarative plugins cannot contribute commands.
     pub commands: Vec<PluginCommandDeclaration>,
+    /// Wasm-only, runtime API 0.2.2: playlist file formats the plugin writes.
+    pub playlist_exporters: Vec<PluginPlaylistExporter>,
 }
+
+/// A playlist file format a Wasm plugin renders. Crescendo owns everything
+/// around it: the menu items, the Save dialog, the file names and the
+/// writing. The plugin only turns the tracks it is handed into text through
+/// `command`, so it never chooses a path or touches the filesystem. Because
+/// those tracks include their paths, an exporter must request
+/// `playlists.read`, `library.read` and `library.paths`, which the user
+/// approves like any other capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginPlaylistExporter {
+    pub id: String,
+    /// The format's name in the menu when several exporters are loaded,
+    /// such as "M3U playlist".
+    pub label: String,
+    /// File extension without the dot, lowercase letters and digits.
+    pub extension: String,
+    /// The declared command that renders one chunk of a playlist.
+    pub command: String,
+}
+
+/// Exporters a manifest may name a permission for.
+pub const PLAYLIST_EXPORTER_PERMISSIONS: [&str; 3] =
+    ["playlists.read", "library.read", "library.paths"];
 
 /// A host-dispatchable command exposed by a Wasm plugin. The id is the only
 /// surface; labels, UI, and arguments stay host-owned.
@@ -284,6 +310,48 @@ impl PluginManifest {
         }
         if self.contributes.commands.len() > 32 {
             bail!("plugins cannot declare more than 32 commands");
+        }
+        if !self.contributes.playlist_exporters.is_empty() {
+            if self.kind != PluginKind::Wasm {
+                bail!("only Wasm plugins can contribute playlist exporters");
+            }
+            if api_version < Version::new(0, 2, 2) {
+                bail!("playlist exporters require Wasm runtime API 0.2.2 or newer");
+            }
+            if self.contributes.playlist_exporters.len() > 8 {
+                bail!("plugins cannot declare more than 8 playlist exporters");
+            }
+            for permission in PLAYLIST_EXPORTER_PERMISSIONS {
+                if !self.permissions.iter().any(|p| p == permission) {
+                    bail!("a playlist exporter must request the {permission} permission");
+                }
+            }
+        }
+        let mut exporter_ids = HashSet::new();
+        for exporter in &self.contributes.playlist_exporters {
+            validate_setting_key(&exporter.id)?;
+            validate_text("exporter label", &exporter.label, false)?;
+            if exporter.label.chars().count() > 64 {
+                bail!("exporter labels cannot be longer than 64 characters");
+            }
+            if exporter.extension.is_empty()
+                || exporter.extension.len() > 8
+                || !exporter
+                    .extension
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            {
+                bail!("exporter extensions must be 1 to 8 lowercase letters or digits");
+            }
+            if !command_ids.contains(exporter.command.as_str()) {
+                bail!(
+                    "exporter command {:?} is not a declared command",
+                    exporter.command
+                );
+            }
+            if !exporter_ids.insert(exporter.id.as_str()) {
+                bail!("duplicate playlist exporter id {:?}", exporter.id);
+            }
         }
         let mut settings = HashSet::new();
         for setting in &self.contributes.settings {

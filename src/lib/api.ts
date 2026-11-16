@@ -97,12 +97,20 @@ export interface M3uImportResult {
   missing: string[];
 }
 
-export interface M3uExportResult {
-  /** The .m3u files written. */
+export interface PlaylistExportResult {
+  /** The files written. */
   files: string[];
   tracks: number;
-  /** Songs whose file was missing; their paths are written anyway. */
+  /** Songs whose file was missing; the exporter is handed them anyway. */
   missing: number;
+}
+
+/** A playlist file format a loaded plugin writes. */
+export interface PlaylistExporterInfo {
+  plugin_id: string;
+  id: string;
+  label: string;
+  extension: string;
 }
 
 /** Outcome of dropping files/folders onto a playlist. */
@@ -223,6 +231,7 @@ export interface PluginSnapshot {
   restart_required: boolean;
   projection_revision: number;
   menu_controls: PluginMenuControl[];
+  playlist_exporters: PlaylistExporterInfo[];
 }
 
 export interface PluginMenuControl {

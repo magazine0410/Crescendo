@@ -3,7 +3,8 @@
   import { slide } from "svelte/transition";
   import { playlists, type SidebarRow } from "$lib/stores/playlists.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import { isTauri, type PlaylistInfo } from "$lib/api";
+  import { plugins } from "$lib/stores/plugins.svelte";
+  import { isTauri, type PlaylistExporterInfo, type PlaylistInfo } from "$lib/api";
   import { openContextMenu, type MenuItem } from "../common/ContextMenu.svelte";
   import { openSetCollection } from "./SetCollectionDialog.svelte";
   import Icon from "../common/Icon.svelte";
@@ -90,13 +91,13 @@
     }
   }
 
-  async function exportM3u(ids: number[]) {
+  async function exportPlaylists(exporter: PlaylistExporterInfo, ids: number[]) {
     if (!isTauri) {
       importReport = "Export needs the desktop app";
       return;
     }
     try {
-      const r = await playlists.exportM3u(ids);
+      const r = await playlists.exportPlaylists(exporter, ids);
       if (!r) return;
       const where =
         r.files.length === 1 ? r.files[0].split("/").pop() : `${r.files.length} files`;
@@ -105,6 +106,21 @@
     } catch (e) {
       importReport = `Export failed: ${e}`;
     }
+  }
+
+  /** Export items for the loaded playlist exporters, which come from
+      plugins. With one format the item reads as plain "Export"; with
+      several, each names its format. None without an exporter plugin. */
+  function exportItems(ids: number[], allowEmpty = true): MenuItem[] {
+    const exporters = plugins.snapshot?.playlist_exporters ?? [];
+    const count = ids.length;
+    const what = count === 1 ? "playlist" : `${count} playlists`;
+    return exporters.map((exporter) => ({
+      label:
+        exporters.length === 1 ? `Export ${what}…` : `Export ${what} as ${exporter.label}…`,
+      disabled: !allowEmpty && count === 0,
+      action: count === 0 ? undefined : () => exportPlaylists(exporter, ids),
+    }));
   }
 
   /** Right-clicking inside a multi-selection acts on the whole selection;
@@ -124,10 +140,7 @@
           for (const i of ids) await playlists.remove(i);
         },
       },
-      {
-        label: many ? `Export ${ids.length} playlists…` : "Export playlist…",
-        action: () => exportM3u(ids),
-      },
+      ...exportItems(ids),
       { separator: true, label: "" },
       {
         label: many ? `Set collection… (${ids.length} playlists)` : "Set collection…",
@@ -148,12 +161,8 @@
     const count = memberIds.length;
     openContextMenu(e, [
       { label: "Rename collection", action: () => startCollectionRename(id, name) },
-      {
-        // One playlist opens the Save dialog; several go into a folder.
-        label: `Export ${count} ${count === 1 ? "playlist" : "playlists"}…`,
-        disabled: count === 0,
-        action: count === 0 ? undefined : () => exportM3u(memberIds),
-      },
+      // One playlist opens the Save dialog; several go into a folder.
+      ...exportItems(memberIds, false),
       {
         // The playlists inside outlive the group that held them.
         label: "Remove collection (keep playlists)",

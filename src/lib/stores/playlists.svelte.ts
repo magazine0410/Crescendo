@@ -2,7 +2,8 @@ import {
   call,
   type CollectionInfo,
   type DropImportResult,
-  type M3uExportResult,
+  type PlaylistExportResult,
+  type PlaylistExporterInfo,
   type M3uImportResult,
   type PlayContext,
   type PlaylistInfo,
@@ -450,10 +451,18 @@ class PlaylistsStore {
     await this.refresh();
   }
 
-  /** Export playlists as .m3u: one through a Save dialog, several into a
-      chosen folder. Null when the dialog was cancelled. */
-  async exportM3u(ids: number[]): Promise<M3uExportResult | null> {
-    return call<M3uExportResult | null>("playlist_export_m3u", { ids });
+  /** Export playlists through a plugin's exporter: one through a Save
+      dialog, several into a chosen folder. Null when the dialog was
+      cancelled. */
+  async exportPlaylists(
+    exporter: PlaylistExporterInfo,
+    ids: number[],
+  ): Promise<PlaylistExportResult | null> {
+    return call<PlaylistExportResult | null>("playlist_export", {
+      pluginId: exporter.plugin_id,
+      exporterId: exporter.id,
+      ids,
+    });
   }
 
   async importM3u(path: string): Promise<M3uImportResult> {

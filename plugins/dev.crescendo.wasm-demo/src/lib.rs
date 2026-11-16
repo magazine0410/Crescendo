@@ -49,6 +49,15 @@ fn json_string_field(input: &str, key: &str) -> Option<String> {
     Some(rest[..end].replace("\\\"", "\"").replace("\\\\", "\\"))
 }
 
+/// Reads the unsigned number value of `"key"`, the first occurrence.
+fn json_number_field(input: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{key}\"");
+    let start = input.find(&needle)? + needle.len();
+    let rest = input[start..].trim_start().strip_prefix(':')?.trim_start();
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 impl Guest for Component {
     fn init() -> Result<(), ()> {
         let settings = host::settings();
@@ -158,6 +167,21 @@ impl Guest for Component {
                     Err(net::NetError::TooLarge) => "too-large".into(),
                     Err(net::NetError::Transport(_)) => "transport".into(),
                 })
+            }
+            // A playlist exporter (runtime API 0.2.2). The host sends the
+            // playlist in chunks; this one writes a line per chunk naming its
+            // offset and size, after a header naming the folder the file goes
+            // to, which a real format would make its paths relative to.
+            "export_titles" => {
+                let offset = json_number_field(&input, "offset").unwrap_or(0);
+                let tracks = input.matches("\"path\"").count();
+                let mut text = String::new();
+                if offset == 0 {
+                    let directory = json_string_field(&input, "directory").unwrap_or_default();
+                    text.push_str(&format!("# demo export into {directory}\n"));
+                }
+                text.push_str(&format!("chunk {offset} {tracks}\n"));
+                Ok(format!("{{\"text\":\"{}\"}}", json_escape(&text)))
             }
             "spin" => loop {},
             other => Err(format!("unknown command {other}")),

@@ -1,5 +1,4 @@
 use crate::db::Db;
-use crate::model::Track;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -16,7 +15,8 @@ pub struct M3uImportResult {
     pub missing: Vec<String>,
 }
 
-/// The playlist file formats [`import`] reads. Export writes M3U only.
+/// The playlist file formats [`import`] reads. Exporting is left to plugins
+/// (`plugins::export`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
     M3u,
@@ -381,165 +381,6 @@ fn normalize(path: &Path) -> std::path::PathBuf {
         }
     }
     out
-}
-
-#[derive(Debug, Serialize)]
-pub struct M3uExportResult {
-    /// The files written.
-    pub files: Vec<String>,
-    /// Songs written across them.
-    pub tracks: usize,
-    /// Songs whose file was missing at export time; their paths are written
-    /// anyway, so the playlist stays complete.
-    pub missing: usize,
-}
-
-/// A playlist as extended M3U, in UTF-8: an `#EXTM3U` header, then for each
-/// song an `#EXTINF:<seconds>,<Artist> - <Title>` line and its path. A path
-/// below `dir` (the folder the file is written to) is written relative to it,
-/// any other path in full, which is what [`import`] resolves back.
-pub fn render(tracks: &[Track], dir: &Path) -> String {
-    let mut out = String::from("#EXTM3U\n");
-    for track in tracks {
-        let seconds = if track.duration_ms > 0 {
-            (track.duration_ms + 500) / 1000
-        } else {
-            -1
-        };
-        let title = track
-            .title
-            .clone()
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| {
-                Path::new(&track.path)
-                    .file_stem()
-                    .map(|stem| stem.to_string_lossy().to_string())
-                    .unwrap_or_default()
-            });
-        let artist = track
-            .artist
-            .as_ref()
-            .or(track.albumartist.as_ref())
-            .filter(|a| !a.trim().is_empty());
-        let label = match artist {
-            Some(artist) => format!("{artist} - {title}"),
-            None => title,
-        };
-        // One entry per line: a line break in a tag would split it.
-        let label = label.replace(['\r', '\n'], " ");
-        let path = Path::new(&track.path);
-        let line = match path.strip_prefix(dir) {
-            Ok(relative) if !relative.as_os_str().is_empty() => relative.to_string_lossy(),
-            _ => path.to_string_lossy(),
-        };
-        out.push_str(&format!("#EXTINF:{seconds},{label}\n{line}\n"));
-    }
-    out
-}
-
-/// `path`, ending in `.m3u`.
-pub fn with_m3u_extension(path: &Path) -> PathBuf {
-    let is_m3u = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("m3u"));
-    if is_m3u {
-        path.to_path_buf()
-    } else {
-        let mut name = path.as_os_str().to_owned();
-        name.push(".m3u");
-        PathBuf::from(name)
-    }
-}
-
-/// Write one playlist to `file` (given a `.m3u` extension if it lacks one).
-/// The file is written beside its target and renamed over it, so an existing
-/// one is replaced whole or not at all.
-pub fn export_playlist(db: &Db, playlist_id: i64, file: &Path) -> Result<M3uExportResult> {
-    let file = with_m3u_extension(file);
-    let dir = file
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("the playlist needs a folder to be saved in"))?;
-    let tracks = db.playlist_tracks(playlist_id)?;
-    let text = render(&tracks, dir);
-    let tmp = dir.join(format!(
-        ".{}.crescendo-tmp",
-        file.file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default()
-    ));
-    std::fs::write(&tmp, text)?;
-    if let Err(error) = std::fs::rename(&tmp, &file) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error.into());
-    }
-    Ok(M3uExportResult {
-        files: vec![file.to_string_lossy().to_string()],
-        tracks: tracks.len(),
-        missing: tracks.iter().filter(|t| t.missing).count(),
-    })
-}
-
-/// Write each playlist into `folder` as `<name>.m3u`. An existing file is
-/// never replaced: the name gets " (2)", " (3)", … instead.
-pub fn export_playlists_to_folder(db: &Db, ids: &[i64], folder: &Path) -> Result<M3uExportResult> {
-    if !folder.is_dir() {
-        anyhow::bail!("{} is not a folder", folder.display());
-    }
-    let names: HashMap<i64, String> = db
-        .playlist_list()?
-        .into_iter()
-        .map(|p| (p.id, p.name))
-        .collect();
-    let mut result = M3uExportResult {
-        files: Vec::new(),
-        tracks: 0,
-        missing: 0,
-    };
-    for id in ids {
-        let name = names
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("playlist {id} no longer exists"))?;
-        let file = free_file_name(folder, &file_stem_for(name));
-        let one = export_playlist(db, *id, &file)?;
-        result.files.extend(one.files);
-        result.tracks += one.tracks;
-        result.missing += one.missing;
-    }
-    Ok(result)
-}
-
-/// A playlist name made safe as a file name: no path separators or control
-/// characters, no leading dot, never empty.
-pub fn file_stem_for(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c == '/' || c == '\\' || c.is_control() {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let cleaned = cleaned.trim().trim_start_matches('.').trim().to_string();
-    if cleaned.is_empty() {
-        "Playlist".into()
-    } else {
-        cleaned
-    }
-}
-
-fn free_file_name(folder: &Path, stem: &str) -> PathBuf {
-    let first = folder.join(format!("{stem}.m3u"));
-    if !first.exists() {
-        return first;
-    }
-    (2..)
-        .map(|n| folder.join(format!("{stem} ({n}).m3u")))
-        .find(|candidate| !candidate.exists())
-        .expect("some numbered name is free")
 }
 
 #[cfg(test)]

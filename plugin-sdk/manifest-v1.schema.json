@@ -240,6 +240,19 @@
       "required": ["id"],
       "properties": { "id": { "$ref": "#/$defs/key" } }
     },
+    "playlistExporter": {
+      "title": "Playlist file format (Wasm, runtime API 0.2.2)",
+      "description": "A playlist format the plugin renders. Crescendo shows the menu items, opens the Save dialog and writes the file; the command only turns the tracks it is handed into text. Requires the playlists.read, library.read and library.paths permissions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "extension", "command"],
+      "properties": {
+        "id": { "$ref": "#/$defs/key" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "extension": { "type": "string", "pattern": "^[a-z0-9]{1,8}$" },
+        "command": { "$ref": "#/$defs/key" }
+      }
+    },
     "contributions": {
       "type": "object",
       "additionalProperties": false,
@@ -263,6 +276,11 @@
           "type": "array",
           "maxItems": 32,
           "items": { "$ref": "#/$defs/commandDeclaration" }
+        },
+        "playlist_exporters": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/playlistExporter" }
         }
       }
     }

@@ -40,6 +40,17 @@ pub struct PluginSnapshot {
     pub restart_required: bool,
     pub projection_revision: u64,
     pub menu_controls: Vec<PluginMenuControlInfo>,
+    /// Playlist file formats loaded plugins write, in plugin order.
+    pub playlist_exporters: Vec<PlaylistExporterInfo>,
+}
+
+/// One loaded playlist exporter, for the playlist menus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlaylistExporterInfo {
+    pub plugin_id: String,
+    pub id: String,
+    pub label: String,
+    pub extension: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1106,6 +1117,42 @@ impl PluginManager {
     /// Dispatch one host-visible, registered command of a loaded Wasm plugin.
     /// Input and output are bounded JSON documents; track IDs and other bulk
     /// data never ride along implicitly.
+    /// Every exporter in the immutable loaded set.
+    pub fn playlist_exporters(&self) -> Vec<PlaylistExporterInfo> {
+        self.loaded
+            .iter()
+            .filter(|(_, manifest)| manifest.kind == PluginKind::Wasm)
+            .flat_map(|(plugin_id, manifest)| {
+                manifest
+                    .contributes
+                    .playlist_exporters
+                    .iter()
+                    .map(|exporter| PlaylistExporterInfo {
+                        plugin_id: plugin_id.clone(),
+                        id: exporter.id.clone(),
+                        label: exporter.label.clone(),
+                        extension: exporter.extension.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    /// A loaded plugin's exporter, by id.
+    pub fn playlist_exporter(
+        &self,
+        plugin_id: &str,
+        exporter_id: &str,
+    ) -> Option<super::manifest::PluginPlaylistExporter> {
+        self.loaded
+            .get(plugin_id)
+            .filter(|manifest| manifest.kind == PluginKind::Wasm)?
+            .contributes
+            .playlist_exporters
+            .iter()
+            .find(|exporter| exporter.id == exporter_id)
+            .cloned()
+    }
+
     pub fn invoke(&self, plugin_id: &str, command_id: &str, input: &Value) -> Result<Value> {
         self.ensure_available()?;
         let manifest = self
@@ -1318,6 +1365,7 @@ impl PluginManager {
                 .map_err(|_| anyhow!("plugin projection lock poisoned"))?
                 .revision,
             menu_controls: self.menu_controls()?,
+            playlist_exporters: self.playlist_exporters(),
         })
     }
 
@@ -1902,10 +1950,7 @@ fn asset_media_type(path: &Path) -> Result<&'static str> {
 mod tests {
     use super::*;
     use crate::plugins::package::write_test_package;
-    use crate::plugins::{
-        PluginContributions, PluginSelectOption,
-        PluginSettingDeclaration,
-    };
+    use crate::plugins::{PluginContributions, PluginSelectOption, PluginSettingDeclaration};
     use std::fs::File;
 
     fn manifest(version: &str) -> PluginManifest {

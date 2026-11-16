@@ -80,7 +80,7 @@ const COMMANDS: &[&str] = &[
     "playlist_reorder",
     "playlist_add_paths",
     "playlist_import_m3u",
-    "playlist_export_m3u",
+    "playlist_export",
     "collection_list",
     "collection_set",
     "collection_rename",

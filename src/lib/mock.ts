@@ -262,6 +262,7 @@ function pluginSnapshot(): PluginSnapshot {
       return plugin.pending !== null || enablement === "enable_pending" || enablement === "disable_pending";
     }),
     projection_revision: projectionRevision,
+    playlist_exporters: [],
     menu_controls: groupingCollapseEnabled()
       ? [
           {
@@ -1206,7 +1207,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       await mockCall("playlist_add_tracks", { id: args.id, trackIds: ids });
       return ids.length as T;
     }
-    case "playlist_export_m3u":
+    case "playlist_export":
       throw new Error("Exporting playlists needs the desktop app.");
     case "radio_stations":
       return structuredClone(mockStations) as T;
