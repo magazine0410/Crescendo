@@ -13,6 +13,8 @@
 //!   tighter than `|`, and either symbol inside quotes or a regex is literal
 //! - numeric: `#(year >= 1990)`, `#(10 <= track < 100)`, `#(length > 2:00)`,
 //!   or without the `#( )` wrapper: `plays>2`, `year>=1990`
+//! - missing tags: `@(missing: genre)`, Quod Libet's query extension, matches
+//!   tracks where the tag is absent or blank
 //! - plays: `plays>2` / `plays=3` / `plays<3` over the per-track play counter.
 //!   Zero means "never played", so a comparison hides those rows unless the
 //!   query names 0 (`plays=0`).
@@ -41,6 +43,9 @@ pub enum Node {
         operands: Vec<NumOperand>,
         ops: Vec<CmpOp>,
     },
+    /// `@(missing: tag)`: the tag is absent or blank. Holds the canonical tag,
+    /// which the parser has checked has a column.
+    Missing(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,7 +175,11 @@ pub fn classify(query: &str) -> QueryKind {
 fn uses_syntax(node: &Node) -> bool {
     match node {
         Node::FreeText(_) => false,
-        Node::Tag { .. } | Node::Numeric { .. } | Node::Not(_) | Node::Or(_) => true,
+        Node::Tag { .. }
+        | Node::Numeric { .. }
+        | Node::Missing(_)
+        | Node::Not(_)
+        | Node::Or(_) => true,
         Node::And(items) => items.iter().any(uses_syntax),
     }
 }

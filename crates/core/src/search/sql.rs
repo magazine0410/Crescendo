@@ -88,6 +88,16 @@ pub(crate) fn browse_column(tag: &str) -> Option<&'static str> {
     })
 }
 
+/// The column a `@(missing: tag)` test reads: any browsable column, plus the
+/// time tags, whose absence means never added by a scan / never played.
+pub(super) fn missing_column(tag: &str) -> Option<&'static str> {
+    match tag {
+        "added" => Some("added_at"),
+        "lastplayed" => Some("last_played"),
+        _ => browse_column(tag),
+    }
+}
+
 /// Numeric-tag -> SQL expression yielding a number.
 fn num_expr(tag: &str) -> Option<&'static str> {
     Some(match tag {
@@ -234,6 +244,14 @@ impl Compiler {
                     self.sql.push(')');
                 }
             }
+            Node::Missing(tag) => match missing_column(tag) {
+                // Blank text counts as missing, as with Quod Libet's default;
+                // TRIM also turns a number into text that is never blank.
+                Some(col) => self
+                    .sql
+                    .push_str(&format!("({col} IS NULL OR TRIM({col}) = '')")),
+                None => self.sql.push('0'),
+            },
             Node::Numeric { operands, ops } => {
                 let guard = zero_guard(operands, ops);
                 if let Some(g) = guard {

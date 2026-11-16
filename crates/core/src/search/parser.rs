@@ -1,4 +1,4 @@
-use super::sql::{canonical_tag, is_numeric_tag, is_time_tag};
+use super::sql::{canonical_tag, is_numeric_tag, is_time_tag, missing_column};
 use super::{CmpOp, Matcher, Node, NumOperand, ParseError};
 
 const MAX_QUERY_BYTES: usize = 16 * 1024;
@@ -189,6 +189,10 @@ impl Parser {
                 self.pos += 2;
                 self.numeric()
             }
+            Some('@') if self.peek_at(1) == Some('(') => {
+                self.pos += 2;
+                self.extension()
+            }
             Some('/') => {
                 // bare regex as free text is rare; treat as regex over blob-ish
                 // fields is not supported — error clearly instead.
@@ -200,6 +204,42 @@ impl Parser {
             }
             Some(_) => self.word_or_tagmatch(),
         }
+    }
+
+    /// After `@(`: Quod Libet's `@(name: body)` query extensions. Only
+    /// `missing` exists here: `@(missing: genre)`.
+    fn extension(&mut self) -> Result<Node, ParseError> {
+        self.skip_ws();
+        let mut name = String::new();
+        while let Some(c) = self.peek().filter(|c| c.is_alphanumeric() || *c == '_') {
+            name.push(c);
+            self.pos += 1;
+        }
+        self.skip_ws();
+        if self.peek() != Some(':') {
+            return self.err("expected ':' after the extension name, as in @(missing: genre)");
+        }
+        self.bump();
+        if !name.eq_ignore_ascii_case("missing") {
+            return self.err(format!(
+                "unknown query extension '{name}'; only @(missing: tag) is supported"
+            ));
+        }
+        self.skip_ws();
+        let word = self.operand_word();
+        if word.is_empty() {
+            return self.err("expected a tag, as in @(missing: genre)");
+        }
+        let tag = normalize_tag(&word);
+        if missing_column(&tag).is_none() {
+            return self.err(format!("'{word}' is not a tag that can be missing"));
+        }
+        self.skip_ws();
+        if self.peek() != Some(')') {
+            return self.err("expected ')' after the tag");
+        }
+        self.bump();
+        Ok(Node::Missing(tag))
     }
 
     fn term_list(&mut self) -> Result<Vec<Node>, ParseError> {

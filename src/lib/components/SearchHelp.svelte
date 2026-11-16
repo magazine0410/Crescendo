@@ -62,6 +62,7 @@
         ["artist=\"Charlie Parker\"", "Quote a value to include spaces; it still matches as a substring (also matches “Charlie Parker Quartet”)."],
         ["artist=\"BoA\"c", "Trailing c makes the match case-sensitive."],
         ["genre!=rock", "Excludes matches (tracks without the tag count as not matching)."],
+        ["@(missing: genre)", "Tracks without the tag, or with it blank. Works with every tag in the list above except length and plays; !@(missing: genre) finds tracks that have one."],
         ["album=/shadow/", "Regular expression between slashes; add c for case-sensitive."],
       ],
     },
