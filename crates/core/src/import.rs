@@ -147,6 +147,7 @@ struct PendingImport {
     filename: String,
     mtime: i64,
     size: i64,
+    added_at: i64,
     meta: tags::TrackMeta,
 }
 
@@ -274,6 +275,7 @@ fn read_import_file(path: &Path, path_str: &str) -> Result<PendingImport> {
         filename,
         mtime,
         size: md.len() as i64,
+        added_at: scanner::added_time(&md, mtime),
         meta,
     })
 }
@@ -290,6 +292,7 @@ fn write_import(db: &Db, pending: &PendingImport) -> Result<Row> {
                 &pending.filename,
                 pending.mtime,
                 pending.size,
+                pending.added_at,
                 &pending.meta,
             )?;
         }

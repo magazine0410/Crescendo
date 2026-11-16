@@ -29,11 +29,27 @@ struct KnownFile {
     mtime: i64,
     size: i64,
     missing: bool,
+    /// The row has an `added_at`. Rows from before that column have none until
+    /// a scan fills it in.
+    has_added: bool,
 }
 
 struct WalkResult {
     leftover: HashMap<String, KnownFile>,
     error: Option<String>,
+    /// Unchanged files whose rows still lack `added_at`, with the value to set.
+    backfill: Vec<(String, i64)>,
+}
+
+/// When a file joined the library: its birth time where the filesystem
+/// records one (btrfs, ext4, xfs), else `mtime`. A tag edit moves the
+/// modification time, so that is only the fallback.
+pub(crate) fn added_time(md: &std::fs::Metadata, mtime: i64) -> i64 {
+    md.created()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(mtime)
 }
 
 /// true if the extension is one the scanner indexes. Case-insensitive.
@@ -51,10 +67,10 @@ pub(crate) const UPSERT_TRACK: &str = r#"
                        albumartist, titlesort, artistsort, albumartistsort,
                        genre, grouping, composer, arranger, lyricist, vocalist,
                        catalognumber, event, bpm, track_no, disc_no, year,
-                       date, has_embedded_art, search_blob, missing)
+                       date, has_embedded_art, search_blob, missing, added_at)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
             ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28,
-            ?29, ?30, ?31, ?32, 0)
+            ?29, ?30, ?31, ?32, 0, ?33)
     ON CONFLICT(path) DO UPDATE SET
         dir = excluded.dir, filename = excluded.filename,
         mtime = excluded.mtime, size = excluded.size,
@@ -72,11 +88,14 @@ pub(crate) const UPSERT_TRACK: &str = r#"
         bpm = excluded.bpm, track_no = excluded.track_no,
         disc_no = excluded.disc_no, year = excluded.year,
         date = excluded.date, has_embedded_art = excluded.has_embedded_art,
-        search_blob = excluded.search_blob, missing = 0
+        search_blob = excluded.search_blob, missing = 0,
+        added_at = COALESCE(tracks.added_at, excluded.added_at)
 "#;
 
 /// Bind one file onto a statement prepared from [`UPSERT_TRACK`]. Callers
-/// prepare once and loop, so a batch pays for the parse only once.
+/// prepare once and loop, so a batch pays for the parse only once. `added_at`
+/// (see [`added_time`]) is written only where the row has none yet.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn upsert_row(
     stmt: &mut rusqlite::Statement<'_>,
     path: &str,
@@ -84,6 +103,7 @@ pub(crate) fn upsert_row(
     filename: &str,
     mtime: i64,
     size: i64,
+    added_at: i64,
     meta: &TrackMeta,
 ) -> rusqlite::Result<()> {
     stmt.execute(rusqlite::params![
@@ -119,6 +139,7 @@ pub(crate) fn upsert_row(
         meta.date,
         meta.has_embedded_art,
         tags::search_blob(meta),
+        added_at,
     ])?;
     Ok(())
 }
@@ -137,6 +158,7 @@ struct FileJob {
     filename: String,
     mtime: i64,
     size: i64,
+    added_at: i64,
 }
 
 struct WriteJob {
@@ -200,7 +222,9 @@ pub fn scan(
     let scan_root = std::path::absolute(&opts.root)?;
     let mut known = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT path, mtime, size, missing FROM tracks")?;
+        let mut stmt = conn.prepare(
+            "SELECT path, mtime, size, missing, added_at IS NOT NULL FROM tracks",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -208,6 +232,7 @@ pub fn scan(
                     mtime: r.get(1)?,
                     size: r.get(2)?,
                     missing: r.get(3)?,
+                    has_added: r.get(4)?,
                 },
             ))
         })?;
@@ -262,6 +287,7 @@ pub fn scan(
 
         Ok(walker.join().expect("walker thread panicked"))
     })?;
+    backfill_added(&conn, &walk_result.backfill)?;
 
     if let Some(error) = walk_result.error {
         // Successfully read files may already have been upserted in batches.
@@ -305,6 +331,24 @@ pub fn scan(
     Ok(result)
 }
 
+/// Set `added_at` on rows that predate the column, in batches that leave the
+/// main connection room to write between them.
+fn backfill_added(conn: &rusqlite::Connection, rows: &[(String, i64)]) -> Result<()> {
+    let mut set = conn
+        .prepare("UPDATE tracks SET added_at = ?2 WHERE path = ?1 AND added_at IS NULL")?;
+    for (i, batch) in rows.chunks(BATCH_SIZE).enumerate() {
+        if i > 0 {
+            std::thread::sleep(WRITER_YIELD);
+        }
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        for (path, added_at) in batch {
+            set.execute(rusqlite::params![path, added_at])?;
+        }
+        conn.execute_batch("COMMIT")?;
+    }
+    Ok(())
+}
+
 fn walk(
     root: PathBuf,
     full: bool,
@@ -316,6 +360,7 @@ fn walk(
 ) -> WalkResult {
     let mut last_emit = 0u64;
     let mut error = None;
+    let mut backfill = Vec::new();
     let mut record_error = |detail: String| {
         counters.errors.fetch_add(1, Ordering::Relaxed);
         log::warn!("scan traversal failed: {detail}");
@@ -357,11 +402,15 @@ fn walk(
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let size = md.len() as i64;
+        let added_at = added_time(&md, mtime);
 
         let prior = known.remove(path_str);
         if !full {
             if let Some(ref prior) = prior {
                 if !prior.missing && prior.mtime == mtime && prior.size == size {
+                    if !prior.has_added {
+                        backfill.push((path_str.to_string(), added_at));
+                    }
                     // Unchanged: stat-only pass. These files never reach the
                     // writer, so emit progress here or an incremental scan
                     // would sit at 0% until it finishes.
@@ -386,6 +435,7 @@ fn walk(
                 .unwrap_or_default(),
             mtime,
             size,
+            added_at,
         };
         if job_tx.send(job).is_err() {
             break;
@@ -394,6 +444,7 @@ fn walk(
     WalkResult {
         leftover: known,
         error,
+        backfill,
     }
 }
 
@@ -459,6 +510,7 @@ fn write_loop(
             &file.filename,
             file.mtime,
             file.size,
+            file.added_at,
             &meta,
         )?;
         if existed {
@@ -504,6 +556,7 @@ mod tests {
                 path,
                 mtime: 0,
                 size: 0,
+                added_at: 0,
             },
         }
     }

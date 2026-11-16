@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -405,6 +405,20 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS forte_applied_notices (name TEXT PRIMARY KEY);",
         )?;
+    }
+    if version < 15 {
+        // When each track joined the library, in epoch seconds: the file's
+        // birth time, or its modification time where the filesystem keeps no
+        // birth time. Existing rows start NULL; the next scan fills them in
+        // from the stat it already makes, so this needs no disk reads here.
+        let has_column: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'added_at')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_column {
+            tx.execute_batch("ALTER TABLE tracks ADD COLUMN added_at INTEGER;")?;
+        }
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
     tx.commit()?;

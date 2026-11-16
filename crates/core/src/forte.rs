@@ -20,6 +20,7 @@ struct Prepared {
     meta: TrackMeta,
     mtime: i64,
     size: i64,
+    added_at: i64,
 }
 
 /// Look up the track a change belongs to and read its edited file. None when
@@ -45,12 +46,15 @@ fn prepare(db: &Db, change: &FileChange) -> Result<Option<Prepared>> {
     let meta = scanner::tags::read_meta(new)
         .with_context(|| format!("Read edited file {}", new.display()))?;
     let stat = new.metadata()?;
+    let mtime = stat.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64;
     Ok(Some(Prepared {
         id,
         change: change.clone(),
         meta,
-        mtime: stat.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64,
+        mtime,
         size: stat.len() as i64,
+        // Kept only if the row has no date added yet.
+        added_at: scanner::added_time(&stat, mtime),
     }))
 }
 
@@ -80,6 +84,7 @@ fn write_changes(conn: &rusqlite::Connection, pending: &[Prepared]) -> Result<()
             &new.file_name().unwrap_or_default().to_string_lossy(),
             p.mtime,
             p.size,
+            p.added_at,
             &p.meta,
         )?;
     }

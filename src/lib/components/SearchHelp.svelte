@@ -17,6 +17,7 @@
     ["artistsort", "Text — artist sort name, romaji (short: as, arts)."],
     ["bitdepth", "Number — bits per sample (short: bd)."],
     ["bitrate", "Number — bitrate (short: br)."],
+    ["added", "Time — how long ago the track was added to the library, e.g. added<1 week."],
     ["bpm", "Number — beats per minute."],
     ["catalognumber", "Text — catalogue number, e.g. DRCD-0002 (short: cat, cn; alias: catalog)."],
     ["composer", "Text — composer (short: com)."],
@@ -27,6 +28,7 @@
     ["format", "Text — codec / container, e.g. FLAC (short: f; alias: codec)."],
     ["genre", "Text — genre (short: g)."],
     ["grouping", "Text — grouping tag (short: gr)."],
+    ["lastplayed", "Time — how long ago the track was last played; never-played tracks count as older than any span."],
     ["length", "Number — duration in seconds; times are written as m:ss (short: l)."],
     ["lyricist", "Text — lyricist (short: lyr)."],
     ["path", "Text — full file path."],
@@ -66,10 +68,19 @@
     {
       title: "Numbers and time",
       rows: [
-        ["year>=2010", "Numeric comparison: < <= = != >= >. Numeric tags: track, disc, year, length, bpm, rating, plays, bitrate, samplerate, bitdepth."],
+        ["year>=2010", "Numeric comparison: < <= = != >= >. Numeric tags: track, disc, year, length, bpm, rating, plays, bitrate, samplerate, bitdepth, added, lastplayed."],
         ["#(year >= 2010)", "The same comparison in Quod Libet's #( ) form."],
         ["1994<=year<2000", "Comparisons chain into ranges."],
         ["#(length > 5:00)", "Times are written as m:ss or h:mm:ss."],
+      ],
+    },
+    {
+      title: "Date added and last played",
+      rows: [
+        ["added < 1 day", "Added less than a day ago: added and lastplayed compare as how long ago, so read < as “more recently than”."],
+        ["lastplayed > 3 weeks", "Not played in the last three weeks, never-played tracks included."],
+        ["#(1 week < added < 2 months)", "Added between a week and two months ago."],
+        ["added<10days", "Units: seconds, minutes, hours, days, weeks, months (30 days), years (365 days), singular or plural, with or without a space. They work only with added and lastplayed."],
       ],
     },
     {

@@ -1,4 +1,4 @@
-use super::sql::{canonical_tag, is_numeric_tag};
+use super::sql::{canonical_tag, is_numeric_tag, is_time_tag};
 use super::{CmpOp, Matcher, Node, NumOperand, ParseError};
 
 const MAX_QUERY_BYTES: usize = 16 * 1024;
@@ -247,11 +247,28 @@ impl Parser {
             word.push_str(&self.bareword(&['=', '!', '<', '>'])?);
         }
         self.skip_ws();
-        let operand = num_operand_word(&word);
+        let mut operand = num_operand_word(&word);
+        let mut timed = parse_time_span(&word).is_some();
+        // `1 week < added`: a span leading a range, its unit after a space.
+        // Only a comparison after the unit makes it one, so `1 day` alone
+        // stays text.
+        if let (Some(NumOperand::Number(n)), false) = (&operand, timed) {
+            let n = *n;
+            let after_number = self.pos;
+            let unit = time_unit(&self.operand_word());
+            self.skip_ws();
+            match unit {
+                Some(seconds) if matches!(self.peek(), Some('<' | '>')) => {
+                    operand = Some(NumOperand::Number(n * seconds));
+                    timed = true;
+                }
+                _ => self.pos = after_number,
+            }
+        }
         let is_num_tag = matches!(operand, Some(NumOperand::Tag(_)));
         match self.peek() {
             // `plays<3`, and a literal leading a range (`1980<=year<2000`).
-            Some('<' | '>') if operand.is_some() => self.numeric_chain_from(operand.unwrap()),
+            Some('<' | '>') if operand.is_some() => self.chain_rest(operand.unwrap(), timed),
             // `plays=3` / `plays!=3`: a numeric tag compares as a number,
             // never as a substring.
             Some('=') if is_num_tag => self.numeric_chain_from(operand.unwrap()),
@@ -443,12 +460,17 @@ impl Parser {
     }
 
     fn numeric_chain(&mut self) -> Result<Node, ParseError> {
-        let first = self.num_operand()?;
-        self.numeric_chain_from(first)
+        let (first, timed) = self.num_operand()?;
+        self.chain_rest(first, timed)
     }
 
     /// The rest of a comparison chain, with the first operand already read.
     fn numeric_chain_from(&mut self, first: NumOperand) -> Result<Node, ParseError> {
+        self.chain_rest(first, false)
+    }
+
+    /// `timed`: the first operand carried a unit of time.
+    fn chain_rest(&mut self, first: NumOperand, mut timed: bool) -> Result<Node, ParseError> {
         let mut operands = vec![first];
         let mut ops = Vec::new();
         loop {
@@ -456,10 +478,18 @@ impl Parser {
             let Some(op) = self.cmp_op() else { break };
             ops.push(op);
             self.skip_ws();
-            operands.push(self.num_operand()?);
+            let (operand, has_unit) = self.num_operand()?;
+            timed |= has_unit;
+            operands.push(operand);
         }
         if ops.is_empty() {
             return self.err("expected a comparison operator");
+        }
+        let with_time_tag = operands
+            .iter()
+            .any(|o| matches!(o, NumOperand::Tag(t) if is_time_tag(t)));
+        if timed && !with_time_tag {
+            return self.err("units of time compare only with added or lastplayed");
         }
         Ok(Node::Numeric { operands, ops })
     }
@@ -478,31 +508,70 @@ impl Parser {
         Some(op.0)
     }
 
-    /// Number, time literal (mm:ss or h:mm:ss), or tag name.
-    fn num_operand(&mut self) -> Result<NumOperand, ParseError> {
-        self.skip_ws();
-        let word = {
-            let mut out = String::new();
-            while let Some(c) = self.peek() {
-                if c.is_whitespace() || matches!(c, ',' | ')' | '<' | '>' | '=' | '!') {
-                    break;
-                }
-                out.push(c);
-                self.pos += 1;
+    /// One operand of a comparison: up to whitespace, a comma, a closing
+    /// parenthesis or an operator.
+    fn operand_word(&mut self) -> String {
+        let mut out = String::new();
+        while let Some(c) = self.peek() {
+            if c.is_whitespace() || matches!(c, ',' | ')' | '<' | '>' | '=' | '!') {
+                break;
             }
-            out
-        };
+            out.push(c);
+            self.pos += 1;
+        }
+        out
+    }
+
+    /// Number, time literal (mm:ss or h:mm:ss), span of time (`3 days`,
+    /// `3days`, in seconds), or tag name. The flag is set for a span of time.
+    fn num_operand(&mut self) -> Result<(NumOperand, bool), ParseError> {
+        self.skip_ws();
+        let word = self.operand_word();
         if word.is_empty() {
             return self.err("expected a number or tag");
         }
         if let Some(secs) = parse_time_literal(&word) {
-            return Ok(NumOperand::Number(secs));
+            return Ok((NumOperand::Number(secs), false));
         }
         if let Ok(n) = word.parse::<f64>() {
-            return Ok(NumOperand::Number(n));
+            // `3 days`: a unit may follow the number after a space.
+            let after_number = self.pos;
+            self.skip_ws();
+            if let Some(seconds) = time_unit(&self.operand_word()) {
+                return Ok((NumOperand::Number(n * seconds), true));
+            }
+            self.pos = after_number;
+            return Ok((NumOperand::Number(n), false));
         }
-        Ok(NumOperand::Tag(normalize_tag(&word)))
+        if let Some(secs) = parse_time_span(&word) {
+            return Ok((NumOperand::Number(secs), true));
+        }
+        Ok((NumOperand::Tag(normalize_tag(&word)), false))
     }
+}
+
+/// Seconds in one unit of time, singular or plural, in any case. Months are
+/// 30 days and years 365, as in Quod Libet.
+fn time_unit(word: &str) -> Option<f64> {
+    let word = word.to_lowercase();
+    let singular = word.strip_suffix('s').unwrap_or(&word);
+    Some(match singular {
+        "second" => 1.0,
+        "minute" => 60.0,
+        "hour" => 3600.0,
+        "day" => 86_400.0,
+        "week" => 7.0 * 86_400.0,
+        "month" => 30.0 * 86_400.0,
+        "year" => 365.0 * 86_400.0,
+        _ => return None,
+    })
+}
+
+/// A number with its unit attached, `3days` -> 259200.
+fn parse_time_span(word: &str) -> Option<f64> {
+    let unit_at = word.find(|c: char| c.is_alphabetic())?;
+    let n: f64 = word[..unit_at].parse().ok()?;
+    Some(n * time_unit(&word[unit_at..])?)
 }
 
 /// The word as the left side of a bare comparison: a numeric tag, a number, or
@@ -517,6 +586,9 @@ fn num_operand_word(word: &str) -> Option<NumOperand> {
     }
     if let Ok(n) = word.parse::<f64>() {
         return Some(NumOperand::Number(n));
+    }
+    if let Some(secs) = parse_time_span(word) {
+        return Some(NumOperand::Number(secs));
     }
     let tag = normalize_tag(word);
     is_numeric_tag(&tag).then(|| NumOperand::Tag(tag))

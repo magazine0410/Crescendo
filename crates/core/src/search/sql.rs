@@ -101,8 +101,19 @@ fn num_expr(tag: &str) -> Option<&'static str> {
         "samplerate" => "sample_rate",
         "bitdepth" => "bit_depth",
         "plays" | "playcount" => "play_count",
+        // Time tags compare as an age in seconds, as in Quod Libet, so
+        // `added < 1 day` reads "added less than a day ago". A track never
+        // played counts as played at the epoch: older than any span.
+        "added" => "(CAST(strftime('%s', 'now') AS INTEGER) - added_at)",
+        "lastplayed" => "(CAST(strftime('%s', 'now') AS INTEGER) - COALESCE(last_played, 0))",
         _ => return None,
     })
+}
+
+/// True for the tags that hold a moment rather than a quantity, which are the
+/// only ones a unit of time (`3 days`) can be compared with.
+pub(super) fn is_time_tag(tag: &str) -> bool {
+    matches!(tag, "added" | "lastplayed")
 }
 
 /// True if the tag compares as a number. The parser uses this to let a bare
