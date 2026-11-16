@@ -428,10 +428,15 @@ pub fn embedded_art(path: &Path) -> Option<Vec<u8>> {
 }
 
 fn read_embedded_art(path: &Path) -> Option<Vec<u8>> {
+    crate::scanner::formats::register();
     let file = lofty::read_from_path(path).ok()?;
     use lofty::file::TaggedFileExt;
+    // The chosen tag's cover first, then any other tag's.
     let tag = file.primary_tag().or_else(|| file.first_tag());
-    let data = match tag.and_then(|tag| tag.pictures().first()) {
+    let picture = tag
+        .and_then(|tag| tag.pictures().first())
+        .or_else(|| file.tags().iter().find_map(|t| t.pictures().first()));
+    let data = match picture {
         Some(pic) => pic.data().to_vec(),
         None => crate::scanner::tags::ape_cover_from_path(path, file.file_type())?,
     };

@@ -1,4 +1,5 @@
 pub(crate) mod albums;
+pub(crate) mod formats;
 pub mod tags;
 
 use crate::db::Db;
@@ -13,7 +14,7 @@ use tags::TrackMeta;
 
 pub const AUDIO_EXTS: &[&str] = &[
     "flac", "mp3", "wav", "opus", "ogg", "m4a", "aac", "aiff", "wv", "ape", "mpc", "mp+", "mpp",
-    "spx",
+    "spx", "tta", "wma", "dsf",
 ];
 const BATCH_SIZE: usize = 1000;
 const PROGRESS_EVERY: u64 = 500;

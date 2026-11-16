@@ -287,6 +287,7 @@ fn read_lyrics_file(path: &Path) -> Option<String> {
 }
 
 fn embedded_lyrics(audio_path: &str) -> Option<String> {
+    crate::scanner::formats::register();
     let file = lofty::probe::Probe::open(audio_path)
         .ok()?
         .options(

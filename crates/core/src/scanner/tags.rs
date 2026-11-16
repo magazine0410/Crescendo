@@ -1,3 +1,4 @@
+use super::formats::{self, AsfFile, TtaFile};
 use anyhow::{anyhow, Result};
 use lofty::ape::{ApeFile, ApeTag};
 use lofty::config::ParseOptions;
@@ -55,6 +56,9 @@ pub fn format_name(ft: FileType) -> &'static str {
         FileType::WavPack => "WavPack",
         FileType::Mpc => "Musepack",
         FileType::Speex => "Speex",
+        formats::TTA => "TTA",
+        formats::ASF => "WMA",
+        formats::DSF => "DSF",
         _ => "Other",
     }
 }
@@ -71,6 +75,8 @@ struct RawExtras {
     event: Option<String>,
     /// An APEv2 tag holds a cover. `Tag` would not show it: see [`ape_cover`].
     ape_cover: bool,
+    /// A name more exact than [`format_name`] gives, such as "WMA Lossless".
+    format: Option<&'static str>,
 }
 
 fn vorbis_extras(vc: &VorbisComments) -> RawExtras {
@@ -85,6 +91,7 @@ fn vorbis_extras(vc: &VorbisComments) -> RawExtras {
         vocalist: get("VOCALIST"),
         event: get("EVENT"),
         ape_cover: false,
+        format: None,
     }
 }
 
@@ -102,6 +109,7 @@ fn ape_extras(ape: &ApeTag) -> RawExtras {
         vocalist: get("VOCALIST"),
         event: get("EVENT"),
         ape_cover: ape_cover(ape).is_some(),
+        format: None,
     }
 }
 
@@ -133,6 +141,7 @@ pub(crate) fn ape_cover_from_path(path: &Path, file_type: FileType) -> Option<Ve
         FileType::WavPack => WavPackFile::read_from(&mut file, opts).ok()?.ape().cloned(),
         FileType::Ape => ApeFile::read_from(&mut file, opts).ok()?.ape().cloned(),
         FileType::Mpc => MpcFile::read_from(&mut file, opts).ok()?.ape().cloned(),
+        formats::TTA => TtaFile::read_from(&mut file, opts).ok()?.ape_tag,
         _ => None,
     }?;
     ape_cover(&ape)
@@ -186,6 +195,21 @@ fn read_tagged<R: Read + Seek>(
             let extras = f.ape().map(ape_extras).unwrap_or_default();
             (f.into(), extras)
         }
+        Some(formats::TTA) => {
+            let f = TtaFile::read_from(reader, opts)?;
+            let extras = f.ape_tag.as_ref().map(ape_extras).unwrap_or_default();
+            (f.into(), extras)
+        }
+        Some(formats::ASF) => {
+            let f = AsfFile::read_from(reader, opts)?;
+            let mut extras = f
+                .vorbis_comments_tag
+                .as_ref()
+                .map(vorbis_extras)
+                .unwrap_or_default();
+            extras.format = Some(f.codec);
+            (f.into(), extras)
+        }
         Some(ft) => (
             Probe::with_file_type(reader, ft).options(opts).read()?,
             RawExtras::default(),
@@ -219,6 +243,7 @@ pub(crate) fn without_panics<T>(path: &Path, parse: impl FnOnce() -> Result<T>) 
 }
 
 fn parse_meta(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
+    formats::register();
     // Relaxed parsing: skip malformed tag items (broken ID3 timestamps and
     // the like are common in the wild) instead of rejecting the whole file.
     let opts = ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
@@ -227,7 +252,10 @@ fn parse_meta(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
     let (file, extras) = read_tagged(&mut probe.into_inner(), file_type, opts)?;
     let props = file.properties();
     let mut meta = TrackMeta {
-        format: format_name(file.file_type()).to_string(),
+        format: extras
+            .format
+            .unwrap_or_else(|| format_name(file.file_type()))
+            .to_string(),
         duration_ms: props.duration().as_millis() as i64,
         bitrate: props.audio_bitrate().map(|b| b as i64),
         sample_rate: props.sample_rate().map(|s| s as i64),
@@ -286,9 +314,11 @@ fn parse_meta(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
             .or_else(|| get_str(tag, ItemKey::RecordingDate))
             .and_then(|s| year_from_date(&s))
             .or_else(|| meta.date.as_deref().and_then(year_from_date));
-        meta.has_embedded_art = !tag.pictures().is_empty();
     }
-    meta.has_embedded_art |= extras.ape_cover;
+    // Any tag's cover counts, not only the chosen tag's: a TrueAudio file's
+    // APEv2 tag may have none while its ID3v2 tag does.
+    meta.has_embedded_art =
+        file.tags().iter().any(|t| !t.pictures().is_empty()) || extras.ape_cover;
     meta.vocalist = extras.vocalist;
     meta.event = extras.event;
 
@@ -334,6 +364,9 @@ pub fn fallback_meta(path: &Path) -> TrackMeta {
         Some("ape") => "APE",
         Some("mpc") | Some("mp+") | Some("mpp") => "Musepack",
         Some("spx") => "Speex",
+        Some("tta") => "TTA",
+        Some("wma") => "WMA",
+        Some("dsf") => "DSF",
         _ => "Other",
     };
     TrackMeta {
