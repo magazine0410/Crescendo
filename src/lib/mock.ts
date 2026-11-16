@@ -6,6 +6,8 @@
 import type {
   Album,
   BrowseValue,
+  Catalog,
+  CatalogEntry,
   BrowseValuesResult,
   DirectoryStation,
   CollectionInfo,
@@ -296,6 +298,61 @@ function pluginSnapshot(): PluginSnapshot {
             ...wasmDemoMenuControls(),
           ]
         : wasmDemoMenuControls(),
+  };
+}
+
+/** The optional-plugin list as the signed index would describe it. */
+function mockCatalog(): Catalog {
+  const entry = (
+    id: string,
+    name: string,
+    version: string,
+    description: string,
+    kind: "declarative" | "wasm",
+    permissions: string[],
+  ): CatalogEntry => {
+    const installed = mockPlugins.find((plugin) => plugin.id === id)?.version ?? null;
+    return {
+      id,
+      name,
+      version,
+      description,
+      kind,
+      api_version: kind === "wasm" ? "0.2.2" : "1.0.0",
+      min_crescendo_version: "1.1.0",
+      permissions,
+      homepage: "https://github.com/magazine0410/crescendo-plugins",
+      asset: `${id}-${version}.crescendo-plugin`,
+      size: 4096,
+      sha256: "0".repeat(64),
+      installed_version: installed,
+      status: installed
+        ? installed === version
+          ? { state: "up_to_date" }
+          : { state: "update_available" }
+        : { state: "not_installed" },
+    };
+  };
+  return {
+    release: "plugins-2026.11.17",
+    plugins: [
+      entry(
+        "dev.crescendo.m3u-export",
+        "M3U Export",
+        "1.0.0",
+        "Exports playlists as .m3u files that other players can open.",
+        "wasm",
+        ["playlists.read", "library.read", "library.paths"],
+      ),
+      entry(
+        "dev.crescendo.primary-grouping",
+        "Primary Grouping",
+        "1.0.0",
+        "Optionally collapses semicolon-separated grouping titles under their first value.",
+        "declarative",
+        [],
+      ),
+    ],
   };
 }
 
@@ -917,6 +974,10 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return queue.map((id) => tracks[id - 1]).filter(Boolean) as T;
     case "plugin_list":
       return pluginSnapshot() as T;
+    case "plugin_catalog":
+      return mockCatalog() as T;
+    case "plugin_catalog_install":
+      throw new Error("Installing from the plugin list needs the desktop app.");
     case "plugin_choose_install": {
       const plugin = mockPlugins[0];
       if (!plugin) {

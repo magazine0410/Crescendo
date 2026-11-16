@@ -1,4 +1,5 @@
 mod bridge;
+pub mod catalog;
 pub mod export;
 mod manager;
 mod manifest;

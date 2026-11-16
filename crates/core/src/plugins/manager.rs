@@ -1153,6 +1153,11 @@ impl PluginManager {
             .cloned()
     }
 
+    /// The Crescendo version plugins are checked against.
+    pub fn app_version(&self) -> &Version {
+        &self.app_version
+    }
+
     pub fn invoke(&self, plugin_id: &str, command_id: &str, input: &Value) -> Result<Value> {
         self.ensure_available()?;
         let manifest = self
@@ -1570,7 +1575,26 @@ fn browse_target_tag(mode: &BrowseMode) -> Option<String> {
 }
 
 fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Option<String> {
-    let (supported, api_label) = match manifest.kind {
+    compatibility_problem(
+        manifest.kind,
+        &manifest.api_version,
+        &manifest.min_crescendo_version,
+        &manifest.permissions,
+        app_version,
+    )
+}
+
+/// Why a package with these declarations cannot load in this build, if it
+/// cannot. Shared by installed packages and the download catalog, which
+/// knows a package only by its index entry.
+pub(crate) fn compatibility_problem(
+    kind: PluginKind,
+    api_version: &str,
+    min_crescendo_version: &str,
+    permissions: &[String],
+    app_version: &Version,
+) -> Option<String> {
+    let (supported, api_label) = match kind {
         PluginKind::Declarative => (
             Version::parse(PLUGIN_API_VERSION).expect("valid host plugin API version"),
             "plugin API",
@@ -1578,11 +1602,10 @@ fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Opti
         PluginKind::Wasm => {
             // A Wasm package may also name capabilities this build's host
             // does not provide yet. It stays installed with an explanation.
-            if let Err(error) = super::permissions::parse_permissions(&manifest.permissions) {
+            if let Err(error) = super::permissions::parse_permissions(permissions) {
                 return Some(error.to_string());
             }
-            for permission in manifest
-                .permissions
+            for permission in permissions
                 .iter()
                 .filter_map(|name| super::permissions::PluginPermission::parse(name))
             {
@@ -1599,7 +1622,7 @@ fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Opti
             )
         }
     };
-    let requested = Version::parse(&manifest.api_version).ok()?;
+    let requested = Version::parse(api_version).ok()?;
     // Semver treats a 0.x minor bump as breaking, and the plugin world is
     // still 0.x: adding an exported event to `commands` makes an older
     // component fail to instantiate, so it must read as incompatible here
@@ -1611,10 +1634,10 @@ fn compatibility_error(manifest: &PluginManifest, app_version: &Version) -> Opti
     {
         return Some(format!(
             "Requires {api_label} {}, but this build supports {supported}.",
-            manifest.api_version
+            api_version
         ));
     }
-    let minimum = Version::parse(&manifest.min_crescendo_version).ok()?;
+    let minimum = Version::parse(min_crescendo_version).ok()?;
     if minimum.cmp_precedence(app_version) == std::cmp::Ordering::Greater {
         return Some(format!("Requires Crescendo {minimum} or newer."));
     }

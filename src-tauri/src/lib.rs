@@ -267,6 +267,8 @@ pub fn run() {
             commands::playlists::collection_delete,
             commands::playlists::collection_set_collapsed,
             commands::plugins::plugin_list,
+            commands::plugins::plugin_catalog,
+            commands::plugins::plugin_catalog_install,
             commands::plugins::plugin_choose_install,
             commands::plugins::plugin_set_enabled,
             commands::plugins::plugin_set_setting,

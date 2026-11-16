@@ -81,6 +81,8 @@
     "allow-collection-delete",
     "allow-collection-set-collapsed",
     "allow-plugin-list",
+    "allow-plugin-catalog",
+    "allow-plugin-catalog-install",
     "allow-plugin-choose-install",
     "allow-plugin-set-enabled",
     "allow-plugin-set-setting",

@@ -87,6 +87,8 @@ const COMMANDS: &[&str] = &[
     "collection_delete",
     "collection_set_collapsed",
     "plugin_list",
+    "plugin_catalog",
+    "plugin_catalog_install",
     "plugin_choose_install",
     "plugin_set_enabled",
     "plugin_set_setting",

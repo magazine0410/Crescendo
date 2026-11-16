@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crescendo_core::plugins::catalog::{self, Catalog};
 use crescendo_core::plugins::{PluginMutationResult, PluginSnapshot};
 use serde_json::Value;
 use tauri::{AppHandle, State};
@@ -11,6 +12,38 @@ fn plugin_error(error: anyhow::Error) -> String {
 #[tauri::command]
 pub async fn plugin_list(state: State<'_, AppState>) -> Result<PluginSnapshot, String> {
     state.plugins.snapshot().map_err(plugin_error)
+}
+
+/// Where catalog downloads wait to be installed; removed afterwards.
+fn catalog_cache() -> std::path::PathBuf {
+    crate::state::cache_dir().join("plugin-downloads")
+}
+
+/// The optional plugins in the latest crescendo-plugins release, from its
+/// signed index.
+#[tauri::command]
+pub async fn plugin_catalog(state: State<'_, AppState>) -> Result<Catalog, String> {
+    let plugins = state.plugins.clone();
+    tauri::async_runtime::spawn_blocking(move || catalog::fetch(&plugins, &catalog_cache()))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(plugin_error)
+}
+
+/// Download a listed plugin, check it against the signed index, and install
+/// it disabled (or stage it as an update), like a package picked from disk.
+#[tauri::command]
+pub async fn plugin_catalog_install(
+    state: State<'_, AppState>,
+    plugin_id: String,
+) -> Result<PluginMutationResult, String> {
+    let plugins = state.plugins.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        catalog::install(&plugins, &catalog_cache(), &plugin_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(plugin_error)
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 import {
   call,
+  type Catalog,
   type PluginInfo,
   type PluginMutationResult,
   type PluginSnapshot,
@@ -21,6 +22,16 @@ class PluginsStore {
   apply(result: PluginMutationResult): PluginMutationResult {
     this.publish(result.snapshot);
     return result;
+  }
+
+  /** The optional plugins in the latest release of the plugins repository. */
+  async catalog(): Promise<Catalog> {
+    return call<Catalog>("plugin_catalog");
+  }
+
+  /** Download a listed plugin and install it disabled, like a local package. */
+  async catalogInstall(pluginId: string): Promise<PluginMutationResult> {
+    return this.apply(await call<PluginMutationResult>("plugin_catalog_install", { pluginId }));
   }
 
   async install(): Promise<PluginMutationResult> {

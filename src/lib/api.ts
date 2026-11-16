@@ -222,6 +222,38 @@ export interface PluginInfo {
   diagnostics: string[];
 }
 
+/** What installing a listed plugin would do here. */
+export type CatalogStatus =
+  | { state: "not_installed" }
+  | { state: "up_to_date" }
+  | { state: "update_available" }
+  | { state: "installed_newer" }
+  | { state: "incompatible"; reason: string };
+
+/** One optional plugin from the signed index of the plugins repository. */
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  kind: "declarative" | "wasm";
+  api_version: string;
+  min_crescendo_version: string;
+  permissions: string[];
+  homepage: string | null;
+  asset: string;
+  size: number;
+  sha256: string;
+  installed_version: string | null;
+  status: CatalogStatus;
+}
+
+export interface Catalog {
+  /** The release tag the list came from. */
+  release: string;
+  plugins: CatalogEntry[];
+}
+
 export interface PluginSnapshot {
   plugins: PluginInfo[];
   loaded_plugin_ids: string[];

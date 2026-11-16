@@ -120,7 +120,7 @@ struct SelectedUpdate {
 /// The public half of Crescendo's release-signing key, as
 /// `tauri signer generate` writes it. The secret half never leaves the
 /// release machine; every package is signed with it before upload.
-const UPDATE_PUBLIC_KEY: &str = include_str!("../update-signing.pub");
+pub(crate) const UPDATE_PUBLIC_KEY: &str = include_str!("../update-signing.pub");
 
 /// A real signature file is about 400 bytes.
 const MAX_SIGNATURE_BYTES: u64 = 4096;
@@ -474,7 +474,7 @@ fn cached_package_is_valid(path: &Path, asset: &GithubAsset) -> Result<bool> {
 
 /// The minisign text inside a key or signature file. `tauri signer` wraps it
 /// in base64; plain minisign files are accepted as they are.
-fn minisign_text(raw: &str) -> Result<String> {
+pub(crate) fn minisign_text(raw: &str) -> Result<String> {
     use base64::Engine as _;
     let raw = raw.trim();
     if raw.starts_with("untrusted comment:") {
@@ -671,7 +671,7 @@ const GH_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// `Command::output`, but killed after `timeout`. A stalled network would
 /// otherwise keep the install permit, and the About window's "Updating…",
 /// until Crescendo restarts.
-fn output_within(command: &mut Command, timeout: Duration) -> Result<Output> {
+pub(crate) fn output_within(command: &mut Command, timeout: Duration) -> Result<Output> {
     use std::process::Stdio;
     let mut child = command
         .stdin(Stdio::null())
@@ -933,7 +933,7 @@ fn interpret_installer_output(output: Output) -> Result<()> {
     }
 }
 
-fn command_error_detail(output: &Output) -> String {
+pub(crate) fn command_error_detail(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let detail = if !stderr.trim().is_empty() {
@@ -976,7 +976,7 @@ fn find_system_program(names: &[&str]) -> Option<PathBuf> {
 
 /// A program the user runs as themselves, such as GitHub CLI, which is often
 /// installed under the home directory.
-fn find_program(names: &[&str]) -> Option<PathBuf> {
+pub(crate) fn find_program(names: &[&str]) -> Option<PathBuf> {
     if let Some(found) = find_system_program(names) {
         return Some(found);
     }

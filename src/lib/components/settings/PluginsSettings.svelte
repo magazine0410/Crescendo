@@ -9,6 +9,7 @@
   import { library } from "$lib/stores/library.svelte";
   import { plugins } from "$lib/stores/plugins.svelte";
   import Select from "../common/Select.svelte";
+  import PluginCatalog from "./PluginCatalog.svelte";
 
   const snapshot = $derived(plugins.snapshot);
   let selectedId = $state<string | null>(null);
@@ -145,9 +146,9 @@
 <div class="plugin-toolbar">
   <div>
     <strong>Plugins</strong>
-    <p class="hint">Install optional Crescendo features from local packages. Sandboxed Wasm packages run with only the capabilities you approve.</p>
+    <p class="hint">Install optional Crescendo features from the list below or from a package file. Sandboxed Wasm packages run with only the capabilities you approve.</p>
   </div>
-  <button class="btn" disabled={busy} onclick={install}>Install…</button>
+  <button class="btn" disabled={busy} onclick={install}>Install from file…</button>
 </div>
 
 {#if snapshot?.safe_mode}
@@ -354,6 +355,13 @@
     {/if}
   </div>
 {/if}
+
+<PluginCatalog
+  onresult={(message, failure) => {
+    notice = message;
+    error = failure;
+  }}
+/>
 
 {#if snapshot?.errors.length}
   <details class="diagnostics">
