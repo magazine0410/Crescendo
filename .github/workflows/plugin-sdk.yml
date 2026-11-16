@@ -121,6 +121,17 @@ jobs:
             exit 1
           fi
           echo "fixture matches its source"
+      - name: Keep the rebuilt component when it does not match
+        # So a mismatch can be diffed against the committed fixture locally.
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: wasm-demo-rebuilt
+          path: |
+            plugins/dev.crescendo.wasm-demo/module.wasm
+            fresh-stripped.wasm
+            committed-stripped.wasm
+          if-no-files-found: ignore
       - name: The frozen 0.2.0 component must never be rebuilt
         # It is the evidence that a component built for an older compatible
         # API still loads. Rebuilding it against today's WIT would make the
