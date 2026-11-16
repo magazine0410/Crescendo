@@ -151,15 +151,15 @@ mod tests {
 
     const PLUGIN_PERMISSIONS: [&str; 10] = [
         "allow-plugin-list",
+        "allow-plugin-catalog",
+        "allow-plugin-catalog-install",
         "allow-plugin-choose-install",
         "allow-plugin-set-enabled",
         "allow-plugin-set-setting",
         "allow-plugin-uninstall",
-        "allow-plugin-grouping-migration",
         "allow-plugin-restart-app",
         "allow-plugin-approve-grants",
         "allow-plugin-invoke",
-        "allow-plugin-file-drag-start",
     ];
 
     fn capability(source: &str) -> Value {
