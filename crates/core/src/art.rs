@@ -428,8 +428,7 @@ pub fn embedded_art(path: &Path) -> Option<Vec<u8>> {
 }
 
 fn read_embedded_art(path: &Path) -> Option<Vec<u8>> {
-    crate::scanner::formats::register();
-    let file = lofty::read_from_path(path).ok()?;
+    let file = crate::scanner::tags::read_file(path).ok()?;
     use lofty::file::TaggedFileExt;
     // The chosen tag's cover first, then any other tag's.
     let tag = file.primary_tag().or_else(|| file.first_tag());

@@ -264,3 +264,35 @@ fn each_wma_codec_has_its_own_name() {
         assert_eq!(read_meta(&path).unwrap().format, name);
     }
 }
+
+#[test]
+fn a_trueaudio_apev2_tag_with_a_malformed_item_name_keeps_its_other_items() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad name.tta");
+    let mut bytes = std::fs::read(fixture("tagged.tta")).unwrap();
+    // A hand-written tag: lofty cannot write an item name outside ASCII.
+    let items: [(&str, &[u8]); 2] = [("Title", b"APE title"), ("封面 (前面)", b"x")];
+    let mut body = Vec::new();
+    for (name, value) in items {
+        body.extend((value.len() as u32).to_le_bytes());
+        body.extend(0u32.to_le_bytes());
+        body.extend(name.as_bytes());
+        body.push(0);
+        body.extend(value);
+    }
+    let size = (body.len() + 32) as u32;
+    let mut footer = b"APETAGEX".to_vec();
+    footer.extend(2000u32.to_le_bytes());
+    footer.extend(size.to_le_bytes());
+    footer.extend(2u32.to_le_bytes());
+    footer.extend(0u32.to_le_bytes());
+    footer.extend([0u8; 8]);
+    bytes.extend(body);
+    bytes.extend(footer);
+    std::fs::write(&path, bytes).unwrap();
+
+    let meta = read_meta(&path).unwrap();
+    assert_eq!(meta.title.as_deref(), Some("APE title"));
+    assert_eq!(meta.duration_ms, 2000);
+    assert!(meta.has_embedded_art, "the ID3v2 cover is still read");
+}

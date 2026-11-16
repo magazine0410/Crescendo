@@ -227,3 +227,80 @@ fn a_scan_indexes_them_with_their_covers_and_lyrics() {
         "{source:?}"
     );
 }
+
+/// An APEv2 tag written by hand, so it can hold what lofty refuses to write:
+/// an item name outside ASCII. `(name, value, flags)`; flags 2 is binary.
+fn raw_ape_tag(items: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (name, value, flags) in items {
+        body.extend((value.len() as u32).to_le_bytes());
+        body.extend(flags.to_le_bytes());
+        body.extend(name.as_bytes());
+        body.push(0);
+        body.extend(*value);
+    }
+    let size = (body.len() + 32) as u32;
+    let frame = |flags: u32| {
+        let mut out = b"APETAGEX".to_vec();
+        out.extend(2000u32.to_le_bytes());
+        out.extend(size.to_le_bytes());
+        out.extend((items.len() as u32).to_le_bytes());
+        out.extend(flags.to_le_bytes());
+        out.extend([0u8; 8]);
+        out
+    };
+    let mut tag = frame(0xA000_0000);
+    tag.extend(body);
+    tag.extend(frame(0x8000_0000));
+    tag
+}
+
+#[test]
+fn a_malformed_ape_item_name_costs_only_that_item() {
+    // As found in real files: a translated "Cover Art (Front)" as the item
+    // name. lofty refuses the whole tag, and before this the whole file.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad name.wv");
+    let mut bytes = std::fs::read(fixture("silence.wv")).unwrap();
+    bytes.extend(raw_ape_tag(&[
+        ("Title", "幽雅に咲かせ、墨染の桜".as_bytes(), 0),
+        ("Artist", "上海アリス幻樂団".as_bytes(), 0),
+        ("Genre", b"Touhou\0Game", 0),
+        ("VOCALIST", "なし".as_bytes(), 0),
+        ("Lyrics", LYRICS.as_bytes(), 0),
+        ("封面 (前面)", b"\0not really a picture", 2),
+    ]));
+    std::fs::write(&path, bytes).unwrap();
+
+    let meta = read_meta(&path).unwrap();
+    assert_eq!(meta.format, "WavPack");
+    assert_eq!(meta.duration_ms, 2000, "the audio is still read");
+    assert_eq!(meta.title.as_deref(), Some("幽雅に咲かせ、墨染の桜"));
+    assert_eq!(meta.artist.as_deref(), Some("上海アリス幻樂団"));
+    assert_eq!(meta.genre.as_deref(), Some("Touhou; Game"));
+    assert_eq!(meta.vocalist.as_deref(), Some("なし"));
+    assert!(!meta.has_embedded_art, "the malformed item is dropped");
+
+    let db = Db::open(&dir.path().join("t.db")).unwrap();
+    let opts = ScanOptions {
+        root: dir.path().to_path_buf(),
+        threads: 1,
+        full: false,
+    };
+    let progress = std::sync::Mutex::new(None);
+    scan(
+        &db,
+        &opts,
+        &|p| *progress.lock().unwrap() = Some(p),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(progress.lock().unwrap().as_ref().unwrap().errors, 0);
+    let track = &db
+        .tracks_range_exact(None, BrowseMode::Album, &[], None, 0, 10)
+        .unwrap()[0];
+    let found = lyrics::for_track(&db, track)
+        .unwrap()
+        .expect("embedded lyrics");
+    assert_eq!(found.source, "Embedded tag");
+}

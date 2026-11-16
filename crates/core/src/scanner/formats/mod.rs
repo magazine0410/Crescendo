@@ -16,12 +16,14 @@ pub(crate) use asf::AsfFile;
 pub(crate) use dsf::DsfFile;
 pub(crate) use tta::TtaFile;
 
-use lofty::ape::ApeTag;
+use lofty::ape::{ApeItem, ApeTag};
 use lofty::config::ParseOptions;
+use lofty::error::FileParseError;
 use lofty::file::{AudioFile, FileType};
 use lofty::id3::v1::Id3v1Tag;
 use lofty::id3::v2::Id3v2Tag;
 use lofty::mpeg::MpegFile;
+use lofty::tag::ItemValue;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::sync::Once;
 
@@ -130,9 +132,138 @@ fn parse_tags(
     buf.extend(tail);
     let mut opts = opts;
     let opts = opts.read_properties(false);
-    let mut mpeg = MpegFile::read_from(&mut Cursor::new(buf), opts)
-        .map_err(|e| invalid(&format!("tags: {e}")))?;
-    Ok((mpeg.remove_id3v2(), mpeg.remove_ape(), mpeg.remove_id3v1()))
+    match MpegFile::read_from(&mut Cursor::new(buf.clone()), opts) {
+        Ok(mut mpeg) => Ok((mpeg.remove_id3v2(), mpeg.remove_ape(), mpeg.remove_id3v1())),
+        Err(error) => {
+            // An APEv2 tag lofty refuses costs only its bad items: parse the
+            // other tags without it, and the APE tag leniently.
+            let tail = &buf[buf.len() - tail_len(&buf)..];
+            let ape = lenient_ape_tag(tail);
+            // Everything before the tail, then the ID3v1 tag at its very end.
+            let mut rest = buf[..buf.len() - tail.len()].to_vec();
+            rest.extend_from_slice(&buf[buf.len() - id3v1_len(tail)..]);
+            let mut mpeg = MpegFile::read_from(&mut Cursor::new(rest), opts)
+                .map_err(|_| invalid(&format!("tags: {error}")))?;
+            Ok((mpeg.remove_id3v2(), ape, mpeg.remove_id3v1()))
+        }
+    }
+}
+
+/// Bytes at the end of `buf` holding an APEv2 tag and an ID3v1 tag, as far
+/// as they are present.
+fn tail_len(buf: &[u8]) -> usize {
+    let id3v1 = id3v1_len(buf);
+    let end = buf.len() - id3v1;
+    if end >= 32 && &buf[end - 32..end - 24] == b"APETAGEX" {
+        let size = u32_le(buf, end - 20) as usize;
+        let header = if u32_le(buf, end - 12) & 0x8000_0000 != 0 {
+            32
+        } else {
+            0
+        };
+        if size >= 32 && size + header <= end {
+            return id3v1 + size + header;
+        }
+    }
+    id3v1
+}
+
+/// 128 when `buf` ends with an ID3v1 tag, else 0.
+fn id3v1_len(buf: &[u8]) -> usize {
+    if buf.len() >= 128 && &buf[buf.len() - 128..buf.len() - 125] == b"TAG" {
+        128
+    } else {
+        0
+    }
+}
+
+/// The APEv2 tag at the end of `buf` (before an ID3v1 tag, if any), keeping
+/// every item lofty accepts and dropping the rest. lofty refuses a whole tag,
+/// and with it the whole file, when one item's name breaks the format (APE
+/// names are ASCII 0x20–0x7E; some localised taggers write a translated
+/// "Cover Art (Front)"), so this is the fallback for such files.
+pub(crate) fn lenient_ape_tag(buf: &[u8]) -> Option<ApeTag> {
+    let end = buf.len() - id3v1_len(buf);
+    if end < 32 || &buf[end - 32..end - 24] != b"APETAGEX" {
+        return None;
+    }
+    let size = u32_le(buf, end - 20) as usize;
+    let count = u32_le(buf, end - 16) as usize;
+    if size < 32 || size > end {
+        return None;
+    }
+    let items = &buf[end - size..end - 32];
+    let mut tag = ApeTag::new();
+    let mut pos = 0;
+    for _ in 0..count.min(65_536) {
+        let Some(head) = items.get(pos..pos + 8) else {
+            break;
+        };
+        let value_len = u32_le(head, 0) as usize;
+        let flags = u32_le(head, 4);
+        pos += 8;
+        let Some(key_len) = items
+            .get(pos..)
+            .and_then(|rest| rest.iter().position(|b| *b == 0))
+        else {
+            break;
+        };
+        let key = String::from_utf8_lossy(&items[pos..pos + key_len]).to_string();
+        pos += key_len + 1;
+        let Some(value) = pos
+            .checked_add(value_len)
+            .and_then(|end| items.get(pos..end))
+        else {
+            break;
+        };
+        pos += value_len;
+        let value = match (flags >> 1) & 3 {
+            0 => ItemValue::Text(String::from_utf8_lossy(value).to_string()),
+            1 => ItemValue::Binary(value.to_vec()),
+            2 => ItemValue::Locator(String::from_utf8_lossy(value).to_string()),
+            _ => continue,
+        };
+        // A name lofty refuses is the item this fallback exists to skip.
+        if let Ok(item) = ApeItem::new(key, value) {
+            tag.insert(item);
+        }
+    }
+    use lofty::tag::TagExt;
+    (!tag.is_empty()).then_some(tag)
+}
+
+/// Read a file whose APEv2 tag lofty may refuse (WavPack, Monkey's Audio,
+/// Musepack). If the normal read fails but one without tags succeeds, the
+/// failure was a tag, and the file is returned with its APE tag read
+/// leniently; ID3 tags are then not read. Any other failure is returned as
+/// it was.
+pub(crate) fn read_tolerating_bad_ape<R, T>(
+    reader: &mut R,
+    opts: ParseOptions,
+    read: impl Fn(&mut R, ParseOptions) -> Result<T, FileParseError>,
+    set_ape: impl FnOnce(&mut T, ApeTag),
+) -> Result<T, FileParseError>
+where
+    R: Read + Seek,
+{
+    reader.seek(SeekFrom::Start(0))?;
+    let error = match read(reader, opts) {
+        Ok(file) => return Ok(file),
+        Err(error) => error,
+    };
+    reader.seek(SeekFrom::Start(0))?;
+    let mut without_tags = opts;
+    let Ok(mut file) = read(reader, without_tags.read_tags(false)) else {
+        return Err(error);
+    };
+    let len = reader.seek(SeekFrom::End(0))?;
+    if let Some(tag) = tail_tags(reader, len, 0)
+        .ok()
+        .and_then(|tail| lenient_ape_tag(&tail))
+    {
+        set_ape(&mut file, tag);
+    }
+    Ok(file)
 }
 
 /// The ID3v2 tag at `offset`, if one starts there, as raw bytes.

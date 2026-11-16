@@ -138,13 +138,59 @@ pub(crate) fn ape_cover_from_path(path: &Path, file_type: FileType) -> Option<Ve
     let opts = ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
     let mut file = std::io::BufReader::new(std::fs::File::open(path).ok()?);
     let ape = match file_type {
-        FileType::WavPack => WavPackFile::read_from(&mut file, opts).ok()?.ape().cloned(),
-        FileType::Ape => ApeFile::read_from(&mut file, opts).ok()?.ape().cloned(),
-        FileType::Mpc => MpcFile::read_from(&mut file, opts).ok()?.ape().cloned(),
+        FileType::WavPack => read_wavpack(&mut file, opts).ok()?.ape().cloned(),
+        FileType::Ape => read_ape(&mut file, opts).ok()?.ape().cloned(),
+        FileType::Mpc => read_mpc(&mut file, opts).ok()?.ape().cloned(),
         formats::TTA => TtaFile::read_from(&mut file, opts).ok()?.ape_tag,
         _ => None,
     }?;
     ape_cover(&ape)
+}
+
+// The APEv2 formats, read so that one malformed tag item costs only itself
+// (see `formats::lenient_ape_tag`).
+fn read_wavpack<R: Read + Seek>(reader: &mut R, opts: ParseOptions) -> Result<WavPackFile> {
+    Ok(formats::read_tolerating_bad_ape(
+        reader,
+        opts,
+        |r, o| WavPackFile::read_from(r, o),
+        |f, tag| {
+            f.set_ape(tag);
+        },
+    )?)
+}
+
+fn read_ape<R: Read + Seek>(reader: &mut R, opts: ParseOptions) -> Result<ApeFile> {
+    Ok(formats::read_tolerating_bad_ape(
+        reader,
+        opts,
+        |r, o| ApeFile::read_from(r, o),
+        |f, tag| {
+            f.set_ape(tag);
+        },
+    )?)
+}
+
+fn read_mpc<R: Read + Seek>(reader: &mut R, opts: ParseOptions) -> Result<MpcFile> {
+    Ok(formats::read_tolerating_bad_ape(
+        reader,
+        opts,
+        |r, o| MpcFile::read_from(r, o),
+        |f, tag| {
+            f.set_ape(tag);
+        },
+    )?)
+}
+
+/// A file as the scanner reads it, for the cover and lyrics readers: the
+/// same file types (including TrueAudio, WMA and DSF), relaxed parsing, and
+/// the same tolerance of a malformed APEv2 tag item.
+pub(crate) fn read_file(path: &Path) -> Result<TaggedFile> {
+    formats::register();
+    let opts = ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
+    let probe = Probe::open(path)?.options(opts);
+    let file_type = probe.file_type();
+    Ok(read_tagged(&mut probe.into_inner(), file_type, opts)?.0)
 }
 
 /// Read the file, keeping the format-specific tag long enough to pull the
@@ -181,17 +227,17 @@ fn read_tagged<R: Read + Seek>(
             (f.into(), extras)
         }
         Some(FileType::WavPack) => {
-            let f = WavPackFile::read_from(reader, opts)?;
+            let f = read_wavpack(reader, opts)?;
             let extras = f.ape().map(ape_extras).unwrap_or_default();
             (f.into(), extras)
         }
         Some(FileType::Ape) => {
-            let f = ApeFile::read_from(reader, opts)?;
+            let f = read_ape(reader, opts)?;
             let extras = f.ape().map(ape_extras).unwrap_or_default();
             (f.into(), extras)
         }
         Some(FileType::Mpc) => {
-            let f = MpcFile::read_from(reader, opts)?;
+            let f = read_mpc(reader, opts)?;
             let extras = f.ape().map(ape_extras).unwrap_or_default();
             (f.into(), extras)
         }

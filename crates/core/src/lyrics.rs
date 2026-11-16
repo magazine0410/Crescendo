@@ -287,14 +287,7 @@ fn read_lyrics_file(path: &Path) -> Option<String> {
 }
 
 fn embedded_lyrics(audio_path: &str) -> Option<String> {
-    crate::scanner::formats::register();
-    let file = lofty::probe::Probe::open(audio_path)
-        .ok()?
-        .options(
-            lofty::config::ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed),
-        )
-        .read()
-        .ok()?;
+    let file = crate::scanner::tags::read_file(std::path::Path::new(audio_path)).ok()?;
     let tag = file.primary_tag().or_else(|| file.first_tag())?;
     if let Some(s) = tag.get_string(ItemKey::Lyrics) {
         return non_empty(s);
