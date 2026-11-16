@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use crescendo_core::plugins::{PluginMutationResult, PluginSnapshot};
 use serde_json::Value;
-use tauri::{path::BaseDirectory, AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 fn plugin_error(error: anyhow::Error) -> String {
@@ -79,33 +79,6 @@ pub async fn plugin_uninstall(
         .await
         .map_err(|error| error.to_string())?
         .map_err(plugin_error)
-}
-
-#[tauri::command]
-pub async fn plugin_grouping_migration(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    action: String,
-) -> Result<PluginMutationResult, String> {
-    let archive = match action.as_str() {
-        "install" => Some(
-            app.path()
-                .resolve(
-                    "resources/plugins/dev.crescendo.primary-grouping.crescendo-plugin",
-                    BaseDirectory::Resource,
-                )
-                .map_err(|error| error.to_string())?,
-        ),
-        "dismiss" => None,
-        _ => return Err("grouping migration action must be install or dismiss".into()),
-    };
-    let plugins = state.plugins.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        plugins.complete_grouping_migration(archive.as_deref())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(plugin_error)
 }
 
 #[tauri::command]

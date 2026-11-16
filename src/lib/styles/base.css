@@ -33,11 +33,11 @@ button {
   cursor: pointer;
 }
 
-.file-drag-plugin-enabled .file-draggable:not(:disabled) {
+.file-drag-available .file-draggable:not(:disabled) {
   cursor: grab;
 }
 
-.file-drag-plugin-enabled .file-draggable.file-drag-active:not(:disabled) {
+.file-drag-available .file-draggable.file-drag-active:not(:disabled) {
   cursor: grabbing;
 }
 

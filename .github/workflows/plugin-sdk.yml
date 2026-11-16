@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing release tag to attach the packaged plugins to"
+        description: "Existing release tag to attach the demo plugin and SDK to"
         required: true
         type: string
 
@@ -37,23 +37,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test package tooling
         run: cargo test -p crescendo-core plugins::tooling
-      - name: Validate and pack the official declarative plugins
-        run: |
-          set -eu
-          mkdir -p plugin-artifacts
-          for source in \
-            plugins/dev.crescendo.primary-grouping \
-            plugins/dev.crescendo.file-drag
-          do
-            # Read metadata from the manifest rather than repeating it here,
-            # or a version bump would publish new contents under the old name.
-            version=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$source/manifest.json")
-            id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$source/manifest.json")
-            package="plugin-artifacts/$id-$version.crescendo-plugin"
-            cargo run -p crescendo-core --bin crescendo-plugin -- validate "$source"
-            cargo run -p crescendo-core --bin crescendo-plugin -- pack "$source" "$package"
-            cargo run -p crescendo-core --bin crescendo-plugin -- validate "$package"
-          done
       - name: Check the SDK reports the versions the host implements
         run: |
           set -eu
@@ -81,12 +64,6 @@ jobs:
             exit 1
           }
           echo "runtime API $api is consistent across the WIT and the bindings"
-      - uses: actions/upload-artifact@v6
-        with:
-          name: official-crescendo-plugins
-          path: plugin-artifacts/*.crescendo-plugin
-          if-no-files-found: error
-
   wasm-fixture-provenance:
     # The committed component is both the demo plugin's artifact and the
     # runtime test fixture. Nothing in cargo can rebuild it (the host has no
@@ -176,17 +153,15 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v6
         with:
-          name: official-crescendo-plugins
-          path: plugin-artifacts
-      - uses: actions/download-artifact@v6
-        with:
           name: wasm-demo-plugin
           path: plugin-artifacts
       - name: Bundle the authoring contract
         # The WIT world and the generated Rust bindings are what a plugin is
         # built against, so they ship with the release that implements them.
         run: tar -czf plugin-artifacts/crescendo-plugin-sdk.tar.gz plugin-sdk
-      - name: Attach the official plugins to the release
+      # Optional plugins are published from magazine0410/crescendo-plugins;
+      # a Crescendo release carries only the demo package and the SDK.
+      - name: Attach the demo plugin and the SDK to the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}

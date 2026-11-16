@@ -262,7 +262,6 @@ function pluginSnapshot(): PluginSnapshot {
       return plugin.pending !== null || enablement === "enable_pending" || enablement === "disable_pending";
     }),
     projection_revision: projectionRevision,
-    file_drag_provider: null,
     menu_controls: groupingCollapseEnabled()
       ? [
           {
@@ -296,7 +295,6 @@ function pluginSnapshot(): PluginSnapshot {
             ...wasmDemoMenuControls(),
           ]
         : wasmDemoMenuControls(),
-    grouping_migration_pending: false,
   };
 }
 
@@ -773,7 +771,7 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       }
       return spans as T;
     }
-    case "plugin_file_drag_start":
+    case "file_drag_start":
       // Browser preview cannot initiate an OS file drag; keep direct mock API
       // calls harmless and the command surface synchronized with Tauri.
       return { count: 1, truncated: false } as T;
@@ -975,8 +973,6 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           loaded: plugin.desired_enabled,
         }));
       return undefined as T;
-    case "plugin_grouping_migration":
-      return pluginMutation(false, null) as T;
     case "plugin_approve_grants": {
       const plugin = mockPlugins.find((candidate) => candidate.id === args.pluginId);
       if (!plugin || plugin.permissions.length === 0) {

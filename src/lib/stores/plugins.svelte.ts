@@ -8,18 +8,8 @@ import {
 class PluginsStore {
   snapshot = $state<PluginSnapshot | null>(null);
 
-  get fileDragEnabled(): boolean {
-    return this.snapshot?.file_drag_provider != null;
-  }
-
   private publish(snapshot: PluginSnapshot): PluginSnapshot {
     this.snapshot = snapshot;
-    if (typeof document !== "undefined") {
-      document.documentElement.classList.toggle(
-        "file-drag-plugin-enabled",
-        snapshot.file_drag_provider != null,
-      );
-    }
     return snapshot;
   }
 
@@ -66,12 +56,6 @@ class PluginsStore {
         pluginId: plugin.id,
         removeData,
       }),
-    );
-  }
-
-  async groupingMigration(action: "install" | "dismiss"): Promise<PluginMutationResult> {
-    return this.apply(
-      await call<PluginMutationResult>("plugin_grouping_migration", { action }),
     );
   }
 

@@ -4,9 +4,12 @@ import {
   type FileDragResult,
   type FileDragSource,
 } from "$lib/api";
-import { plugins } from "$lib/stores/plugins.svelte";
-
 export const FILE_DRAG_LIMIT = 2_000;
+
+// Only the desktop app can start an OS drag; the grab cursor says so.
+if (isTauri && typeof document !== "undefined") {
+  document.documentElement.classList.add("file-drag-available");
+}
 
 export interface FileDragOptions {
   source: () => FileDragSource | null | Promise<FileDragSource | null>;
@@ -45,7 +48,7 @@ export function fileDrag(node: HTMLElement, initial: FileDragOptions) {
     // A fresh intentional press means an earlier native drag produced no
     // synthetic click; do not eat the click belonging to this new gesture.
     suppressClick = false;
-    if (!isTauri || !plugins.fileDragEnabled || event.button !== 0 || options.disabled?.()) return;
+    if (!isTauri || event.button !== 0 || options.disabled?.()) return;
     const target = event.target instanceof Element ? event.target : null;
     const nestedControl = target?.closest("button, input, select, textarea, a[href]");
     if (nestedControl && nestedControl !== node) return;
@@ -84,7 +87,7 @@ export function fileDrag(node: HTMLElement, initial: FileDragOptions) {
       // Resolving sparse virtual-list selections can require a few page reads.
       // Do not unexpectedly begin a drag after the user has already released.
       if (!source || !pointerDown) return;
-      const result = await call<FileDragResult>("plugin_file_drag_start", { source });
+      const result = await call<FileDragResult>("file_drag_start", { source });
       if (result.truncated) {
         notify(`Dragging the first ${FILE_DRAG_LIMIT.toLocaleString()} tracks`);
       }

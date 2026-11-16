@@ -29,9 +29,6 @@ const STARTUP_MARKER: &str = "startup-in-progress";
 /// the runtime spawns before `start` removes that one, so a fast failure could
 /// re-arm it only to have this run delete it again.
 const SAFE_MODE_MARKER: &str = "safe-mode-requested";
-pub const GROUPING_PLUGIN_ID: &str = "dev.crescendo.primary-grouping";
-pub const GROUPING_PLUGIN_SETTING: &str = "collapse_multi_tagged_titles";
-const GROUPING_MIGRATION_KEY: &str = "grouping_plugin_migration";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginSnapshot {
@@ -43,10 +40,6 @@ pub struct PluginSnapshot {
     pub restart_required: bool,
     pub projection_revision: u64,
     pub menu_controls: Vec<PluginMenuControlInfo>,
-    /// Loaded declarative plugin that owns outbound file dragging. `None`
-    /// means the host surface and its native command are unavailable.
-    pub file_drag_provider: Option<String>,
-    pub grouping_migration_pending: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,7 +233,6 @@ struct RegisteredFacetTransform {
 struct ContributionRegistry {
     facets: BTreeMap<String, RegisteredFacetTransform>,
     menus: Vec<(String, super::manifest::PluginMenuControl)>,
-    file_drag_provider: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -493,7 +485,6 @@ impl PluginManager {
 
         let mut loaded = BTreeMap::new();
         let mut reserved_targets = BTreeMap::<String, String>::new();
-        let mut file_drag_owner: Option<String> = None;
         for record in &inventory {
             let Some(package) = &record.package else {
                 continue;
@@ -537,19 +528,6 @@ impl PluginManager {
                     db.plugin_record_error(&record.id, Some(&message))?;
                     startup_errors.push(message);
                     continue;
-                }
-                if package.manifest.contributes.file_drag.is_some() {
-                    if let Some(owner) = &file_drag_owner {
-                        let message = format!(
-                            "Could not enable {} because {owner} already provides file drag support.",
-                            record.id
-                        );
-                        db.plugin_set_desired_enabled(&record.id, false)?;
-                        db.plugin_record_error(&record.id, Some(&message))?;
-                        startup_errors.push(message);
-                        continue;
-                    }
-                    file_drag_owner = Some(record.id.clone());
                 }
                 for transform in &package.manifest.contributes.facet_transforms {
                     reserved_targets.insert(transform.target_tag().to_string(), record.id.clone());
@@ -697,12 +675,6 @@ impl PluginManager {
         self.snapshot_unlocked()
     }
 
-    /// The immutable loaded plugin that enables the host-owned outbound file
-    /// drag surface. Callers must refuse the operation when this is absent.
-    pub fn file_drag_provider(&self) -> Option<&str> {
-        self.registry.file_drag_provider.as_deref()
-    }
-
     /// Capture one immutable projection generation. The returned guard keeps
     /// publication blocked until its complete query has finished.
     pub fn projection(&self, expected_revision: Option<u64>) -> Result<ProjectionReadGuard<'_>> {
@@ -783,42 +755,6 @@ impl PluginManager {
             projection.revision = projection.revision.saturating_add(1);
         }
         Ok(projection.revision)
-    }
-
-    pub fn complete_grouping_migration(
-        &self,
-        bundled_archive: Option<&Path>,
-    ) -> Result<PluginMutationResult> {
-        if self.db.meta_get(GROUPING_MIGRATION_KEY)?.as_deref() != Some("pending") {
-            return Ok(PluginMutationResult {
-                changed: false,
-                message: None,
-                snapshot: self.snapshot()?,
-            });
-        }
-
-        if let Some(archive) = bundled_archive {
-            if !self.installed_root.join(GROUPING_PLUGIN_ID).try_exists()? {
-                self.install(archive)?;
-            }
-            self.set_setting(
-                GROUPING_PLUGIN_ID,
-                GROUPING_PLUGIN_SETTING,
-                Value::Bool(true),
-            )?;
-            self.set_enabled(GROUPING_PLUGIN_ID, true)?;
-        }
-        self.db.meta_set(GROUPING_MIGRATION_KEY, "completed")?;
-        self.db.prefs_delete("grouping_split_multi")?;
-        Ok(PluginMutationResult {
-            changed: true,
-            message: Some(if bundled_archive.is_some() {
-                "The grouping plugin will be enabled after Crescendo restarts.".into()
-            } else {
-                "The grouping plugin notice was dismissed.".into()
-            }),
-            snapshot: self.snapshot()?,
-        })
     }
 
     pub fn install(&self, archive_path: &Path) -> Result<PluginMutationResult> {
@@ -1382,9 +1318,6 @@ impl PluginManager {
                 .map_err(|_| anyhow!("plugin projection lock poisoned"))?
                 .revision,
             menu_controls: self.menu_controls()?,
-            file_drag_provider: self.registry.file_drag_provider.clone(),
-            grouping_migration_pending: self.db.meta_get(GROUPING_MIGRATION_KEY)?.as_deref()
-                == Some("pending"),
         })
     }
 
@@ -1425,8 +1358,7 @@ impl PluginManager {
             .iter()
             .map(PluginFacetTransform::target_tag)
             .collect();
-        let provides_file_drag = manifest.contributes.file_drag.is_some();
-        if targets.is_empty() && !provides_file_drag {
+        if targets.is_empty() {
             return Ok(());
         }
 
@@ -1455,12 +1387,6 @@ impl PluginManager {
             {
                 bail!(
                     "{} already owns the {target} facet transform; disable it before enabling {plugin_id}",
-                    record.id
-                );
-            }
-            if provides_file_drag && other.contributes.file_drag.is_some() {
-                bail!(
-                    "{} already provides file drag support; disable it before enabling {plugin_id}",
                     record.id
                 );
             }
@@ -1532,9 +1458,6 @@ impl ContributionRegistry {
     fn from_loaded(loaded: &BTreeMap<String, PluginManifest>) -> Self {
         let mut registry = Self::default();
         for (plugin_id, manifest) in loaded {
-            if manifest.contributes.file_drag.is_some() {
-                registry.file_drag_provider = Some(plugin_id.clone());
-            }
             for contribution in &manifest.contributes.facet_transforms {
                 registry.facets.insert(
                     contribution.target_tag().to_string(),
@@ -1980,7 +1903,7 @@ mod tests {
     use super::*;
     use crate::plugins::package::write_test_package;
     use crate::plugins::{
-        PluginContributions, PluginFileDragContribution, PluginSelectOption,
+        PluginContributions, PluginSelectOption,
         PluginSettingDeclaration,
     };
     use std::fs::File;
@@ -2062,30 +1985,6 @@ mod tests {
         value
     }
 
-    fn official_grouping_manifest() -> PluginManifest {
-        let mut value = transform_manifest(GROUPING_PLUGIN_ID);
-        if let PluginSettingDeclaration::Boolean { key, .. } = &mut value.contributes.settings[1] {
-            *key = GROUPING_PLUGIN_SETTING.into();
-        }
-        let PluginFacetTransform::TextFirstSegment {
-            enabled_setting, ..
-        } = &mut value.contributes.facet_transforms[0];
-        *enabled_setting = GROUPING_PLUGIN_SETTING.into();
-        value.contributes.menu_controls[0].checked_setting = Some(GROUPING_PLUGIN_SETTING.into());
-        value.contributes.menu_controls[0].action = PluginMenuAction::ToggleSetting {
-            setting: GROUPING_PLUGIN_SETTING.into(),
-        };
-        value
-    }
-
-    fn file_drag_manifest(id: &str) -> PluginManifest {
-        let mut value = manifest("1.0.0");
-        value.id = id.into();
-        value.api_version = PLUGIN_API_VERSION.into();
-        value.contributes.file_drag = Some(PluginFileDragContribution {});
-        value
-    }
-
     fn setup() -> (tempfile::TempDir, Arc<Db>, PluginManager) {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(Db::open(&dir.path().join("library.db")).unwrap());
@@ -2108,57 +2007,6 @@ mod tests {
         assert!(!result.snapshot.plugins[0].desired_enabled);
         assert!(!result.snapshot.plugins[0].loaded);
         assert!(!result.snapshot.restart_required);
-    }
-
-    #[test]
-    fn file_drag_exists_only_while_its_declarative_provider_is_loaded() {
-        let (dir, db, manager) = setup();
-        let id = "dev.crescendo.file-drag";
-        let package = dir.path().join("file-drag.crescendo-plugin");
-        write_test_package(&package, &file_drag_manifest(id), &[]);
-
-        let installed = manager.install(&package).unwrap();
-        assert_eq!(installed.snapshot.file_drag_provider, None);
-        assert_eq!(manager.file_drag_provider(), None);
-
-        let enabled = manager.set_enabled(id, true).unwrap();
-        assert_eq!(enabled.snapshot.file_drag_provider, None);
-        drop(manager);
-
-        let restarted = PluginManager::start(dir.path().join("plugins"), db, "0.8.0").unwrap();
-        assert_eq!(restarted.file_drag_provider(), Some(id));
-        assert_eq!(
-            restarted.snapshot().unwrap().file_drag_provider.as_deref(),
-            Some(id)
-        );
-    }
-
-    #[test]
-    fn only_one_enabled_plugin_can_provide_file_drag() {
-        let (dir, _db, manager) = setup();
-        for id in ["dev.crescendo.file-drag-a", "dev.crescendo.file-drag-b"] {
-            let package = dir.path().join(format!("{id}.crescendo-plugin"));
-            write_test_package(&package, &file_drag_manifest(id), &[]);
-            manager.install(&package).unwrap();
-        }
-
-        manager
-            .set_enabled("dev.crescendo.file-drag-a", true)
-            .unwrap();
-        let error = manager
-            .set_enabled("dev.crescendo.file-drag-b", true)
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("already provides file drag support"));
-        assert!(
-            !manager
-                .snapshot()
-                .unwrap()
-                .plugins
-                .iter()
-                .find(|plugin| plugin.id == "dev.crescendo.file-drag-b")
-                .unwrap()
-                .desired_enabled
-        );
     }
 
     #[test]
@@ -2571,41 +2419,6 @@ mod tests {
                 .unwrap()
                 .desired_enabled
         );
-    }
-
-    #[test]
-    fn grouping_migration_is_opt_in_and_never_returns_after_install_or_dismiss() {
-        let (dir, db, manager) = setup();
-        db.meta_set(GROUPING_MIGRATION_KEY, "pending").unwrap();
-        db.prefs_set("grouping_split_multi", "false").unwrap();
-        let package = dir.path().join("grouping.crescendo-plugin");
-        write_test_package(&package, &official_grouping_manifest(), &[]);
-
-        let installed = manager.complete_grouping_migration(Some(&package)).unwrap();
-        assert!(!installed.snapshot.grouping_migration_pending);
-        let plugin = installed
-            .snapshot
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == GROUPING_PLUGIN_ID)
-            .unwrap();
-        assert!(plugin.desired_enabled);
-        assert!(!plugin.loaded);
-        assert_eq!(plugin.settings[1].value, Value::Bool(true));
-        assert!(installed.snapshot.restart_required);
-        assert!(db.prefs_get("grouping_split_multi").unwrap().is_none());
-        assert!(!manager.complete_grouping_migration(None).unwrap().changed);
-
-        let (dismiss_dir, dismiss_db, dismiss_manager) = setup();
-        dismiss_db
-            .meta_set(GROUPING_MIGRATION_KEY, "pending")
-            .unwrap();
-        let dismissed = dismiss_manager.complete_grouping_migration(None).unwrap();
-        assert!(!dismissed.snapshot.grouping_migration_pending);
-        assert!(dismissed.snapshot.plugins.is_empty());
-        drop(dismiss_manager);
-        drop(dismiss_db);
-        drop(dismiss_dir);
     }
 
     #[test]

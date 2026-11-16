@@ -13,12 +13,11 @@ pub use bridge::{
 };
 pub use manager::{
     Enablement, PluginAsset, PluginInfo, PluginManager, PluginMenuControlInfo,
-    PluginMutationResult, PluginSnapshot, StaleProjection, GROUPING_PLUGIN_ID,
-    GROUPING_PLUGIN_SETTING,
+    PluginMutationResult, PluginSnapshot, StaleProjection,
 };
 pub use manifest::{
     PluginCommandDeclaration, PluginContributions, PluginFacetTransform,
-    PluginFileDragContribution, PluginKind, PluginManifest, PluginMenuAction, PluginMenuControl,
+    PluginKind, PluginManifest, PluginMenuAction, PluginMenuControl,
     PluginMenuSlot, PluginMenuVisibility, PluginSelectOption, PluginSettingDeclaration,
     PluginSettingValue,
 };

@@ -505,7 +505,7 @@ mod tests {
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(
             root.join("manifest.json"),
-            include_bytes!("../../../../plugins/dev.crescendo.primary-grouping/manifest.json"),
+            include_bytes!("testdata/declarative-manifest.json"),
         )
         .unwrap();
         fs::write(root.join("assets/readme.txt"), b"passive asset\n").unwrap();
@@ -564,7 +564,7 @@ mod tests {
         let manifest = dir.path().join("manifest.json");
         fs::write(
             &manifest,
-            include_bytes!("../../../../plugins/dev.crescendo.primary-grouping/manifest.json"),
+            include_bytes!("testdata/declarative-manifest.json"),
         )
         .unwrap();
         validate_manifest_against_shipped_schema(&manifest).unwrap();
@@ -578,12 +578,5 @@ mod tests {
         value["contributes"]["facet_transforms"][0]["type"] = serde_json::json!("script.per_track");
         fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(validate_manifest_against_shipped_schema(&manifest).is_err());
-
-        fs::write(
-            &manifest,
-            include_bytes!("../../../../plugins/dev.crescendo.file-drag/manifest.json"),
-        )
-        .unwrap();
-        validate_manifest_against_shipped_schema(&manifest).unwrap();
     }
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-file-drag-start"
+description = "Enables the file_drag_start command without any pre-configured scope."
+commands.allow = ["file_drag_start"]
+
+[[permission]]
+identifier = "deny-file-drag-start"
+description = "Denies the file_drag_start command without any pre-configured scope."
+commands.deny = ["file_drag_start"]

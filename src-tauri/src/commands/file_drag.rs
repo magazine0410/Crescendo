@@ -28,21 +28,12 @@ pub struct FileDragResult {
 }
 
 #[tauri::command]
-pub async fn plugin_file_drag_start(
+pub async fn file_drag_start(
     app: AppHandle,
     window: Window,
     state: State<'_, AppState>,
     source: FileDragSource,
 ) -> Result<FileDragResult, ProjectionCommandError> {
-    let provider =
-        state
-            .plugins
-            .file_drag_provider()
-            .ok_or_else(|| ProjectionCommandError::Operation {
-                message: "No loaded plugin provides file drag support".into(),
-            })?;
-    log::debug!("File drag requested through plugin {provider}");
-
     let (paths, truncated) = match source {
         FileDragSource::TrackIds { ids } => {
             let truncated = ids.len() > FILE_DRAG_LIMIT;

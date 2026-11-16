@@ -223,9 +223,6 @@ export interface PluginSnapshot {
   restart_required: boolean;
   projection_revision: number;
   menu_controls: PluginMenuControl[];
-  /** Loaded declarative plugin enabling outbound file dragging. */
-  file_drag_provider: string | null;
-  grouping_migration_pending: boolean;
 }
 
 export interface PluginMenuControl {

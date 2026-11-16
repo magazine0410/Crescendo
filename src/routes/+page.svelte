@@ -16,7 +16,6 @@
   import SetFilterDialog from "$lib/components/library/SetFilterDialog.svelte";
   import SetCollectionDialog from "$lib/components/playlists/SetCollectionDialog.svelte";
   import SearchHelp from "$lib/components/SearchHelp.svelte";
-  import GroupingPluginMigration from "$lib/components/settings/GroupingPluginMigration.svelte";
   import FileDragNotice from "$lib/components/common/FileDragNotice.svelte";
   import { applyAppearance } from "$lib/appearance";
   import { smoothWheel } from "$lib/motion";
@@ -152,10 +151,7 @@
   <SetFilterDialog />
   <SetCollectionDialog />
   <SearchHelp open={ui.searchHelpOpen} onclose={() => (ui.searchHelpOpen = false)} />
-  <GroupingPluginMigration />
-  {#if plugins.snapshot?.file_drag_provider}
-    <FileDragNotice />
-  {/if}
+  <FileDragNotice />
 </div>
 
 <style>
