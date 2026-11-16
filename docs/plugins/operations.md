@@ -26,11 +26,16 @@ is marked unhealthy for the session, and after repeated startup-init failures it
 is disabled automatically. Its bounded runtime log is shown in Settings, and a
 plugin failure never interrupts playback or blocks startup.
 
-The official Primary Grouping package is published with Crescendo releases and
-its source lives under `plugins/dev.crescendo.primary-grouping/`. Existing
-installations that had the former collapse preference receive a one-time offer
-to install it. Crescendo never silently installs or enables the package. Acting
-on or dismissing that offer permanently completes the migration notice.
+No plugin ships with Crescendo. Optional plugins, such as Primary Grouping
+and M3U Export, are published in the `magazine0410/crescendo-plugins`
+repository. Settings > Plugins > Available plugins lists the latest release's
+packages when asked: it reads the release's `index.json` only when
+`index.json.sig` verifies against Crescendo's release key, and installs a
+download only when it matches the index's size and SHA-256, names the plugin
+and version the index lists, and validates as a package. A plugin installed
+from the list arrives disabled, exactly like one installed from a file. While
+the repository is private, the list is read through a signed-in GitHub CLI
+(`gh auth login`), as private app updates are.
 
 ## Safe mode and recovery
 

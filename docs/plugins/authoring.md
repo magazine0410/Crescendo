@@ -53,8 +53,10 @@ Every manifest supplies:
 - `permissions`: empty for declarative plugins; see *Capabilities* below.
 - optional `contributes` declarations.
 
-The canonical complete example is
-[`plugins/dev.crescendo.primary-grouping/manifest.json`](../../plugins/dev.crescendo.primary-grouping/manifest.json).
+Complete examples are the demo plugin's
+[`plugins/dev.crescendo.wasm-demo/manifest.json`](../../plugins/dev.crescendo.wasm-demo/manifest.json)
+and, for a declarative plugin, Primary Grouping's manifest in the
+`magazine0410/crescendo-plugins` repository.
 
 ## Contributions
 
@@ -80,13 +82,9 @@ Declarative API 1.0 provides:
   whose `toggle_setting` action and `checked_setting` must name the same Boolean
   setting.
 
-Declarative API 1.1 adds exactly one marker contribution:
-
-- `file_drag: {}` enables Crescendo's fixed outbound file-drag surface. The
-  descriptor is intentionally empty: the plugin cannot provide paths, choose
-  UI selectors, alter the 2,000-file ceiling, or run native code. Only one
-  enabled plugin may own it, and the native command refuses calls unless that
-  provider is in the immutable loaded set.
+Declarative API 1.1 added a `file_drag: {}` marker that switched on
+Crescendo's outbound file dragging. File dragging is now built in, and the
+marker has been removed: a manifest that still names it no longer validates.
 
 Only one enabled plugin may own a transform for a given target tag. The app
 rejects conflicting enable requests rather than choosing an order implicitly.
@@ -111,10 +109,47 @@ publish. The action carries no arguments; the host dispatches it through the
 same bounded path as `plugin_invoke`, outside the projection transition,
 because running a command changes no projection.
 
+### Playlist exporters (runtime API 0.2.2)
+
+A Wasm plugin can add a playlist file format:
+
+```json
+"playlist_exporters": [
+  { "id": "m3u", "label": "M3U playlist", "extension": "m3u", "command": "export_m3u" }
+]
+```
+
+Crescendo then shows an Export item in the playlist and collection menus
+(labelled with the format only when several exporters are loaded), opens the
+Save dialog or folder chooser itself, chooses the file names (never
+overwriting in a folder export), and writes the file atomically. The plugin
+never names a path or touches the filesystem: its command is handed each
+playlist in chunks of at most 512 KiB of JSON and answers with the text for
+that chunk.
+
+```json
+{ "playlist": { "id": 3, "name": "Mix" },
+  "file": "/home/me/Music/Mix.m3u", "directory": "/home/me/Music",
+  "offset": 0, "total": 120,
+  "tracks": [ { "path": "...", "title": "...", "artist": "...",
+                "album_artist": "...", "duration_ms": 245400, "missing": false } ] }
+```
+
+```json
+{ "text": "#EXTM3U\n..." }
+```
+
+Write the format's header when `offset` is 0, and ignore input fields you do
+not use; later runtimes may add more. Because the tracks carry their paths, an
+exporter must request `playlists.read`, `library.read` and `library.paths`, at
+most 8 exporters fit in one manifest, `extension` is 1 to 8 lowercase letters
+or digits, and `command` must be a declared command. The M3U Export plugin in
+`magazine0410/crescendo-plugins` is a complete exporter.
+
 ## Wasm plugins
 
 Wasm packages carry a `module.wasm` built against the versioned WIT world in
-[`plugin-sdk/wit/`](../../plugin-sdk/wit) (runtime API `0.2.1`, matched by the
+[`plugin-sdk/wit/`](../../plugin-sdk/wit) (runtime API `0.2.2`, matched by the
 manifest's `api_version`). The component model interface is:
 
 - `crescendo:host/host` — always available: an on-demand `settings` read of the
@@ -205,7 +240,7 @@ Wasm manifests may request capabilities from the fixed v1 vocabulary:
 
 Grants are user-approved actions recorded against the plugin identity,
 version, and package hash; any update voids the approval and must be approved
-again before the update can load. Runtime API `0.2.1` provides the host
+again before the update can load. Runtime API `0.2.2` provides the host
 interface for every capability in the vocabulary — see the table below. The
 compatibility check remains: a package naming a capability this build does not
 know stays installed but incompatible, and cannot be enabled, until a later
@@ -234,7 +269,7 @@ entries, and validates the completed archive through the runtime staging path.
 Identical source bytes produce an identical archive and SHA-256. The output is
 created without replacing an existing file.
 
-## Capabilities in runtime API 0.2.1
+## Capabilities in runtime API 0.2.2
 
 Every permission in the v1 vocabulary now has a host interface. Each is denied
 per call unless the user approved it for this exact package:

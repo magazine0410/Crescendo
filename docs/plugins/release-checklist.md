@@ -9,10 +9,6 @@ cargo test --release -p crescendo-core \
   --test plugin_projection_performance_test -- --ignored --nocapture
 cargo check -p crescendo
 npm run check
-cargo run -p crescendo-core --bin crescendo-plugin -- validate \
-  plugins/dev.crescendo.primary-grouping
-cargo run -p crescendo-core --bin crescendo-plugin -- validate \
-  plugins/dev.crescendo.file-drag
 sh plugins/dev.crescendo.wasm-demo/build.sh
 cargo run -p crescendo-core --bin crescendo-plugin -- validate \
   plugins/dev.crescendo.wasm-demo/dist
@@ -29,12 +25,10 @@ name section differs between any two checkout locations while the code is
 identical. That is what the CI provenance job compares, together with the WIT
 world as text.
 
-The SDK workflow packs the canonical declarative sources, validates the
-finished packages, preserves them as CI artifacts, and attaches them to a
-published GitHub release. Install each release asset in a clean Crescendo
-profile and confirm it starts disabled and requires one restart to enter the
-loaded set; Primary Grouping then toggles projection live, while File Drag and
-Drop alone enables outbound dragging.
+The SDK workflow attaches the packed demo plugin and the SDK to a published
+GitHub release. The optional plugins are released separately from
+`magazine0410/crescendo-plugins` (its `RELEASING.md`); when the runtime API
+changes, rebuild them there against the new SDK before publishing.
 
 ## Automated invariants
 
@@ -79,21 +73,19 @@ Drop alone enables outbound dragging.
 
 ## Manual release checks
 
-- Upgrade a pre-plugin database once with collapse enabled: accept the notice,
-  restart, verify the behavior, and confirm the notice never returns.
-- Repeat with exact grouping enabled and with a fresh profile; neither should
-  install a plugin or show an offer.
+- In a clean profile, open Settings > Plugins > Available plugins, install
+  Primary Grouping and M3U Export from the list, and confirm each starts
+  disabled and needs one restart; Primary Grouping then toggles projection
+  live, and M3U Export adds Export items to the playlist menus whose files
+  import back unchanged.
 - Interrupt a staged update and a loaded-plugin uninstall at process boundaries,
   then confirm the journal resumes or restores the old package without loss.
 - Leave a startup marker, confirm one safe-mode run with no contributions, and
   confirm the following clean launch restores the desired loaded set.
 - Start once with `CRESCENDO_DISABLE_PLUGINS=1` and confirm the diagnostic reason
   is visible while the library and player remain usable.
-- Install the exact `.crescendo-plugin` file attached to the GitHub release and
-  compare its printed/validated SHA-256 with the release artifact.
-- With no file-drag provider loaded, confirm rows have their normal cursor and
-  `plugin_file_drag_start` is refused; after enabling the official provider and
-  restarting, confirm quick and 2,000-track-limited drops work.
+- Confirm quick and 2,000-track-limited outbound file drags work with no
+  plugin installed.
 - Install the packed Wasm demo, approve its capabilities, restart, and confirm:
   its commands run from the Plugins page; `spin` fails on the deadline without
   disturbing playback; the player, playlist, and network commands answer

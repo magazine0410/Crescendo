@@ -2,7 +2,7 @@
 
 This directory is the versioned authoring contract for Crescendo's plugin
 system. The current contracts are manifest schema version 1, declarative plugin
-API `1.1.0`, and the sandboxed Wasm runtime API `0.2.1`. Each release attaches
+API `1.1.0`, and the sandboxed Wasm runtime API `0.2.2`. Each release attaches
 a copy of this directory to its GitHub release, so a plugin can be built
 against the exact contract a given Crescendo implements.
 
@@ -15,12 +15,12 @@ against the exact contract a given Crescendo implements.
   Its version tracks the runtime API. Rust is the toolchain Crescendo ships
   bindings for; any language with a Component Model generator can build against
   `wit/` directly, but only the Rust path is tested here.
-- [`../plugins/dev.crescendo.primary-grouping/`](../plugins/dev.crescendo.primary-grouping/)
-  is the canonical declarative source example.
-- [`../plugins/dev.crescendo.file-drag/`](../plugins/dev.crescendo.file-drag/)
-  is the installable outbound file-drag contribution.
 - [`../plugins/dev.crescendo.wasm-demo/`](../plugins/dev.crescendo.wasm-demo/)
   is the canonical sandboxed Wasm source example.
+- The optional plugins Crescendo lists in Settings, Primary Grouping (a
+  declarative example) and M3U Export (a Wasm playlist exporter), live in
+  the separate `magazine0410/crescendo-plugins` repository, which also
+  documents how their releases are packed and signed.
 - [`../docs/plugins/authoring.md`](../docs/plugins/authoring.md) explains the
   supported contribution vocabulary, capabilities, and package command.
 - [`../docs/plugins/compatibility.md`](../docs/plugins/compatibility.md)
@@ -36,8 +36,8 @@ against the exact contract a given Crescendo implements.
 Run the supported validator and deterministic packer from the repository root:
 
 ```bash
-cargo run -p crescendo-core --bin crescendo-plugin -- validate plugins/dev.crescendo.primary-grouping
-cargo run -p crescendo-core --bin crescendo-plugin -- pack plugins/dev.crescendo.primary-grouping
+cargo run -p crescendo-core --bin crescendo-plugin -- validate path/to/plugin
+cargo run -p crescendo-core --bin crescendo-plugin -- pack path/to/plugin
 ```
 
 Pack a *staged* directory: a package may contain only `manifest.json`,

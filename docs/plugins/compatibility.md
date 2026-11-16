@@ -14,7 +14,7 @@ accepted by host `1.0.0`, and API `2.x` requires an explicit new compatibility
 contract.
 
 For `kind: "wasm"` packages, `api_version` is checked the same way against the
-sandbox runtime API (`0.2.1` in this release), which versions the whole runtime
+sandbox runtime API (`0.2.2` in this release), which versions the whole runtime
 contract — the WIT world *and* the host-side contribution vocabulary a Wasm
 package may declare — independently of the declarative manifest API.
 
@@ -53,10 +53,10 @@ The rules below are what `compatibility_error` implements, and
   handlers, and a `0.1.0` component is reported incompatible rather than loaded
   and trapped.
 - **A patch release is a compatible addition.** `0.2.1` added the
-  `run_command` menu action without touching the world, so components built
-  against `0.2.0` keep loading. Host *imports* are matched by semver — a
-  component asking for `crescendo:host/library@0.2.0` binds to this host's
-  `@0.2.1` — which is why adding a host interface is a patch and adding an
+  `run_command` menu action and `0.2.2` the `playlist_exporters` contribution,
+  neither touching the world's functions, so components built against `0.2.0`
+  keep loading. Host *imports* are matched by semver — a component asking for
+  `crescendo:host/library@0.2.0` binds to this host's `@0.2.2` — which is why adding a host interface is a patch and adding an
   export is not. `crates/core/tests/fixtures/wasm-legacy-0.2.0-module.wasm` is
   a frozen 0.2.0 component kept precisely to keep proving this; never rebuild
   it.
@@ -70,8 +70,11 @@ something the newer API added. A package that declares the newest version it
 was built against is refused by every older Crescendo, including the one the
 user is running.
 
-Declarative API `1.1.0` adds the empty `file_drag` marker; `1.0.x` packages
-remain compatible and cannot accidentally opt into it.
+Declarative API `1.1.0` added the empty `file_drag` marker. Outbound file
+dragging has since become a built-in feature and the marker was removed from
+the vocabulary, so the one package that used it (the File Drag and Drop
+plugin) no longer validates and should be uninstalled. Other `1.1.0` and
+`1.0.x` packages are unaffected.
 
 The declarative contribution set is immutable for a running process. First
 install is immediately listed but disabled; install, update, enable, disable,

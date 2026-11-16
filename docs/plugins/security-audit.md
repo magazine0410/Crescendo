@@ -98,11 +98,18 @@ and `storage_is_namespaced_per_plugin_and_bounded_by_the_quota`.
 The host must never do something on a plugin's behalf that the plugin could
 not do itself.
 
-The declarative `file_drag` marker is not a path capability. It receives no
-data and runs no code: the user's pointer gesture supplies one host-defined
-selection descriptor, the host resolves it against the current projection,
-and the host clips the result to 2,000 existing files. The native command is
-unavailable unless exactly one provider is loaded.
+A playlist exporter is handed track paths, so it must hold the three
+capabilities that would let it read them itself (`playlists.read`,
+`library.read`, `library.paths`); the manifest validator refuses an exporter
+without them. It never receives a writable path: the host chooses the file,
+writes the text the plugin returns, and refuses to overwrite in a folder
+export (`tests/playlist_export_test.rs`).
+
+The optional-plugin list is not a way around package review. The index is
+trusted only with a signature from the offline release key, a download must
+match the index's hash and name the listed plugin and version, and installing
+it goes through the same staging, validation, disabled-first install and
+per-package capability approval as a local file (`plugins::catalog`).
 
 - **Identity is never an argument.** No host import takes a plugin id; it comes
   from the store the call arrived on. A plugin cannot name another plugin's

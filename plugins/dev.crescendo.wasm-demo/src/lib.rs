@@ -1,15 +1,16 @@
 //! Canonical sandboxed Wasm plugin example for Crescendo.
 //!
 //! Exercises the whole runtime surface a plugin author sees: host-rendered
-//! live settings, a host-rendered menu action, namespaced storage, windowed
-//! library reads, the coalesced event handlers, and command dispatch through
-//! `plugin_invoke`. Build with `build.sh` and pack the result with the
-//! `crescendo-plugin` tool.
+//! live settings, a host-rendered menu action, a playlist exporter,
+//! namespaced storage, windowed library reads, the coalesced event handlers,
+//! and command dispatch through `plugin_invoke`. Build with `build.sh` and
+//! pack the result with the `crescendo-plugin` tool.
 //!
-//! The manifest requests only `library.read` and `storage`, so the player,
-//! playlist, and network commands below are also the example of what a
-//! *denied* capability looks like from inside the sandbox: an ordinary error
-//! variant, reported as data, not a trap.
+//! The manifest requests `library.read`, `library.paths`, `playlists.read`
+//! (the three a playlist exporter needs) and `storage`, so the player,
+//! playlist-writing, and network commands below are also the example of what
+//! a *denied* capability looks like from inside the sandbox: an ordinary
+//! error variant, reported as data, not a trap.
 
 use crescendo_plugin_sdk::{
     export_plugin, host, library, net, player, playlists, storage, Guest, LogLevel, StorageError,
