@@ -25,6 +25,13 @@ name section differs between any two checkout locations while the code is
 identical. That is what the CI provenance job compares, together with the WIT
 world as text.
 
+A local build can still differ from CI's in the order the linker places a few
+small functions, which depends on the build machine, while the code is the
+same. When the provenance job fails after you committed a local build, it
+uploads its own as the `wasm-demo-rebuilt` artifact: check that the two differ
+only in function order (`wasm-tools print` both and diff), then commit CI's
+`module.wasm` as the fixture.
+
 The SDK workflow attaches the packed demo plugin and the SDK to a published
 GitHub release. The optional plugins are released separately from
 `magazine0410/crescendo-plugins` (its `RELEASING.md`); when the runtime API
