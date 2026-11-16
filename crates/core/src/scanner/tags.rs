@@ -1,11 +1,14 @@
 use anyhow::{anyhow, Result};
+use lofty::ape::{ApeFile, ApeTag};
 use lofty::config::ParseOptions;
 use lofty::file::{FileType, TaggedFile, TaggedFileExt};
 use lofty::flac::FlacFile;
+use lofty::musepack::MpcFile;
 use lofty::ogg::tag::VorbisComments;
 use lofty::ogg::{OpusFile, SpeexFile, VorbisFile};
 use lofty::prelude::{Accessor, AudioFile, ItemKey};
 use lofty::probe::Probe;
+use lofty::wavpack::WavPackFile;
 use std::io::{Read, Seek};
 use std::path::Path;
 
@@ -50,6 +53,8 @@ pub fn format_name(ft: FileType) -> &'static str {
         FileType::Aiff => "AIFF",
         FileType::Ape => "APE",
         FileType::WavPack => "WavPack",
+        FileType::Mpc => "Musepack",
+        FileType::Speex => "Speex",
         _ => "Other",
     }
 }
@@ -64,6 +69,8 @@ pub fn format_name(ft: FileType) -> &'static str {
 struct RawExtras {
     vocalist: Option<String>,
     event: Option<String>,
+    /// An APEv2 tag holds a cover. `Tag` would not show it: see [`ape_cover`].
+    ape_cover: bool,
 }
 
 fn vorbis_extras(vc: &VorbisComments) -> RawExtras {
@@ -77,13 +84,64 @@ fn vorbis_extras(vc: &VorbisComments) -> RawExtras {
     RawExtras {
         vocalist: get("VOCALIST"),
         event: get("EVENT"),
+        ape_cover: false,
     }
 }
 
+/// The same two fields from an APEv2 tag, the tag WavPack, Monkey's Audio and
+/// Musepack files carry. APE keys are case-insensitive too, and a multi-value
+/// item keeps only its first value, as a repeated Vorbis field does.
+fn ape_extras(ape: &ApeTag) -> RawExtras {
+    let get = |key: &str| {
+        ape.get(key)
+            .and_then(|item| item.text_values()?.next())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    RawExtras {
+        vocalist: get("VOCALIST"),
+        event: get("EVENT"),
+        ape_cover: ape_cover(ape).is_some(),
+    }
+}
+
+/// The cover in an APEv2 tag: the front cover, else the first other
+/// `Cover Art (…)` item, as bytes without the description APE puts first.
+/// lofty 0.25 drops these items when it converts an APE tag to `Tag`, since
+/// picture keys have no `ItemKey`, so `Tag::pictures` is always empty for them.
+pub(crate) fn ape_cover(ape: &ApeTag) -> Option<Vec<u8>> {
+    let binary = |item: &lofty::ape::ApeItem| match item.value() {
+        lofty::tag::ItemValue::Binary(bytes) => Some(bytes.clone()),
+        _ => None,
+    };
+    let front = ape.get("Cover Art (Front)");
+    let any = || {
+        ape.into_iter()
+            .find(|item| item.key().to_ascii_lowercase().starts_with("cover art ("))
+    };
+    let item = front.or_else(any)?;
+    let picture = lofty::picture::Picture::from_ape_bytes(item.key(), &binary(item)?).ok()?;
+    Some(picture.into_data()).filter(|data| !data.is_empty())
+}
+
+/// The APEv2 cover of a WavPack, Monkey's Audio or Musepack file, for the
+/// cover reader, which otherwise goes through `Tag` and would never see it.
+pub(crate) fn ape_cover_from_path(path: &Path, file_type: FileType) -> Option<Vec<u8>> {
+    let opts = ParseOptions::new().parsing_mode(lofty::config::ParsingMode::Relaxed);
+    let mut file = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+    let ape = match file_type {
+        FileType::WavPack => WavPackFile::read_from(&mut file, opts).ok()?.ape().cloned(),
+        FileType::Ape => ApeFile::read_from(&mut file, opts).ok()?.ape().cloned(),
+        FileType::Mpc => MpcFile::read_from(&mut file, opts).ok()?.ape().cloned(),
+        _ => None,
+    }?;
+    ape_cover(&ape)
+}
+
 /// Read the file, keeping the format-specific tag long enough to pull the
-/// fields `Tag` would discard. The Vorbis-comment formats are the ones that
-/// carry `VOCALIST`/`EVENT` in practice; everything else parses exactly as
-/// `Probe::read` would and simply has no extras.
+/// fields `Tag` would discard. The Vorbis-comment and APEv2 formats are the
+/// ones that carry `VOCALIST`/`EVENT` in practice; everything else parses
+/// exactly as `Probe::read` would and simply has no extras.
 ///
 /// The file type comes from the extension alone, as before — `Probe::read`
 /// never sniffed content either, so detection is unchanged.
@@ -111,6 +169,21 @@ fn read_tagged<R: Read + Seek>(
         Some(FileType::Speex) => {
             let f = SpeexFile::read_from(reader, opts)?;
             let extras = vorbis_extras(f.vorbis_comments());
+            (f.into(), extras)
+        }
+        Some(FileType::WavPack) => {
+            let f = WavPackFile::read_from(reader, opts)?;
+            let extras = f.ape().map(ape_extras).unwrap_or_default();
+            (f.into(), extras)
+        }
+        Some(FileType::Ape) => {
+            let f = ApeFile::read_from(reader, opts)?;
+            let extras = f.ape().map(ape_extras).unwrap_or_default();
+            (f.into(), extras)
+        }
+        Some(FileType::Mpc) => {
+            let f = MpcFile::read_from(reader, opts)?;
+            let extras = f.ape().map(ape_extras).unwrap_or_default();
             (f.into(), extras)
         }
         Some(ft) => (
@@ -215,6 +288,7 @@ fn parse_meta(path: &Path, filename_fallback: bool) -> Result<TrackMeta> {
             .or_else(|| meta.date.as_deref().and_then(year_from_date));
         meta.has_embedded_art = !tag.pictures().is_empty();
     }
+    meta.has_embedded_art |= extras.ape_cover;
     meta.vocalist = extras.vocalist;
     meta.event = extras.event;
 
@@ -256,6 +330,10 @@ pub fn fallback_meta(path: &Path) -> TrackMeta {
         Some("wav") => "WAV",
         Some("m4a") | Some("aac") => "AAC",
         Some("aiff") => "AIFF",
+        Some("wv") => "WavPack",
+        Some("ape") => "APE",
+        Some("mpc") | Some("mp+") | Some("mpp") => "Musepack",
+        Some("spx") => "Speex",
         _ => "Other",
     };
     TrackMeta {

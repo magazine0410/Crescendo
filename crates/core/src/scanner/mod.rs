@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tags::TrackMeta;
 
-pub const AUDIO_EXTS: &[&str] = &["flac", "mp3", "wav", "opus", "ogg", "m4a", "aac", "aiff"];
+pub const AUDIO_EXTS: &[&str] = &[
+    "flac", "mp3", "wav", "opus", "ogg", "m4a", "aac", "aiff", "wv", "ape", "mpc", "mp+", "mpp",
+    "spx",
+];
 const BATCH_SIZE: usize = 1000;
 const PROGRESS_EVERY: u64 = 500;
 /// Longest the writer holds the database write lock in one transaction. Play

@@ -430,16 +430,19 @@ pub fn embedded_art(path: &Path) -> Option<Vec<u8>> {
 fn read_embedded_art(path: &Path) -> Option<Vec<u8>> {
     let file = lofty::read_from_path(path).ok()?;
     use lofty::file::TaggedFileExt;
-    let tag = file.primary_tag().or_else(|| file.first_tag())?;
-    let pic = tag.pictures().first()?;
-    if pic.data().len() > MAX_EMBEDDED_ART_BYTES {
+    let tag = file.primary_tag().or_else(|| file.first_tag());
+    let data = match tag.and_then(|tag| tag.pictures().first()) {
+        Some(pic) => pic.data().to_vec(),
+        None => crate::scanner::tags::ape_cover_from_path(path, file.file_type())?,
+    };
+    if data.len() > MAX_EMBEDDED_ART_BYTES {
         log::warn!(
             "embedded cover in {} exceeds the 32 MiB limit",
             path.display()
         );
         return None;
     }
-    Some(pic.data().to_vec())
+    Some(data)
 }
 
 fn cover_limits() -> image::Limits {
