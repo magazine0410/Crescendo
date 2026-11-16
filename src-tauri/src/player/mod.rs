@@ -18,6 +18,7 @@ use crescendo_core::playqueue::{PlayQueue, RepeatMode};
 use crescendo_core::radio::logo::LogoStore;
 use crescendo_core::radio::Station;
 pub use station::StationNow;
+use crescendo_core::rating::ShuffleMode;
 use gstreamer::prelude::*;
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use serde::Serialize;
@@ -78,6 +79,10 @@ pub enum Cmd {
     /// Publish current database metadata after Forte saves without interrupting audio.
     RefreshMetadata,
     SetShuffle(bool),
+    /// Weighted shuffle draws higher-rated tracks earlier in each pass.
+    SetShuffleMode(ShuffleMode),
+    /// A track's rating changed in the database.
+    RatingsChanged,
     CycleRepeat,
     /// Set the repeat mode outright; MPRIS clients name a mode rather than cycling.
     SetRepeat(RepeatMode),
@@ -358,6 +363,7 @@ struct Engine {
     station: Option<station::StationSession>,
     /// The station Play resumes from stopped; cleared when a track starts.
     last_station: Option<Station>,
+    shuffle_mode: ShuffleMode,
 }
 
 fn build_pipeline(
@@ -514,8 +520,11 @@ fn run_player(
         logos,
         station: None,
         last_station: None,
+        shuffle_mode: ShuffleMode::Random,
     };
     engine.apply_volume();
+    engine.shuffle_mode = engine.db.shuffle_mode();
+    engine.load_shuffle_weights();
 
     let mut last_tick = Instant::now();
 
@@ -649,6 +658,24 @@ mod tests {
 impl Engine {
     fn playback(&self) -> MutexGuard<'_, Playback> {
         self.playback.lock().expect("playback poisoned")
+    }
+
+    /// Give the queue the shuffle weights of the current mode: the ratings
+    /// under weighted shuffle, none under true random. Under shuffle, the
+    /// unplayed rest of the walk is drawn again with them.
+    fn load_shuffle_weights(&mut self) {
+        let weights = match self.shuffle_mode {
+            ShuffleMode::Random => Default::default(),
+            // Read before taking the playback lock.
+            ShuffleMode::Weighted => match self.db.ratings() {
+                Ok(ratings) => crescendo_core::rating::shuffle_weights(&ratings),
+                Err(error) => {
+                    log::warn!("ratings unavailable for weighted shuffle: {error:#}");
+                    Default::default()
+                }
+            },
+        };
+        self.playback().edit_queue(|q| q.set_weights(weights));
     }
 
     /// Finish an explicit change: start the track it chose, or stop.
@@ -785,6 +812,19 @@ impl Engine {
             }
             Cmd::SetShuffle(on) => {
                 self.playback().edit_queue(|q| q.set_shuffle(on));
+                self.publish_state();
+            }
+            Cmd::SetShuffleMode(mode) => {
+                if self.shuffle_mode != mode {
+                    self.shuffle_mode = mode;
+                    self.load_shuffle_weights();
+                }
+            }
+            Cmd::RatingsChanged => {
+                if self.shuffle_mode == ShuffleMode::Weighted {
+                    self.load_shuffle_weights();
+                }
+                // The published track carries its rating.
                 self.publish_state();
             }
             Cmd::CycleRepeat => {

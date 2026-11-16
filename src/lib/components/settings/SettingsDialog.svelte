@@ -4,6 +4,7 @@
     prefs,
     type AnimationLevel,
     type CollectionsPlacement,
+    type ShuffleMode,
   } from "$lib/stores/prefs.svelte";
   import { library } from "$lib/stores/library.svelte";
   import { ui } from "$lib/stores/ui.svelte";
@@ -45,6 +46,7 @@
   let autostart = $state(false);
   let replayGainSaving = $state(false);
   let replayGainError = $state("");
+  let shuffleModeError = $state("");
   let activeSection = $state<SettingsSection>("general");
 
   /** Ordering follows this pref in SQL (see queries.rs), so the pref has to be
@@ -95,6 +97,15 @@
       replayGainError = String(error);
     } finally {
       replayGainSaving = false;
+    }
+  }
+
+  async function setShuffleMode(mode: ShuffleMode) {
+    shuffleModeError = "";
+    try {
+      await prefs.set("shuffle_mode", mode);
+    } catch (error) {
+      shuffleModeError = String(error);
     }
   }
 
@@ -271,6 +282,25 @@
           original level. Changes apply during playback.
         </p>
         {#if replayGainError}<p class="hint" role="alert">{replayGainError}</p>{/if}
+
+        <label for="shufflemode">Shuffle</label>
+        <Select
+          id="shufflemode"
+          value={prefs.values.shuffle_mode}
+          options={[
+            { value: "random", label: "True random" },
+            { value: "weighted", label: "Weighted random" },
+          ]}
+          onchange={(value) => setShuffleMode(value as ShuffleMode)}
+        />
+        <p class="hint">
+          True random makes every order equally likely. Weighted random uses
+          ratings: 4, 4.5 and 5 stars come up increasingly early, 2 to 2.5 stars
+          later, and 0.5 to 1.5 stars almost last. Unrated songs and 3 to 3.5
+          stars count as neutral. Every song still plays once before any
+          repeats.
+        </p>
+        {#if shuffleModeError}<p class="hint" role="alert">{shuffleModeError}</p>{/if}
 
         <section class="appearance" aria-labelledby="appearance-heading">
           <h3 id="appearance-heading">Appearance</h3>

@@ -9,6 +9,7 @@
   import { formatTime, formatTitle, displayTitle, displayArtist, displayName, playsText } from "$lib/format";
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import Icon from "../common/Icon.svelte";
+  import RatingStars from "../common/RatingStars.svelte";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
   import { openTrackInFileManagerItem, tagEditItem } from "$lib/menu";
   import { viewAlbum } from "$lib/navigate";
@@ -385,6 +386,7 @@
         </div>
         {#if playsText(r.track)}<span class="tplays">{playsText(r.track)}</span>{/if}
       </div>
+      <RatingStars track={r.track} />
       <div class="tdetails">
         <span class="tdetail" title={detail}>{detail}</span>
         {#if detail2}<span class="tdetail2" title={detail2}>{detail2}</span>{/if}

@@ -4,6 +4,7 @@ pub mod playlists;
 pub mod plugins;
 pub mod prefs;
 pub mod queries;
+pub mod ratings;
 mod schema;
 pub mod stations;
 

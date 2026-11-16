@@ -33,7 +33,7 @@
     ["lyricist", "Text — lyricist (short: lyr)."],
     ["path", "Text — full file path."],
     ["plays", "Number — times the track was played (short: p; alias: playcount)."],
-    ["rating", "Number — rating (short: r, rat)."],
+    ["rating", "Number — rating in stars, 0.5 to 5; unrated tracks never match (short: r, rat)."],
     ["samplerate", "Number — sample rate in Hz (short: sr)."],
     ["title", "Text — track title (short: t)."],
     ["titlesort", "Text — title sort name, romaji (short: ts)."],
