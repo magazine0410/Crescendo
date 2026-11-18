@@ -29,6 +29,8 @@ cargo test -p crescendo --test gapless_handoff                                  
 cargo run --release -p crescendo-core --example m3u_art_test -- <db> <m3u> <cache-dir>
 ```
 
+The Fedora toolbox `dev` has the `-devel` packages the Rust build needs: `webkit2gtk4.1-devel` (which brings in GTK 3, libsoup 3 and JavaScriptCore), `dbus-devel`, `gstreamer1-devel`, `gstreamer1-plugins-base-devel`, and the README's `openssl-devel`, `librsvg2-devel` and `libappindicator-gtk3-devel`. Run commands in it with `toolbox run -c dev <command>`, or open a shell with `toolbox enter dev`. Cargo works there because it is installed in the home directory; Node.js is not installed in the toolbox.
+
 Runtime data: DB at `~/.local/share/crescendo/library.db` (SQLite WAL — safe to open with a second connection while the app runs), thumbnails at `~/.cache/crescendo/thumbs/`.
 
 ## Architecture
