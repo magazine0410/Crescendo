@@ -133,6 +133,7 @@ export const lucideIcons: Record<string, string> = {
   "sun": "<circle cx=\"12\" cy=\"12\" r=\"4\" /> <path d=\"M12 2v2\" /> <path d=\"M12 20v2\" /> <path d=\"m4.93 4.93 1.41 1.41\" /> <path d=\"m17.66 17.66 1.41 1.41\" /> <path d=\"M2 12h2\" /> <path d=\"M20 12h2\" /> <path d=\"m6.34 17.66-1.41 1.41\" /> <path d=\"m19.07 4.93-1.41 1.41\" />",
   // Custom: filled sort-direction triangles (path-level fill overrides the
   // stroke-only defaults from Icon.svelte).
+  "trash": "<path d=\"M10 11v6\" /> <path d=\"M14 11v6\" /> <path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\" /> <path d=\"M3 6h18\" /> <path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\" />",
   "triangle-up": "<path d=\"M12 5 20 19H4z\" fill=\"currentColor\" stroke=\"currentColor\" />",
   "triangle-down": "<path d=\"M12 19 4 5h16z\" fill=\"currentColor\" stroke=\"currentColor\" />",
   "two-arrows-right": "<path d=\"m16 3 4 4-4 4\" /> <path d=\"M20 7H4\" /> <path d=\"m16 13 4 4-4 4\" /> <path d=\"M20 17H4\" />",

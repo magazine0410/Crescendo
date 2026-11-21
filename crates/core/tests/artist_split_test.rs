@@ -5,7 +5,7 @@
 //! shows, so a romanized sort tag that credits two artists splits too.
 
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
+use crescendo_core::model::{BrowseMode, BrowseValue, FacetSelection, PlayContext};
 use std::collections::HashMap;
 
 /// (id, artist, artistsort, albumartist, album_id). Albums: 1 = the
@@ -69,8 +69,10 @@ fn counts(vals: &[BrowseValue]) -> HashMap<String, i64> {
 
 fn artist_context(values: &[&str]) -> PlayContext {
     PlayContext::ValueTracks {
-        mode: BrowseMode::Artist,
-        values: values.iter().map(|v| v.to_string()).collect(),
+        filters: vec![FacetSelection {
+            mode: BrowseMode::Artist,
+            values: values.iter().map(|v| v.to_string()).collect(),
+        }],
         query: None,
         projection_revision: 0,
         sort: None,

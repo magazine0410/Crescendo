@@ -109,7 +109,10 @@ test("play history refreshes counts, facets, albums and history-dependent order"
       if (command === "track_count") return 1;
       throw new Error(`unexpected ${command}`);
     }, preferences(setup));
-    if (setup.custom_browse_tag) library.mode = "custom";
+    if (setup.custom_browse_tag) {
+      library.facet("artist").expanded = false;
+      library.facet("custom").expanded = true;
+    }
     library.query = setup.query ?? null;
     library.trackCount = 2;
     library.tracks = [{ id: 1, play_count: 0 }, { id: 2, play_count: 0 }];
@@ -445,10 +448,57 @@ test("a failed or superseded value load does not prune the selection", async () 
   const library = await store("library", libraryCalls({
     browse_values: () => { throw new Error("invalid query"); },
   }));
-  library.values = [{ value: "a", count: 1 }];
-  library.selectedValues = ["a", "gone"];
+  const artist = library.facet("artist");
+  artist.values = [{ value: "a", count: 1 }];
+  artist.selectedValues = ["a", "gone"];
   await library.setQuery("broken(");
-  assert.deepEqual([...library.selectedValues], ["a", "gone"]);
+  assert.deepEqual([...artist.selectedValues], ["a", "gone"]);
+});
+
+test("the tabs layout keeps one category open and every selection", async () => {
+  const library = await store("library", libraryCalls(), preferences({ filter_panel_layout: "tabs" }));
+  const artist = library.facet("artist");
+  const album = library.facet("album");
+  artist.selectedValues = ["a"];
+  artist.valueFilter = "narrowing";
+  await library.openFacet(album);
+  assert.deepEqual(library.facets.filter(facet => facet.expanded).map(facet => facet.mode), ["album"]);
+  assert.equal(artist.valueFilter, "");
+  assert.deepEqual([...artist.selectedValues], ["a"]);
+  await library.openFacet(album);
+  assert.equal(album.expanded, true, "clicking the open tab leaves it open");
+});
+
+test("switching to the tabs layout keeps the first open category", async () => {
+  const prefs = preferences({ filter_panel_layout: "list" });
+  const library = await store("library", libraryCalls(), prefs);
+  await library.toggleFacet(library.facet("album"));
+  await library.toggleFacet(library.facet("genre"));
+  library.facet("album").selectedValues = ["x"];
+  prefs.values.filter_panel_layout = "tabs";
+  await library.showOneFacet();
+  assert.deepEqual(library.facets.filter(facet => facet.expanded).map(facet => facet.mode), ["genre"]);
+  assert.deepEqual([...library.facet("album").selectedValues], ["x"]);
+
+  for (const facet of library.facets) facet.expanded = false;
+  await library.showOneFacet();
+  assert.equal(library.facet("artist").expanded, true, "with none open, Artist opens");
+});
+
+test("clearing filters empties every category and reloads the albums once", async () => {
+  const albums = [];
+  const library = await store("library", libraryCalls({
+    browse_albums: args => { albums.push(args.filters); return []; },
+  }));
+  library.facet("artist").selectedValues = ["a"];
+  library.facet("album").selectedValues = ["x", "y"];
+  library.facet("artist").valueFilter = "kept";
+  await library.clearFilters();
+  assert.deepEqual(library.activeFilters, []);
+  assert.deepEqual(albums, [[]]);
+  assert.equal(library.facet("artist").valueFilter, "kept");
+  await library.clearFilters();
+  assert.equal(albums.length, 1, "nothing to clear, nothing reloaded");
 });
 
 const progress = (fields = {}) => ({ scanned: 1, added: 0, updated: 0, removed: 0, errors: 0, current_path: "", done: false, cancelled: false, ...fields });

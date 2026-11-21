@@ -59,15 +59,11 @@ pub async fn file_drag_start(
                 .plugins
                 .projection(expected_revision)
                 .map_err(projection_error)?;
-            let plan = match &ctx {
-                PlayContext::ValueTracks { mode, .. } => projection.facet_plan(mode),
-                _ => None,
-            };
             let mut paths = state
                 .db
                 .resolve_context_paths_with_projection(
                     &ctx,
-                    plan.as_ref(),
+                    &|mode| projection.facet_plan(mode),
                     projection.prefer_romanized(),
                     FILE_DRAG_LIMIT + 1,
                 )

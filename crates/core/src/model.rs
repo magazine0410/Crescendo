@@ -192,6 +192,14 @@ pub struct TrackSort {
     pub secondary_descending: Option<bool>,
 }
 
+/// What is selected in one left-panel category (one or more Ctrl-multi-selected
+/// values). A track matches when any of them is one of its values.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FacetSelection {
+    pub mode: BrowseMode,
+    pub values: Vec<String>,
+}
+
 /// What ordered set of tracks playback iterates over. Resolved to concrete
 /// track ids in Rust so the frontend never ships id lists.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,10 +238,9 @@ pub enum PlayContext {
         sort: Option<TrackSort>,
     },
     ValueTracks {
-        mode: BrowseMode,
-        /// The left-panel selection (one or more Ctrl-multi-selected values);
-        /// tracks matching any of them play.
-        values: Vec<String>,
+        /// The left-panel selection, one entry per category that has one. A
+        /// track plays when it matches every entry.
+        filters: Vec<FacetSelection>,
         query: Option<String>,
         /// Revision of the projection used to render the clicked row.
         projection_revision: u64,

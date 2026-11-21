@@ -67,13 +67,13 @@ pub async fn player_play_context(
         .plugins
         .projection(expected_revision)
         .map_err(projection_error)?;
-    let plan = match &ctx {
-        PlayContext::ValueTracks { mode, .. } => projection.facet_plan(mode),
-        _ => None,
-    };
     let ids = state
         .db
-        .resolve_context_with_projection(&ctx, plan.as_ref(), projection.prefer_romanized())
+        .resolve_context_with_projection(
+            &ctx,
+            &|mode| projection.facet_plan(mode),
+            projection.prefer_romanized(),
+        )
         .map_err(|error| ProjectionCommandError::Operation {
             message: error.to_string(),
         })?;

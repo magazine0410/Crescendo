@@ -1,7 +1,8 @@
 use crate::state::AppState;
 use crescendo_core::library_lock::{LibraryLock, LibraryWriter};
 use crescendo_core::model::{
-    Album, BrowseMode, BrowseValue, LibraryStats, PlayContext, Track, TrackGroup, TrackSort,
+    Album, BrowseMode, BrowseValue, FacetSelection, LibraryStats, PlayContext, Track, TrackGroup,
+    TrackSort,
 };
 use crescendo_core::plugins::StaleProjection;
 use crescendo_core::scanner::{scan, ScanOptions};
@@ -60,13 +61,13 @@ pub(crate) fn resolve_context(
         .plugins
         .projection(expected_revision)
         .map_err(projection_error)?;
-    let plan = match ctx {
-        PlayContext::ValueTracks { mode, .. } => projection.facet_plan(mode),
-        _ => None,
-    };
     state
         .db
-        .resolve_context_with_projection(ctx, plan.as_ref(), projection.prefer_romanized())
+        .resolve_context_with_projection(
+            ctx,
+            &|mode| projection.facet_plan(mode),
+            projection.prefer_romanized(),
+        )
         .map_err(|error| ProjectionCommandError::Operation {
             message: error.to_string(),
         })
@@ -278,8 +279,7 @@ pub async fn browse_values(
 #[tauri::command]
 pub async fn browse_albums(
     state: State<'_, AppState>,
-    mode: BrowseMode,
-    values: Option<Vec<String>>,
+    filters: Vec<FacetSelection>,
     query: Option<String>,
     projection_revision: u64,
 ) -> Result<Vec<Album>, ProjectionCommandError> {
@@ -288,12 +288,10 @@ pub async fn browse_albums(
         .plugins
         .projection(Some(projection_revision))
         .map_err(projection_error)?;
-    let plan = projection.facet_plan(&mode);
     state
         .db
         .browse_albums_with_plan(
-            plan.as_ref(),
-            &values.unwrap_or_default(),
+            &projection.facet_filters(&filters),
             filter.as_ref(),
             projection.prefer_romanized(),
         )
@@ -309,8 +307,7 @@ pub async fn album_tracks(state: State<'_, AppState>, album_id: i64) -> Result<V
 pub async fn track_count(
     state: State<'_, AppState>,
     query: Option<String>,
-    mode: BrowseMode,
-    values: Option<Vec<String>>,
+    filters: Vec<FacetSelection>,
     projection_revision: u64,
 ) -> Result<i64, ProjectionCommandError> {
     let filter = filter_for(query.as_deref())?;
@@ -318,10 +315,9 @@ pub async fn track_count(
         .plugins
         .projection(Some(projection_revision))
         .map_err(projection_error)?;
-    let plan = projection.facet_plan(&mode);
     state
         .db
-        .track_count_with_plan(filter.as_ref(), plan.as_ref(), &values.unwrap_or_default())
+        .track_count_with_plan(filter.as_ref(), &projection.facet_filters(&filters))
         .map_err(operation_error)
 }
 
@@ -329,8 +325,7 @@ pub async fn track_count(
 pub async fn tracks_range(
     state: State<'_, AppState>,
     query: Option<String>,
-    mode: BrowseMode,
-    values: Option<Vec<String>>,
+    filters: Vec<FacetSelection>,
     projection_revision: u64,
     sort: Option<TrackSort>,
     offset: i64,
@@ -341,13 +336,11 @@ pub async fn tracks_range(
         .plugins
         .projection(Some(projection_revision))
         .map_err(projection_error)?;
-    let plan = projection.facet_plan(&mode);
     state
         .db
         .tracks_range_with_plan(
             filter.as_ref(),
-            plan.as_ref(),
-            &values.unwrap_or_default(),
+            &projection.facet_filters(&filters),
             projection.prefer_romanized(),
             sort,
             offset,
@@ -360,8 +353,7 @@ pub async fn tracks_range(
 pub async fn track_index(
     state: State<'_, AppState>,
     query: Option<String>,
-    mode: BrowseMode,
-    values: Option<Vec<String>>,
+    filters: Vec<FacetSelection>,
     projection_revision: u64,
     sort: Option<TrackSort>,
     track_id: i64,
@@ -371,13 +363,11 @@ pub async fn track_index(
         .plugins
         .projection(Some(projection_revision))
         .map_err(projection_error)?;
-    let plan = projection.facet_plan(&mode);
     state
         .db
         .track_index_with_plan(
             filter.as_ref(),
-            plan.as_ref(),
-            &values.unwrap_or_default(),
+            &projection.facet_filters(&filters),
             projection.prefer_romanized(),
             sort,
             track_id,
@@ -389,8 +379,7 @@ pub async fn track_index(
 pub async fn track_groups(
     state: State<'_, AppState>,
     query: Option<String>,
-    mode: BrowseMode,
-    values: Option<Vec<String>>,
+    filters: Vec<FacetSelection>,
     projection_revision: u64,
     sort: Option<TrackSort>,
 ) -> Result<Vec<TrackGroup>, ProjectionCommandError> {
@@ -399,13 +388,11 @@ pub async fn track_groups(
         .plugins
         .projection(Some(projection_revision))
         .map_err(projection_error)?;
-    let plan = projection.facet_plan(&mode);
     state
         .db
         .track_groups_with_plan(
             filter.as_ref(),
-            plan.as_ref(),
-            &values.unwrap_or_default(),
+            &projection.facet_filters(&filters),
             projection.prefer_romanized(),
             sort,
         )

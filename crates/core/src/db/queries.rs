@@ -1,7 +1,7 @@
 use super::Db;
 use crate::model::{
-    Album, BrowseMode, BrowseValue, LibraryStats, PlayContext, SortKey, Track, TrackGroup,
-    TrackSort,
+    Album, BrowseMode, BrowseValue, FacetSelection, LibraryStats, PlayContext, SortKey, Track,
+    TrackGroup, TrackSort,
 };
 use crate::search::SearchFilter;
 use anyhow::Result;
@@ -395,6 +395,35 @@ fn push_values_clause(
     }
 }
 
+/// One left-panel category's selection, with the plan that gives its values
+/// meaning.
+#[derive(Debug, Clone)]
+pub struct FacetFilter<'a> {
+    pub plan: Option<FacetPlan>,
+    pub values: &'a [String],
+}
+
+/// Append every category's selection: a track must match each of them.
+fn push_facets(where_sql: &mut String, params: &mut Vec<Value>, facets: &[FacetFilter<'_>]) {
+    for facet in facets {
+        push_values_clause(where_sql, params, facet.plan.as_ref(), facet.values);
+    }
+}
+
+/// The plan for each category a selection names.
+pub fn plan_facets<'a>(
+    filters: &'a [FacetSelection],
+    plan_for: &dyn Fn(&BrowseMode) -> Option<FacetPlan>,
+) -> Vec<FacetFilter<'a>> {
+    filters
+        .iter()
+        .map(|filter| FacetFilter {
+            plan: plan_for(&filter.mode),
+            values: &filter.values,
+        })
+        .collect()
+}
+
 /// GROUP BY / equality expression for a value-filterable column: coalesce NULL
 /// to '' and force TEXT, so integer columns (year, rating, …) round-trip through
 /// the string-based value list and still compare equal to the selected value.
@@ -502,18 +531,17 @@ impl Db {
     ) -> Result<Vec<Album>> {
         let romanized = self.prefer_romanized();
         let plan = FacetPlan::exact(&mode, romanized);
-        self.browse_albums_with_plan(plan.as_ref(), values, filter, romanized)
+        self.browse_albums_with_plan(&[FacetFilter { plan, values }], filter, romanized)
     }
 
     pub fn browse_albums_with_plan(
         &self,
-        plan: Option<&FacetPlan>,
-        values: &[String],
+        facets: &[FacetFilter<'_>],
         filter: Option<&SearchFilter>,
         romanized: bool,
     ) -> Result<Vec<Album>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, plan, values);
+        push_facets(&mut where_sql, &mut params, facets);
         // Read before locking: `with` holds the connection mutex.
         let artist_order = displayed_name_expr("a.albumartist", "a.albumartist_sort", romanized);
         self.with(|conn| {
@@ -666,17 +694,16 @@ impl Db {
         values: &[String],
     ) -> Result<i64> {
         let plan = FacetPlan::exact(&mode, self.prefer_romanized());
-        self.track_count_with_plan(filter, plan.as_ref(), values)
+        self.track_count_with_plan(filter, &[FacetFilter { plan, values }])
     }
 
     pub fn track_count_with_plan(
         &self,
         filter: Option<&SearchFilter>,
-        plan: Option<&FacetPlan>,
-        values: &[String],
+        facets: &[FacetFilter<'_>],
     ) -> Result<i64> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, plan, values);
+        push_facets(&mut where_sql, &mut params, facets);
         self.with(|conn| {
             Ok(conn.query_row(
                 &format!("SELECT COUNT(*) FROM tracks WHERE {where_sql}"),
@@ -709,8 +736,7 @@ impl Db {
         let plan = FacetPlan::exact(&mode, romanized);
         self.tracks_range_with_plan(
             filter,
-            plan.as_ref(),
-            values,
+            &[FacetFilter { plan, values }],
             romanized,
             sort,
             offset,
@@ -721,15 +747,14 @@ impl Db {
     pub fn tracks_range_with_plan(
         &self,
         filter: Option<&SearchFilter>,
-        plan: Option<&FacetPlan>,
-        values: &[String],
+        facets: &[FacetFilter<'_>],
         romanized: bool,
         sort: Option<TrackSort>,
         offset: i64,
         limit: i64,
     ) -> Result<Vec<Track>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, plan, values);
+        push_facets(&mut where_sql, &mut params, facets);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             // Page over IDs first: custom sorts otherwise carry every metadata
@@ -826,20 +851,25 @@ impl Db {
     ) -> Result<Option<i64>> {
         let romanized = self.prefer_romanized();
         let plan = FacetPlan::exact(&mode, romanized);
-        self.track_index_with_plan(filter, plan.as_ref(), values, romanized, sort, track_id)
+        self.track_index_with_plan(
+            filter,
+            &[FacetFilter { plan, values }],
+            romanized,
+            sort,
+            track_id,
+        )
     }
 
     pub fn track_index_with_plan(
         &self,
         filter: Option<&SearchFilter>,
-        plan: Option<&FacetPlan>,
-        values: &[String],
+        facets: &[FacetFilter<'_>],
         romanized: bool,
         sort: Option<TrackSort>,
         track_id: i64,
     ) -> Result<Option<i64>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, plan, values);
+        push_facets(&mut where_sql, &mut params, facets);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -879,19 +909,18 @@ impl Db {
     ) -> Result<Vec<TrackGroup>> {
         let romanized = self.prefer_romanized();
         let plan = FacetPlan::exact(&mode, romanized);
-        self.track_groups_with_plan(filter, plan.as_ref(), values, romanized, sort)
+        self.track_groups_with_plan(filter, &[FacetFilter { plan, values }], romanized, sort)
     }
 
     pub fn track_groups_with_plan(
         &self,
         filter: Option<&SearchFilter>,
-        plan: Option<&FacetPlan>,
-        values: &[String],
+        facets: &[FacetFilter<'_>],
         romanized: bool,
         sort: Option<TrackSort>,
     ) -> Result<Vec<TrackGroup>> {
         let (mut where_sql, mut params) = track_where(filter);
-        push_values_clause(&mut where_sql, &mut params, plan, values);
+        push_facets(&mut where_sql, &mut params, facets);
         let order = order_sql(sort, romanized);
         self.with(|conn| {
             let sql = format!(
@@ -947,19 +976,20 @@ impl Db {
     /// registry.
     pub fn resolve_context_exact(&self, ctx: &PlayContext) -> Result<Vec<i64>> {
         let romanized = self.prefer_romanized();
-        let plan = match ctx {
-            PlayContext::ValueTracks { mode, .. } => FacetPlan::exact(mode, romanized),
-            _ => None,
-        };
-        self.resolve_context_with_projection(ctx, plan.as_ref(), romanized)
+        self.resolve_context_with_projection(
+            ctx,
+            &|mode| FacetPlan::exact(mode, romanized),
+            romanized,
+        )
     }
 
     /// Projection-explicit context resolution used before the Tauri command
-    /// hands concrete IDs to the player thread.
+    /// hands concrete IDs to the player thread. `plan_for` gives the plan of
+    /// each category the context selects in.
     pub fn resolve_context_with_projection(
         &self,
         ctx: &PlayContext,
-        plan: Option<&FacetPlan>,
+        plan_for: &dyn Fn(&BrowseMode) -> Option<FacetPlan>,
         romanized: bool,
     ) -> Result<Vec<i64>> {
         match ctx {
@@ -1001,14 +1031,14 @@ impl Db {
                 })
             }
             PlayContext::ValueTracks {
-                values,
+                filters,
                 query,
                 sort,
                 ..
             } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                push_values_clause(&mut where_sql, &mut params, plan, values);
+                push_facets(&mut where_sql, &mut params, &plan_facets(filters, plan_for));
                 let order = order_sql(*sort, romanized);
                 self.with(|conn| {
                     collect_ids(
@@ -1033,17 +1063,18 @@ impl Db {
         limit: usize,
     ) -> Result<Vec<String>> {
         let romanized = self.prefer_romanized();
-        let plan = match ctx {
-            PlayContext::ValueTracks { mode, .. } => FacetPlan::exact(mode, romanized),
-            _ => None,
-        };
-        self.resolve_context_paths_with_projection(ctx, plan.as_ref(), romanized, limit)
+        self.resolve_context_paths_with_projection(
+            ctx,
+            &|mode| FacetPlan::exact(mode, romanized),
+            romanized,
+            limit,
+        )
     }
 
     pub fn resolve_context_paths_with_projection(
         &self,
         ctx: &PlayContext,
-        plan: Option<&FacetPlan>,
+        plan_for: &dyn Fn(&BrowseMode) -> Option<FacetPlan>,
         romanized: bool,
         limit: usize,
     ) -> Result<Vec<String>> {
@@ -1088,14 +1119,14 @@ impl Db {
                 })
             }
             PlayContext::ValueTracks {
-                values,
+                filters,
                 query,
                 sort,
                 ..
             } => {
                 let filter = compile_optional_query(query.as_deref())?;
                 let (mut where_sql, mut params) = track_where(filter.as_ref());
-                push_values_clause(&mut where_sql, &mut params, plan, values);
+                push_facets(&mut where_sql, &mut params, &plan_facets(filters, plan_for));
                 let order = order_sql(*sort, romanized);
                 params.push(Value::from(limit as i64));
                 self.with(|conn| {

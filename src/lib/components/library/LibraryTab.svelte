@@ -1,11 +1,9 @@
 <script lang="ts">
   import { library } from "$lib/stores/library.svelte";
   import { player } from "$lib/stores/player.svelte";
-  import { ui } from "$lib/stores/ui.svelte";
+  import { LIBRARY_PANEL_MAX_W, ui } from "$lib/stores/ui.svelte";
   import { prefs } from "$lib/stores/prefs.svelte";
-  import ModeSelector from "./ModeSelector.svelte";
-  import ValueFilter from "./ValueFilter.svelte";
-  import ValueList from "./ValueList.svelte";
+  import FilterPanel from "./FilterPanel.svelte";
   import AlbumWall from "./AlbumWall.svelte";
   import AlbumDetail from "./AlbumDetail.svelte";
   import TrackList from "./TrackList.svelte";
@@ -94,7 +92,7 @@
       side="left"
       size={ui.libraryValueListW}
       min={150}
-      max={480}
+      max={LIBRARY_PANEL_MAX_W}
       persistKey="libraryValueListW"
       collapsePersistKey="librarySidebarCollapsed"
       collapsed={ui.librarySidebarCollapsed}
@@ -104,11 +102,7 @@
       onresize={(px) => (ui.libraryValueListW = px)}
       oncollapsedchange={(collapsed) => (ui.librarySidebarCollapsed = collapsed)}
     >
-      <div class="left">
-        <ModeSelector />
-        <ValueFilter />
-        <ValueList />
-      </div>
+      <div class="left"><FilterPanel /></div>
     </CollapsiblePanel>
     {#if library.selectedAlbum}
       <AlbumDetail />

@@ -2,6 +2,9 @@ export type Tab = "library" | "playlists" | "nowplaying" | "visualizer" | "radio
 
 export type SearchSpan = { start: number; end: number; kind: "plain" | "syntax" | "invalid" };
 
+/** Widest the Library's left panel can be dragged or widened to, in px. */
+export const LIBRARY_PANEL_MAX_W = 480;
+
 class UiStore {
   activeTab = $state<Tab>("playlists");
   /** Tab to return to when an album was opened through cross-tab navigation. */
@@ -19,6 +22,10 @@ class UiStore {
   playlistSidebarW = $state(230);
   queuePanelW = $state(260);
   libraryValueListW = $state(230);
+  /** Whether the Library's left panel width is settled for this launch: it
+      was restored from a saved width, or FilterPanel has widened the default
+      to fit its tab strip. */
+  libraryPanelWidthSettled = false;
   /** Side-panel visibility is persisted separately from the last open width. */
   librarySidebarCollapsed = $state(false);
   radioPanelW = $state(240);

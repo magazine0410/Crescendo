@@ -1,6 +1,6 @@
-use crescendo_core::db::queries::{FacetPlan, FacetTransform};
+use crescendo_core::db::queries::{FacetFilter, FacetPlan, FacetTransform};
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
+use crescendo_core::model::{BrowseMode, BrowseValue, FacetSelection, PlayContext};
 use std::collections::HashMap;
 
 fn grouping() -> BrowseMode {
@@ -96,14 +96,15 @@ fn selecting_umbrella_matches_every_variant() {
     let (_d, db) = make_db();
     let umbrella = "\"Old Adam\" Bar";
     let plan = collapsed_plan();
+    let selected = [umbrella.to_string()];
+    let facets = [FacetFilter {
+        plan: Some(plan.clone()),
+        values: &selected,
+    }];
 
     // Collapsed selection matches all three variants; uncollapsed matches only
     // the byte-exact tag.
-    assert_eq!(
-        db.track_count_with_plan(None, Some(&plan), &[umbrella.into()])
-            .unwrap(),
-        3
-    );
+    assert_eq!(db.track_count_with_plan(None, &facets).unwrap(), 3);
     assert_eq!(
         db.track_count_exact(None, grouping(), &[umbrella.into()])
             .unwrap(),
@@ -112,11 +113,11 @@ fn selecting_umbrella_matches_every_variant() {
 
     // tracks_range (the windowed list + play-queue order) agrees with the count.
     let rows = db
-        .tracks_range_with_plan(None, Some(&plan), &[umbrella.into()], true, None, 0, 100)
+        .tracks_range_with_plan(None, &facets, true, None, 0, 100)
         .unwrap();
     assert_eq!(rows.len(), 3);
     assert_eq!(
-        db.browse_albums_with_plan(Some(&plan), &[umbrella.into()], None, true)
+        db.browse_albums_with_plan(&facets, None, true)
             .unwrap()
             .len(),
         1
@@ -127,24 +128,26 @@ fn selecting_umbrella_matches_every_variant() {
     let ids: Vec<_> = rows.iter().map(|track| track.id).collect();
     for (expected, id) in ids.iter().enumerate() {
         assert_eq!(
-            db.track_index_with_plan(None, Some(&plan), &[umbrella.into()], true, None, *id,)
+            db.track_index_with_plan(None, &facets, true, None, *id)
                 .unwrap(),
             Some(expected as i64)
         );
     }
     let groups = db
-        .track_groups_with_plan(None, Some(&plan), &[umbrella.into()], true, None)
+        .track_groups_with_plan(None, &facets, true, None)
         .unwrap();
     assert_eq!(groups.iter().map(|group| group.count).sum::<i64>(), 3);
     let context = PlayContext::ValueTracks {
-        mode: grouping(),
-        values: vec![umbrella.into()],
+        filters: vec![FacetSelection {
+            mode: grouping(),
+            values: vec![umbrella.into()],
+        }],
         query: None,
         projection_revision: 0,
         sort: None,
     };
     assert_eq!(
-        db.resolve_context_with_projection(&context, Some(&plan), true)
+        db.resolve_context_with_projection(&context, &|_| Some(plan.clone()), true)
             .unwrap(),
         ids
     );
@@ -189,8 +192,14 @@ fn first_segment_composes_with_the_host_romanized_artist_projection() {
         }]
     );
     assert_eq!(
-        db.track_count_with_plan(None, Some(&plan), &["Theme".into()])
-            .unwrap(),
+        db.track_count_with_plan(
+            None,
+            &[FacetFilter {
+                plan: Some(plan.clone()),
+                values: &["Theme".into()],
+            }]
+        )
+        .unwrap(),
         2
     );
 }

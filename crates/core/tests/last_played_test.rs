@@ -1,5 +1,7 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext, SortKey, TrackSort};
+use crescendo_core::model::{
+    BrowseMode, BrowseValue, FacetSelection, PlayContext, SortKey, TrackSort,
+};
 
 fn custom(tag: &str) -> BrowseMode {
     BrowseMode::Custom(tag.into())
@@ -159,8 +161,10 @@ fn several_buckets_select_together() {
 
     // Playback resolves the same set, in the same order the view shows.
     let ctx = PlayContext::ValueTracks {
-        mode: custom("lastplayed"),
-        values: both.to_vec(),
+        filters: vec![FacetSelection {
+            mode: custom("lastplayed"),
+            values: both.to_vec(),
+        }],
         query: None,
         projection_revision: 0,
         sort: None,

@@ -1,34 +1,25 @@
 <script lang="ts">
-  import { library } from "$lib/stores/library.svelte";
+  import { library, type Facet } from "$lib/stores/library.svelte";
   import Icon from "../common/Icon.svelte";
 
-  const noun = $derived(
-    library.mode === "genre" ? "genres"
-    : library.mode === "artist" ? "artists"
-    : library.mode === "album" ? "albums"
-    : library.mode === "albumartist" ? "album artists"
-    : library.isGroupingMode ? "groups"
-    : library.isDurationMode ? "durations"
-    : library.isLastPlayedMode ? "spans"
-    : library.isPlayCountMode ? "play counts" : "values",
-  );
+  let { facet }: { facet: Facet } = $props();
 </script>
 
-<div class="vfilter" class:active={library.valueFilter.length > 0}>
+<div class="vfilter" class:active={facet.valueFilter.length > 0}>
   <span class="funnel"><Icon name="value_filter" size={12} /></span>
   <input
-    bind:value={library.valueFilter}
+    bind:value={facet.valueFilter}
     type="text"
-    placeholder="Filter {noun}…"
+    placeholder="Filter {facet.noun}…"
     spellcheck="false"
     autocomplete="off"
     disabled={library.interactionBlocked}
   />
-  {#if library.valueFilter}
+  {#if facet.valueFilter}
     <button
       class="clear"
       disabled={library.interactionBlocked}
-      onclick={() => (library.valueFilter = "")}
+      onclick={() => (facet.valueFilter = "")}
       title="Clear filter"
     >✕</button>
   {/if}

@@ -4,6 +4,7 @@ import {
   type BrowseMode,
   type BrowseValue,
   type BrowseValuesResult,
+  type FacetFilter,
   type LibraryStats,
   type ScanProgress,
   type SortKey,
@@ -107,8 +108,7 @@ type ViewRebuild = "projection" | "recovery" | "history";
 /** What a Track-list view queries; fixed for as long as that list is on screen. */
 interface TrackViewParams {
   query: string | null;
-  mode: WireBrowseMode;
-  values: string[];
+  filters: FacetFilter[];
   projectionRevision: number;
   sort: TrackSort | null;
 }
@@ -156,20 +156,145 @@ function buildRowModel(groups: TrackGroup[]): RowModel {
   return { groups, hasSep, rowStart, trackStart, totalRows: row };
 }
 
-class LibraryStore {
-  mode = $state<BrowseMode>("artist");
-  /** Projected values and counts for the active left-panel facet. */
+/** The left-panel categories, in the order their headers are listed. */
+const FACET_MODES: BrowseMode[] = ["genre", "artist", "album", "albumartist", "custom"];
+
+/** One left-panel category: its value list, the text narrowing that list, and
+    what is selected in it. Collapsing a category hides its list and keeps its
+    selection, so the tracks shown match every category's selection whether or
+    not that category is open. */
+export class Facet {
+  readonly mode: BrowseMode;
+  expanded = $state(false);
+  /** Projected values and counts, loaded while the category is expanded or
+      has a selection. */
   values = $state<BrowseValue[]>([]);
-  /** Plain-text narrowing of the left-panel value list (not a search query).
-      Matches the raw value or its sort/romaji, case-insensitively; in duration
-      mode a time like "3:56" matches its minute bucket. */
+  /** Plain-text narrowing of the value list (not a search query). Matches the
+      raw value or its sort/romaji, case-insensitively; in a duration list a
+      time like "3:56" matches its minute bucket. */
   valueFilter = $state("");
-  /** Left-panel selection: empty = "All", several entries = Ctrl-multi-select
-      (tracks matching any of them show). */
+  /** Empty = "All", several entries = Ctrl-multi-select (tracks matching any
+      of them show). */
   selectedValues = $state<string[]>([]);
-  /** Base value for Shift-range selects in the left panel: the last plainly
-      clicked or Ctrl-toggled value. Null until something is clicked. */
+  /** Base value for Shift-range selects: the last plainly clicked or
+      Ctrl-toggled value. Null until something is clicked. */
   valueAnchor = $state<string | null>(null);
+  /** Orders this category's value loads so only the newest one commits. */
+  reqId = 0;
+
+  constructor(mode: BrowseMode, expanded = false) {
+    this.mode = mode;
+    this.expanded = expanded;
+  }
+
+  /** The custom category's single resolved tag name. Null for the built-in
+      categories, and when the custom text isn't exactly one tag. */
+  get customTagName(): string | null {
+    return this.mode === "custom" ? parseCustomTag(prefs.values.custom_browse_tag) : null;
+  }
+
+  /** Whether the custom filter browses the grouping tag. */
+  get isGrouping(): boolean {
+    return this.customTagName === "grouping";
+  }
+
+  /** Whether the custom filter browses per-minute duration buckets
+      (`%duration%` / `%length%`). Values are bucket numbers as strings; the UI
+      renders them via durationBucketLabel. */
+  get isDuration(): boolean {
+    return this.customTagName === "duration" || this.customTagName === "length";
+  }
+
+  /** Whether the custom filter browses last-played buckets (`%lastplayed%`).
+      Values are bucket numbers as strings ("0" = today … "5" = never played);
+      the UI renders them via lastPlayedBucketLabel. */
+  get isLastPlayed(): boolean {
+    return this.customTagName === "lastplayed" || this.customTagName === "last_played";
+  }
+
+  /** Whether the custom filter browses play counts (`%playcount%`). Values are
+      the counts themselves as strings, listed most-played first; the UI renders
+      them via playCountLabel. */
+  get isPlayCount(): boolean {
+    return (
+      this.customTagName === "playcount" ||
+      this.customTagName === "play_count" ||
+      this.customTagName === "plays"
+    );
+  }
+
+  /** What this category's values are called, for "All (12 artists)" and the
+      filter bar's placeholder. */
+  get noun(): string {
+    return (
+      this.mode === "genre" ? "genres"
+      : this.mode === "artist" ? "artists"
+      : this.mode === "album" ? "albums"
+      : this.mode === "albumartist" ? "album artists"
+      : this.isGrouping ? "groups"
+      : this.isDuration ? "durations"
+      : this.isLastPlayed ? "spans"
+      : this.isPlayCount ? "play counts" : "values"
+    );
+  }
+
+  /** How one of this category's values reads in the list. */
+  label(v: string): string {
+    if (this.isDuration) return durationBucketLabel(Number(v));
+    if (this.isLastPlayed) return lastPlayedBucketLabel(Number(v));
+    if (this.isPlayCount) return playCountLabel(Number(v));
+    return v === "" ? "?" : v;
+  }
+
+  /** The mode marshalled for the backend: `custom` becomes
+      `{ custom: "<tag>" }`, every other mode stays a plain string. */
+  get wireMode(): WireBrowseMode {
+    if (this.mode === "custom") return { custom: this.customTagName ?? "" };
+    return this.mode;
+  }
+
+  /** `values` narrowed by `valueFilter` (memoized). Empty filter -> all values.
+      Duration list: a time like "3:56" narrows to its minute bucket ("3 minutes
+      (3:00 - 3:59)"); any other text matches the rendered bucket labels. */
+  filteredValues = $derived.by(() => {
+    const f = this.valueFilter.trim().toLowerCase();
+    if (!f) return this.values;
+    if (this.isDuration) {
+      const time = /^(\d+):\d{0,2}$/.exec(f);
+      if (time) {
+        const bucket = String(parseInt(time[1], 10));
+        return this.values.filter(({ value }) => value === bucket);
+      }
+      return this.values.filter(({ value }) =>
+        durationBucketLabel(Number(value)).toLowerCase().includes(f),
+      );
+    }
+    if (this.isLastPlayed) {
+      // Match the bucket name or the span beside it ("week", "7 days", …).
+      return this.values.filter(({ value }) =>
+        `${lastPlayedBucketLabel(Number(value))} ${LAST_PLAYED_SPANS[Number(value)] ?? ""}`
+          .toLowerCase()
+          .includes(f),
+      );
+    }
+    if (this.isPlayCount) {
+      // Match the count itself ("3") or its label ("3 plays", "never").
+      return this.values.filter(
+        ({ value }) =>
+          value === f || playCountLabel(Number(value)).toLowerCase().includes(f),
+      );
+    }
+    return this.values.filter(
+      ({ value, sort_value }) =>
+        value.toLowerCase().includes(f) || sort_value?.toLowerCase().includes(f),
+    );
+  });
+}
+
+class LibraryStore {
+  /** The left-panel categories in header order. Artist starts expanded: a
+      value load is also what brings the projection revision. */
+  facets = FACET_MODES.map((mode) => new Facet(mode, mode === "artist"));
   albums = $state<Album[]>([]);
   selectedAlbum = $state<Album | null>(null);
   albumTracks = $state<Track[]>([]);
@@ -198,7 +323,6 @@ class LibraryStore {
   private pendingTrackRange: [number, number] | null = null;
   private loadingVisibleTracks = false;
   private trackReqId = 0;
-  private valuesReqId = 0;
   private albumsReqId = 0;
   private albumTracksReqId = 0;
   /** Rebuilds run one at a time, in order. The gate closes when the first is
@@ -268,41 +392,33 @@ class LibraryStore {
       : null;
   }
 
-  /** Whether the active fixed/custom filter browses the grouping tag. */
-  get isGroupingMode(): boolean {
-    return this.mode === "custom" && this.customTagName === "grouping";
+  facet(mode: BrowseMode): Facet {
+    return this.facets.find((facet) => facet.mode === mode)!;
   }
 
-  /** Whether the custom filter browses per-minute duration buckets
-      (`%duration%` / `%length%`). Values are bucket numbers as strings; the UI
-      renders them via durationBucketLabel. */
-  get isDurationMode(): boolean {
-    return (
-      this.mode === "custom" &&
-      (this.customTagName === "duration" || this.customTagName === "length")
-    );
+  /** The categories whose value lists are in use: shown, or needed to tell
+      whether a selection still exists. */
+  private liveFacets(): Facet[] {
+    return this.facets.filter((facet) => facet.expanded || facet.selectedValues.length > 0);
   }
 
-  /** Whether the custom filter browses last-played buckets (`%lastplayed%`).
-      Values are bucket numbers as strings ("0" = today … "5" = never played);
-      the UI renders them via lastPlayedBucketLabel. */
-  get isLastPlayedMode(): boolean {
-    return (
-      this.mode === "custom" &&
-      (this.customTagName === "lastplayed" || this.customTagName === "last_played")
-    );
-  }
+  /** Every category's selection as the backend takes it. A track shows when
+      it matches each entry; no entries means the whole library. */
+  activeFilters = $derived.by((): FacetFilter[] =>
+    this.facets
+      .filter((facet) => facet.selectedValues.length > 0)
+      .map((facet) => ({ mode: facet.wireMode, values: facet.selectedValues })),
+  );
 
-  /** Whether the custom filter browses play counts (`%playcount%`). Values are
-      the counts themselves as strings, listed most-played first; the UI renders
-      them via playCountLabel. */
-  get isPlayCountMode(): boolean {
-    return (
-      this.mode === "custom" &&
-      (this.customTagName === "playcount" ||
-        this.customTagName === "play_count" ||
-        this.customTagName === "plays")
-    );
+  /** The selections a row of `facet` stands for: `values` in that category,
+      and whatever every other category has selected. */
+  filtersWith(facet: Facet, values: string[]): FacetFilter[] {
+    return this.facets
+      .map((other) => ({
+        mode: other.wireMode,
+        values: other === facet ? values : other.selectedValues,
+      }))
+      .filter((filter) => filter.values.length > 0);
   }
 
   /** Raw text of the custom filter (persisted centrally in prefs). */
@@ -311,29 +427,23 @@ class LibraryStore {
   }
 
   /** The custom filter's single resolved tag name, or null when the text isn't
-      exactly one tag. Drives the tab label and whether the value list loads. */
+      exactly one tag. Drives the header label and whether the value list loads. */
   customTagName = $derived.by(() => parseCustomTag(prefs.values.custom_browse_tag));
 
-  /** The active mode marshalled for the backend: `custom` becomes
-      `{ custom: "<tag>" }`, every other mode stays a plain string. Passed to all
-      value/album/track queries so the custom tab filters like the built-in ones. */
-  get wireMode(): WireBrowseMode {
-    if (this.mode === "custom") return { custom: this.customTagName ?? "" };
-    return this.mode;
-  }
-
-  /** Set (and persist) the custom filter text, switch to the custom tab, and
+  /** Set (and persist) the custom filter text, expand the custom category, and
       reload it — configuring the filter implies you want to use it. */
   async setCustomTag(raw: string) {
     await this.rebuildQueue;
     await prefs.set("custom_browse_tag", raw);
-    this.mode = "custom";
-    this.selectedValues = [];
-    this.valueAnchor = null;
+    const facet = this.facet("custom");
+    if (prefs.values.filter_panel_layout === "tabs") this.closeOthers(facet);
+    facet.expanded = true;
+    facet.selectedValues = [];
+    facet.valueAnchor = null;
     this.selectedAlbum = null;
     this.albumTracks = [];
     this.resetScroll();
-    await this.loadValues();
+    await this.loadValues(facet);
     await this.loadAlbums();
   }
 
@@ -401,43 +511,6 @@ class LibraryStore {
     );
   }
 
-  /** `values` narrowed by `valueFilter` (memoized). Empty filter -> all values.
-      Duration mode: a time like "3:56" narrows to its minute bucket ("3 minutes
-      (3:00 - 3:59)"); any other text matches the rendered bucket labels. */
-  filteredValues = $derived.by(() => {
-    const f = this.valueFilter.trim().toLowerCase();
-    if (!f) return this.values;
-    if (this.isDurationMode) {
-      const time = /^(\d+):\d{0,2}$/.exec(f);
-      if (time) {
-        const bucket = String(parseInt(time[1], 10));
-        return this.values.filter(({ value }) => value === bucket);
-      }
-      return this.values.filter(({ value }) =>
-        durationBucketLabel(Number(value)).toLowerCase().includes(f),
-      );
-    }
-    if (this.isLastPlayedMode) {
-      // Match the bucket name or the span beside it ("week", "7 days", …).
-      return this.values.filter(({ value }) =>
-        `${lastPlayedBucketLabel(Number(value))} ${LAST_PLAYED_SPANS[Number(value)] ?? ""}`
-          .toLowerCase()
-          .includes(f),
-      );
-    }
-    if (this.isPlayCountMode) {
-      // Match the count itself ("3") or its label ("3 plays", "never").
-      return this.values.filter(
-        ({ value }) =>
-          value === f || playCountLabel(Number(value)).toLowerCase().includes(f),
-      );
-    }
-    return this.values.filter(
-      ({ value, sort_value }) =>
-        value.toLowerCase().includes(f) || sort_value?.toLowerCase().includes(f),
-    );
-  });
-
   async init() {
     await this.refresh();
     // A webview reload during a scan starts with no idea one is running.
@@ -452,20 +525,54 @@ class LibraryStore {
 
   async refresh() {
     this.stats = await call<LibraryStats>("library_stats");
-    await this.loadValues();
+    await this.loadAllValues();
     await this.loadAlbums();
     if (this.selectedAlbum) await this.selectAlbum(this.selectedAlbum);
   }
 
-  async setMode(mode: BrowseMode) {
-    this.mode = mode;
-    this.selectedValues = [];
-    this.valueAnchor = null;
+  /** Expand or collapse a category. Its selection stays either way; only the
+      text narrowing its list goes with the list. */
+  async toggleFacet(facet: Facet) {
+    if (!facet.expanded) return this.openFacet(facet);
+    facet.expanded = false;
+    facet.valueFilter = "";
+  }
+
+  /** Show a category's value list. The tabs layout shows one list at a time,
+      so there the others close. */
+  async openFacet(facet: Facet) {
+    if (prefs.values.filter_panel_layout === "tabs") this.closeOthers(facet);
+    if (facet.expanded) return;
+    facet.expanded = true;
+    await this.loadValues(facet);
+  }
+
+  /** Close every category but this one. Their selections stay. */
+  private closeOthers(facet: Facet) {
+    for (const other of this.facets) {
+      if (other === facet || !other.expanded) continue;
+      other.expanded = false;
+      other.valueFilter = "";
+    }
+  }
+
+  /** The category the tabs layout shows: the first open one, or Artist when
+      the vertical list was left with none open. */
+  async showOneFacet() {
+    await this.openFacet(this.facets.find((facet) => facet.expanded) ?? this.facet("artist"));
+  }
+
+  /** Drop every category's selection, so the whole library (or search result)
+      shows again. The text narrowing each list and the search stay. */
+  async clearFilters() {
+    if (this.activeFilters.length === 0) return;
+    for (const facet of this.facets) {
+      facet.selectedValues = [];
+      facet.valueAnchor = null;
+    }
     this.selectedAlbum = null;
     this.albumTracks = [];
-    this.valueFilter = "";
     this.resetScroll();
-    await this.loadValues();
     await this.loadAlbums();
   }
 
@@ -477,21 +584,24 @@ class LibraryStore {
     // may reveal the playing track. Resetting after loadValues() (a GROUP BY
     // over the library) used to land later and throw that reveal away.
     this.resetScroll();
-    const current = await this.loadValues();
-    // Drop the parts of the selection the new search filtered away. Only `values`
-    // from this search can say that; a failed or superseded load cannot.
-    if (current && this.selectedValues.length > 0) {
-      const still = this.selectedValues.filter((v) =>
-        this.values.some(({ value }) => value === v),
-      );
-      if (still.length !== this.selectedValues.length) {
-        this.selectedValues = still;
+    await Promise.all(
+      this.liveFacets().map(async (facet) => {
+        const current = await this.loadValues(facet);
+        // Drop the parts of the selection the new search filtered away. Only
+        // `values` from this search can say that; a failed or superseded load
+        // cannot.
+        if (!current || facet.selectedValues.length === 0) return;
+        const still = facet.selectedValues.filter((v) =>
+          facet.values.some(({ value }) => value === v),
+        );
+        if (still.length === facet.selectedValues.length) return;
+        facet.selectedValues = still;
         if (still.length === 0) {
           this.selectedAlbum = null;
           this.albumTracks = [];
         }
-      }
-    }
+      }),
+    );
     await this.loadAlbums();
   }
 
@@ -502,22 +612,22 @@ class LibraryStore {
     this.scrollResetKey += 1;
   }
 
-  /** Whether `values` now reflects this request. */
-  async loadValues(): Promise<boolean> {
-    const request = ++this.valuesReqId;
-    // Custom tab with no single valid tag set → empty value list ("show nothing").
-    if (this.mode === "custom" && this.customTagName === null) {
-      this.values = [];
+  /** Whether the category's `values` now reflects this request. */
+  async loadValues(facet: Facet): Promise<boolean> {
+    const request = ++facet.reqId;
+    // Custom category with no single valid tag set → empty value list ("show nothing").
+    if (facet.mode === "custom" && facet.customTagName === null) {
+      facet.values = [];
       return true;
     }
     try {
       const result = await call<BrowseValuesResult>("browse_values", {
-        mode: this.wireMode,
+        mode: facet.wireMode,
         query: this.query,
       });
-      if (request !== this.valuesReqId) return false;
+      if (request !== facet.reqId) return false;
       this.projectionRevision = result.projection_revision;
-      this.values = result.values;
+      facet.values = result.values;
       return true;
     } catch (e) {
       // invalid search query mid-typing — keep the previous list
@@ -526,8 +636,12 @@ class LibraryStore {
     }
   }
 
+  private async loadAllValues() {
+    await Promise.all(this.liveFacets().map((facet) => this.loadValues(facet)));
+  }
+
   private async reloadView() {
-    await this.loadValues();
+    await this.loadAllValues();
     await Promise.all([
       this.loadAlbums(),
       this.reloadTrackView(prefs.values.track_separators),
@@ -620,7 +734,7 @@ class LibraryStore {
   }
 
   private invalidateViewRequests() {
-    this.valuesReqId++;
+    for (const facet of this.facets) facet.reqId++;
     this.albumsReqId++;
     this.albumTracksReqId++;
     this.trackReqId++;
@@ -629,9 +743,11 @@ class LibraryStore {
   }
 
   private clearProjectionState() {
-    this.values = [];
-    this.selectedValues = [];
-    this.valueAnchor = null;
+    for (const facet of this.facets) {
+      facet.values = [];
+      facet.selectedValues = [];
+      facet.valueAnchor = null;
+    }
     this.albums = [];
     this.selectedAlbum = null;
     this.albumTracks = [];
@@ -642,19 +758,20 @@ class LibraryStore {
     this.resetScroll();
   }
 
-  /** Plain click: select exactly this value (or "All" for null). */
-  async selectValue(v: string | null) {
-    this.valueAnchor = v;
-    await this.applyValueSelection(v === null ? [] : [v]);
+  /** Select exactly this value in its category (or "All" for null). */
+  async selectValue(facet: Facet, v: string | null) {
+    facet.valueAnchor = v;
+    await this.applyValueSelection(facet, v === null ? [] : [v]);
   }
 
-  /** Ctrl+click: toggle this value in/out of the multi-selection. */
-  async toggleValue(v: string) {
-    this.valueAnchor = v;
+  /** Toggle this value in/out of its category's multi-selection. */
+  async toggleValue(facet: Facet, v: string) {
+    facet.valueAnchor = v;
     await this.applyValueSelection(
-      this.selectedValues.includes(v)
-        ? this.selectedValues.filter((x) => x !== v)
-        : [...this.selectedValues, v],
+      facet,
+      facet.selectedValues.includes(v)
+        ? facet.selectedValues.filter((x) => x !== v)
+        : [...facet.selectedValues, v],
     );
   }
 
@@ -663,17 +780,17 @@ class LibraryStore {
       Without a usable anchor — none yet, or it was filtered out of the visible
       list — acts like a plain click. The anchor stays, so a second Shift+click
       re-ranges from the same base (matching the Track-list behavior). */
-  async selectValueRange(v: string) {
-    const visible = this.filteredValues.map(({ value }) => value);
-    const a = this.valueAnchor === null ? -1 : visible.indexOf(this.valueAnchor);
+  async selectValueRange(facet: Facet, v: string) {
+    const visible = facet.filteredValues.map(({ value }) => value);
+    const a = facet.valueAnchor === null ? -1 : visible.indexOf(facet.valueAnchor);
     const b = visible.indexOf(v);
-    if (a < 0 || b < 0) return this.selectValue(v);
+    if (a < 0 || b < 0) return this.selectValue(facet, v);
     const [lo, hi] = a <= b ? [a, b] : [b, a];
-    await this.applyValueSelection(visible.slice(lo, hi + 1));
+    await this.applyValueSelection(facet, visible.slice(lo, hi + 1));
   }
 
-  private async applyValueSelection(values: string[]) {
-    this.selectedValues = values;
+  private async applyValueSelection(facet: Facet, values: string[]) {
+    facet.selectedValues = values;
     this.selectedAlbum = null;
     this.albumTracks = [];
     this.resetScroll();
@@ -684,8 +801,7 @@ class LibraryStore {
     const request = ++this.albumsReqId;
     try {
       const albums = await call<Album[]>("browse_albums", {
-        mode: this.wireMode,
-        values: this.selectedValues,
+        filters: this.activeFilters,
         query: this.query,
         projectionRevision: this.projectionRevision,
       });
@@ -718,15 +834,19 @@ class LibraryStore {
     for (const t of this.tracks) if (t && t.id === id) t.play_count = plays;
     // Any search may depend on play-count syntax (including aliases). Re-run
     // it rather than maintaining a second search parser in the frontend.
+    const custom = this.facet("custom");
+    const customByPlays =
+      (custom.expanded || custom.selectedValues.length > 0) &&
+      (custom.isPlayCount || custom.isLastPlayed);
     if (
-      !this.query && !this.isPlayCountMode && !this.isLastPlayedMode &&
+      !this.query && !customByPlays &&
       this.sort?.key !== "lastplayed" && this.sort?.secondary !== "lastplayed"
     ) return;
     this.clearSelection();
     this.queuedHistory ??= this.queueRebuild("history", async () => {
       // Plays credited from here on need another rebuild; this one has started.
       this.queuedHistory = null;
-      await this.loadValues();
+      await this.loadAllValues();
       await Promise.all([
         this.loadAlbums(),
         this.reloadTrackView(prefs.values.track_separators),
@@ -821,8 +941,7 @@ class LibraryStore {
   private liveTrackParams(): TrackViewParams {
     return {
       query: this.query,
-      mode: this.wireMode,
-      values: this.selectedValues,
+      filters: this.activeFilters,
       projectionRevision: this.projectionRevision,
       sort: this.sort,
     };
@@ -847,7 +966,7 @@ class LibraryStore {
     return this.reloadTrackView(withGroups);
   }
 
-  /** Recount + reset the Track-list view for the current (mode, value, query).
+  /** Recount + reset the Track-list view for the current (selections, query).
       When `withGroups`, also loads album runs for separators. Bumps trackEpoch so
       the mounted view re-fetches its visible range. Until it succeeds, the rows
       on screen and their source stay exactly as they were. */
@@ -855,10 +974,10 @@ class LibraryStore {
     const reqId = ++this.trackReqId;
     const key = this.trackViewKey(withGroups);
     const params = this.liveTrackParams();
-    const { query, mode, values, projectionRevision, sort } = params;
+    const { query, filters, projectionRevision, sort } = params;
     let count: number;
     try {
-      count = await call<number>("track_count", { query, mode, values, projectionRevision });
+      count = await call<number>("track_count", { query, filters, projectionRevision });
     } catch (e) {
       if (await this.recoverLoad(e)) return;
       console.debug("track_count failed:", e);
@@ -870,7 +989,7 @@ class LibraryStore {
     if (withGroups) {
       try {
         const groups = await call<TrackGroup[]>("track_groups", {
-          query, mode, values, projectionRevision, sort,
+          query, filters, projectionRevision, sort,
         });
         if (reqId !== this.trackReqId) return;
         model = buildRowModel(groups);

@@ -8,6 +8,10 @@ export type PlaylistSort = "manual" | "name" | "count";
     playlists under a separator, sorted in among them by name, or gathered
     below them under a separator. */
 export type CollectionsPlacement = "above" | "within" | "below";
+/** How the Library's left panel lays out its categories: "tabs" is a
+    horizontal strip showing one value list at a time, "list" is collapsible
+    headers stacked vertically, any number of them open. */
+export type FilterPanelLayout = "tabs" | "list";
 
 export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "projectm_import";
 
@@ -53,6 +57,7 @@ export interface Prefs {
   /** Which tab opens on launch. */
   default_tab: "library" | "playlists";
   track_separators: boolean;
+  filter_panel_layout: FilterPanelLayout;
   /** Raw text of the user-defined "custom" left-panel filter, e.g. `%year%`.
       Parsed to a single tag in LibraryStore; blank = unset (tab reads "CUSTOM"). */
   custom_browse_tag: string;
@@ -121,6 +126,7 @@ const DEFAULTS: Prefs = {
   library_view: "album_wall",
   default_tab: "playlists",
   track_separators: false,
+  filter_panel_layout: "tabs",
   custom_browse_tag: "",
   visualizer_color: "#ffaf32", // == --accent (theme orange)
   visualizer_mode: "bars",
@@ -217,6 +223,8 @@ class PrefsStore {
     if (raw.default_tab === "library" || raw.default_tab === "playlists")
       v.default_tab = raw.default_tab;
     if (raw.track_separators) v.track_separators = raw.track_separators === "true";
+    if (raw.filter_panel_layout === "tabs" || raw.filter_panel_layout === "list")
+      v.filter_panel_layout = raw.filter_panel_layout;
     if (raw.custom_browse_tag) {
       // ALBUM ARTIST became a fixed tab; migrate that former custom choice to
       // GROUPING so existing five-tab layouts become the intended direct swap.

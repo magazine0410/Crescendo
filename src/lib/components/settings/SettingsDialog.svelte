@@ -4,6 +4,7 @@
     prefs,
     type AnimationLevel,
     type CollectionsPlacement,
+    type FilterPanelLayout,
     type ShuffleMode,
   } from "$lib/stores/prefs.svelte";
   import { library } from "$lib/stores/library.svelte";
@@ -435,6 +436,23 @@
           />
           Show clickable album separators in the track list
         </label>
+
+        <label for="filterpanel">Filter panel</label>
+        <Select
+          id="filterpanel"
+          value={prefs.values.filter_panel_layout}
+          options={[
+            { value: "tabs", label: "Horizontal tabs" },
+            { value: "list", label: "Vertical list" },
+          ]}
+          onchange={(value) => prefs.set("filter_panel_layout", value as FilterPanelLayout)}
+        />
+        <p class="hint">
+          How the left panel shows genre, artist, album and the other categories.
+          Tabs show one category's list at a time; the vertical list can have
+          several open, sharing the height. Either way, a track must match what
+          is selected in every category.
+        </p>
       </div>
 
       {:else if activeSection === "playlists"}

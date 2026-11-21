@@ -1,5 +1,5 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
+use crescendo_core::model::{BrowseMode, BrowseValue, FacetSelection, PlayContext};
 
 fn custom(tag: &str) -> BrowseMode {
     BrowseMode::Custom(tag.into())
@@ -132,8 +132,10 @@ fn multi_select_unions_values() {
 fn multi_select_playback_context_resolves_union() {
     let (_d, db) = test_db();
     let ctx = PlayContext::ValueTracks {
-        mode: custom("duration"),
-        values: vec!["2".into(), "3".into()],
+        filters: vec![FacetSelection {
+            mode: custom("duration"),
+            values: vec!["2".into(), "3".into()],
+        }],
         query: None,
         projection_revision: 0,
         sort: None,

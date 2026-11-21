@@ -10,8 +10,8 @@ use super::wasm::{WasmHandle, WasmPluginSpec};
 use super::PLUGIN_API_VERSION;
 use super::WASM_API_VERSION;
 use crate::db::plugins::{PendingOperation, PluginPendingRow};
-use crate::db::queries::{FacetPlan, FacetTransform};
-use crate::model::BrowseMode;
+use crate::db::queries::{plan_facets, FacetFilter, FacetPlan, FacetTransform};
+use crate::model::{BrowseMode, FacetSelection};
 use crate::Db;
 use anyhow::{anyhow, bail, Context, Result};
 use semver::Version;
@@ -282,6 +282,11 @@ impl ProjectionReadGuard<'_> {
 
     pub fn prefer_romanized(&self) -> bool {
         self.snapshot.prefer_romanized
+    }
+
+    /// Each selected category with the plan this projection gives it.
+    pub fn facet_filters<'a>(&self, filters: &'a [FacetSelection]) -> Vec<FacetFilter<'a>> {
+        plan_facets(filters, &|mode| self.facet_plan(mode))
     }
 
     pub fn facet_plan(&self, mode: &BrowseMode) -> Option<FacetPlan> {

@@ -1,5 +1,5 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
+use crescendo_core::model::{BrowseMode, BrowseValue, FacetSelection, PlayContext};
 use std::collections::HashMap;
 
 /// A tiny library exercising the custom left-panel filter: an INTEGER column
@@ -118,8 +118,10 @@ fn fixed_albumartist_merges_raw_names_that_render_as_the_same_name() {
     );
 
     let ctx = PlayContext::ValueTracks {
-        mode: BrowseMode::Albumartist,
-        values: vec!["Shanghai Alice".into()],
+        filters: vec![FacetSelection {
+            mode: BrowseMode::Albumartist,
+            values: vec!["Shanghai Alice".into()],
+        }],
         query: None,
         projection_revision: 0,
         sort: None,
@@ -260,8 +262,10 @@ fn resolve_context_plays_custom_value() {
     let (_d, db) = make_db();
 
     let ctx = PlayContext::ValueTracks {
-        mode: custom("year"),
-        values: vec!["1999".into()],
+        filters: vec![FacetSelection {
+            mode: custom("year"),
+            values: vec!["1999".into()],
+        }],
         query: None,
         projection_revision: 0,
         sort: None,
@@ -271,8 +275,10 @@ fn resolve_context_plays_custom_value() {
 
     // An unresolvable custom tag resolves to an empty queue rather than erroring.
     let empty = PlayContext::ValueTracks {
-        mode: custom("composer"),
-        values: vec!["whoever".into()],
+        filters: vec![FacetSelection {
+            mode: custom("composer"),
+            values: vec!["whoever".into()],
+        }],
         query: None,
         projection_revision: 0,
         sort: None,
@@ -318,8 +324,10 @@ fn a_value_context_excludes_other_tracks_from_the_same_album() {
     .unwrap();
 
     let ctx = PlayContext::ValueTracks {
-        mode: BrowseMode::Genre,
-        values: vec!["Rock".into()],
+        filters: vec![FacetSelection {
+            mode: BrowseMode::Genre,
+            values: vec!["Rock".into()],
+        }],
         query: None,
         projection_revision: 0,
         sort: None,
@@ -333,8 +341,10 @@ fn a_value_context_excludes_other_tracks_from_the_same_album() {
     // Selecting a value the album does not carry queues nothing at all, rather
     // than the album that merely sits next to it.
     let ctx = PlayContext::ValueTracks {
-        mode: BrowseMode::Genre,
-        values: vec!["Ambient".into()],
+        filters: vec![FacetSelection {
+            mode: BrowseMode::Genre,
+            values: vec!["Ambient".into()],
+        }],
         query: None,
         projection_revision: 0,
         sort: None,

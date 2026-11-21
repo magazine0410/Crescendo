@@ -1,5 +1,5 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, PlayContext};
+use crescendo_core::model::{BrowseMode, FacetSelection, PlayContext};
 
 fn test_db(track_count: i64) -> (tempfile::TempDir, Db) {
     let dir = tempfile::tempdir().unwrap();
@@ -43,8 +43,10 @@ fn library_and_value_context_paths_are_ordered_and_bounded() {
     assert_eq!(paths.last().unwrap(), "/music/2001.flac");
 
     let value = PlayContext::ValueTracks {
-        mode: BrowseMode::Custom("grouping".into()),
-        values: vec!["Typo Group".into()],
+        filters: vec![FacetSelection {
+            mode: BrowseMode::Custom("grouping".into()),
+            values: vec!["Typo Group".into()],
+        }],
         query: Some("artist=Artist".into()),
         projection_revision: 0,
         sort: None,

@@ -520,13 +520,20 @@ export type BrowseMode =
     their lowercase name; `custom` serializes as `{ custom: "year" }` (serde
     externally-tagged newtype variant). Never send the bare string "custom" — the
     Rust enum has no such unit variant and deserialization would fail. Build this
-    with `library.wireMode`. */
+    with a facet's `wireMode`. */
 export type WireBrowseMode =
   | "genre"
   | "artist"
   | "album"
   | "albumartist"
   | { custom: string };
+
+/** What is selected in one left-panel category (backend `FacetSelection`).
+    A track matches when any of `values` is one of its values. */
+export interface FacetFilter {
+  mode: WireBrowseMode;
+  values: string[];
+}
 
 /** One projected row in the left-panel facet value list. `sort_value` is
     present only when a facet has a distinct display/sort label. */
@@ -575,9 +582,9 @@ export type PlayContext =
     }
   | {
       type: "value_tracks";
-      mode: WireBrowseMode;
-      /** The left-panel selection (one or more Ctrl-multi-selected values). */
-      values: string[];
+      /** The left-panel selection, one entry per category that has one. A
+          track plays when it matches every entry. */
+      filters: FacetFilter[];
       query: string | null;
       projection_revision: number;
       sort: TrackSort | null;

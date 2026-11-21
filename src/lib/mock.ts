@@ -10,6 +10,7 @@ import type {
   CatalogEntry,
   BrowseValuesResult,
   DirectoryStation,
+  FacetFilter,
   CollectionInfo,
   PlaylistInfo,
   PlayContext,
@@ -586,15 +587,15 @@ function browseKeys(t: Track, mode: WireMode): string[] {
   return parts.length > 0 ? parts : [""];
 }
 
-/** Track-list filter: search query AND optional left-panel mode values (a
-    track matches when any of its values is one of the multi-selected ones). */
+/** Track-list filter: search query AND every left-panel category's selection
+    (a track matches a category when any of its values is one of the
+    multi-selected ones). */
 function trackListMatch(t: Track, args: Record<string, unknown>): boolean {
   if (!matches(t, args.query as string | null | undefined)) return false;
-  const values = args.values as string[] | null | undefined;
-  return (
-    values == null ||
-    values.length === 0 ||
-    browseKeys(t, args.mode as WireMode).some((v) => values.includes(v))
+  const filters = (args.filters as FacetFilter[] | null | undefined) ?? [];
+  return filters.every(
+    ({ mode, values }) =>
+      values.length === 0 || browseKeys(t, mode).some((v) => values.includes(v)),
   );
 }
 
@@ -604,8 +605,7 @@ function resolveContext(raw: unknown): number[] {
   const ctx = raw as {
     type?: string;
     id?: number;
-    mode?: WireMode;
-    values?: string[];
+    filters?: FacetFilter[];
     query?: string | null;
     projection_revision?: number;
   };
@@ -617,7 +617,7 @@ function resolveContext(raw: unknown): number[] {
   }
   if (ctx.type === "album") return tracks.filter((t) => t.album_id === ctx.id).map((t) => t.id);
   return tracks
-    .filter((t) => trackListMatch(t, { query: ctx.query, values: ctx.values, mode: ctx.mode }))
+    .filter((t) => trackListMatch(t, { query: ctx.query, filters: ctx.filters }))
     .map((t) => t.id);
 }
 
@@ -740,13 +740,9 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
     }
     case "browse_albums": {
       requireProjection(args);
-      const mode = args.mode as WireMode;
-      const values = (args.values as string[] | null) ?? [];
       const ids = new Set<number>();
       for (const t of tracks) {
-        if (!matches(t, query)) continue;
-        if (values.length > 0 && !browseKeys(t, mode).some((v) => values.includes(v))) continue;
-        if (t.album_id != null) ids.add(t.album_id);
+        if (trackListMatch(t, args) && t.album_id != null) ids.add(t.album_id);
       }
       return albums.filter((a) => ids.has(a.id)) as T;
     }

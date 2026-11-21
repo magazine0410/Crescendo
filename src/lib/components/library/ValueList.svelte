@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { library } from "$lib/stores/library.svelte";
+  import { library, type Facet } from "$lib/stores/library.svelte";
   import { player } from "$lib/stores/player.svelte";
   import { queue } from "$lib/stores/queue.svelte";
   import { type FileDragSource, type PlayContext } from "$lib/api";
@@ -7,63 +7,44 @@
   import { openContextMenu } from "../common/ContextMenu.svelte";
   import { addContextToPlaylistItem } from "$lib/menu";
   import VirtualList from "$lib/virtual/VirtualList.svelte";
-  import {
-    displayName,
-    durationBucketLabel,
-    lastPlayedBucketLabel,
-    playCountLabel,
-    LAST_PLAYED_SPANS,
-  } from "$lib/format";
+  import { displayName, LAST_PLAYED_SPANS } from "$lib/format";
+
+  let { facet }: { facet: Facet } = $props();
 
   // row 0 = "All", rows 1.. = values (narrowed by the filter bar)
-  const count = $derived(library.filteredValues.length + 1);
-
-  function label(v: string): string {
-    if (library.isDurationMode) return durationBucketLabel(Number(v));
-    if (library.isLastPlayedMode) return lastPlayedBucketLabel(Number(v));
-    if (library.isPlayCountMode) return playCountLabel(Number(v));
-    return v === "" ? "?" : v;
-  }
+  const count = $derived(facet.filteredValues.length + 1);
 
   /** The span a last-played bucket covers, shown as the row's tooltip. */
   function rowTitle(v: string, sort: string | null): string | undefined {
-    if (library.isLastPlayedMode) return LAST_PLAYED_SPANS[Number(v)];
+    if (facet.isLastPlayed) return LAST_PLAYED_SPANS[Number(v)];
     return sort && sort !== v ? v : undefined;
   }
 
-  /** One descriptor for both actions: the same values, search, sort, and
-      projection revision the visible list was built from. */
-  function valueContext(value: string): Extract<PlayContext, { type: "value_tracks" }> {
+  /** One descriptor for every action on rows: these values in this category
+      together with the other categories' selections, and the search, sort and
+      projection revision the visible list was built from. No values is the
+      "All" row. */
+  function valuesContext(values: string[]): Extract<PlayContext, { type: "value_tracks" }> {
     return {
       type: "value_tracks",
-      mode: library.wireMode,
-      values: [value],
+      filters: library.filtersWith(facet, values),
       query: library.query,
       projection_revision: library.projectionRevision,
       sort: library.sort,
     };
   }
 
+  function valueContext(value: string) {
+    return valuesContext([value]);
+  }
+
   function valueDragSource(value: string): FileDragSource {
-    const values = library.selectedValues.includes(value)
-      ? library.selectedValues
-      : [value];
-    return {
-      type: "context",
-      ctx: { ...valueContext(value), values },
-    };
+    const values = facet.selectedValues.includes(value) ? facet.selectedValues : [value];
+    return { type: "context", ctx: valuesContext(values) };
   }
 
   function allDragSource(): FileDragSource {
-    return {
-      type: "context",
-      ctx: {
-        type: "library_view",
-        query: library.query,
-        projection_revision: library.projectionRevision,
-        sort: library.sort,
-      },
-    };
+    return { type: "context", ctx: valuesContext([]) };
   }
 
   async function playValue(value: string) {
@@ -92,13 +73,25 @@
     }
   }
 
-  /** Plain click selects only this value; Ctrl (or Cmd) toggles it in/out of a
-      multi-selection; Shift selects the visible range from the last plainly
-      clicked/toggled value, so several values can show together. */
+  /** Plain click selects only this value, or deselects it when it is already
+      selected; Ctrl (or Cmd) toggles it in/out of a multi-selection; Shift
+      selects the visible range from the last plainly clicked/toggled value, so
+      several values can show together. */
   function onRowClick(e: MouseEvent, value: string) {
-    if (e.shiftKey) library.selectValueRange(value);
-    else if (e.ctrlKey || e.metaKey) library.toggleValue(value);
-    else library.selectValue(value);
+    // The second click of a double-click belongs to onRowDblClick; taken as a
+    // click of its own it would undo what the first one selected.
+    if (e.detail > 1) return;
+    if (e.shiftKey) library.selectValueRange(facet, value);
+    else if (e.ctrlKey || e.metaKey || facet.selectedValues.includes(value)) {
+      library.toggleValue(facet, value);
+    } else library.selectValue(facet, value);
+  }
+
+  /** Play the value and leave it selected, so the tracks shown are the ones
+      playing whether the first click selected it or deselected it. */
+  function onRowDblClick(value: string) {
+    if (!facet.selectedValues.includes(value)) void library.selectValue(facet, value);
+    void playValue(value);
   }
 
   function onRowContext(e: MouseEvent, value: string) {
@@ -124,36 +117,28 @@
         source: allDragSource,
         disabled: () => library.interactionBlocked,
       }}
-      class:selected={library.selectedValues.length === 0}
+      class:selected={facet.selectedValues.length === 0}
       disabled={library.interactionBlocked}
-      onclick={() => library.selectValue(null)}
+      onclick={() => library.selectValue(facet, null)}
     >
-      <span class="name">All ({library.values.length}
-        {library.mode === "genre" ? "genres"
-        : library.mode === "artist" ? "artists"
-        : library.mode === "album" ? "albums"
-        : library.mode === "albumartist" ? "album artists"
-        : library.isGroupingMode ? "groups"
-        : library.isDurationMode ? "durations"
-        : library.isLastPlayedMode ? "spans"
-        : library.isPlayCountMode ? "play counts" : "values"})</span>
+      <span class="name">All ({facet.values.length} {facet.noun})</span>
     </button>
   {:else}
-    {@const item = library.filteredValues[i - 1]}
+    {@const item = facet.filteredValues[i - 1]}
     <button
       class="row"
       use:fileDrag={{
         source: () => valueDragSource(item.value),
         disabled: () => library.interactionBlocked,
       }}
-      class:selected={library.selectedValues.includes(item.value)}
+      class:selected={facet.selectedValues.includes(item.value)}
       disabled={library.interactionBlocked}
-      ondblclick={() => playValue(item.value)}
+      ondblclick={() => onRowDblClick(item.value)}
       oncontextmenu={(e) => onRowContext(e, item.value)}
       onclick={(e) => onRowClick(e, item.value)}
       title={rowTitle(item.value, item.sort_value)}
     >
-      <span class="name">{displayName(label(item.value), item.sort_value) ?? "?"}</span>
+      <span class="name">{displayName(facet.label(item.value), item.sort_value) ?? "?"}</span>
       <span class="count">{item.count}</span>
     </button>
   {/if}
@@ -166,9 +151,6 @@
     background: var(--bg-panel);
     border-right: 1px solid var(--sidesline);
     overflow: hidden;
-    /* Stop the scroll viewport at the top edge of the bottom bar (as the track
-       list and the album wall do), so the scroll thumb never goes under it. */
-    padding-bottom: var(--bottombar-h);
   }
   .row {
     display: flex;

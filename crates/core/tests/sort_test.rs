@@ -1,5 +1,5 @@
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, PlayContext, SortKey, TrackSort};
+use crescendo_core::model::{BrowseMode, FacetSelection, PlayContext, SortKey, TrackSort};
 
 /// Tracks across two albumartists with distinct years, durations, and titlesort
 /// tags, so every explicit sort key produces an order different from
@@ -216,8 +216,10 @@ fn pages_keep_playback_order_across_offsets_filters_and_directions() {
     ] {
         for values in [vec![], vec!["Artist A".to_string()]] {
             let ctx = PlayContext::ValueTracks {
-                mode: BrowseMode::Artist,
-                values: values.clone(),
+                filters: vec![FacetSelection {
+                    mode: BrowseMode::Artist,
+                    values: values.clone(),
+                }],
                 query: None,
                 projection_revision: 0,
                 sort: s,

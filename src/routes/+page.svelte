@@ -44,7 +44,11 @@
     if (layout.bottombarH) ui.bottombarH = layout.bottombarH;
     if (layout.playlistSidebarW) ui.playlistSidebarW = layout.playlistSidebarW;
     if (layout.queuePanelW) ui.queuePanelW = layout.queuePanelW;
-    if (layout.libraryValueListW) ui.libraryValueListW = layout.libraryValueListW;
+    if (layout.libraryValueListW) {
+      ui.libraryValueListW = layout.libraryValueListW;
+      // A width the user chose stays; only the default is fitted to the tabs.
+      ui.libraryPanelWidthSettled = true;
+    }
     ui.librarySidebarCollapsed = layout.librarySidebarCollapsed === 1;
     if (layout.radioPanelW) ui.radioPanelW = layout.radioPanelW;
     ui.radioSidebarCollapsed = layout.radioSidebarCollapsed === 1;

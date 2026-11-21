@@ -29,12 +29,11 @@
   // its fast constant-height path.
   const ROW_H = 38;
 
-  // Recount + reset whenever the filter (mode / value / query), the sort, the
+  // Recount + reset whenever the filter (selections / query), the sort, the
   // library (after a rescan), or the separators toggle changes. reloadTrackView
   // bumps library.trackEpoch, which the range effect below watches to re-fetch.
   $effect(() => {
-    library.mode;
-    library.selectedValues;
+    library.activeFilters;
     library.query;
     library.sort;
     library.stats;
@@ -92,15 +91,14 @@
   }
 
   /** Play order matches the visible track order (both use the same sort), so
-      the track index is the start index. A left-panel selection narrows to that
-      value. */
+      the track index is the start index. Left-panel selections narrow to the
+      tracks matching all of them. */
   function playContext(): PlayContext {
     return (
-      library.selectedValues.length > 0
+      library.activeFilters.length > 0
         ? {
             type: "value_tracks",
-            mode: library.wireMode,
-            values: library.selectedValues,
+            filters: library.activeFilters,
             query: library.query,
             projection_revision: library.projectionRevision,
             sort: library.sort,

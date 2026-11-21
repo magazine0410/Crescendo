@@ -5,7 +5,7 @@
 //! scanner keeps all of a file's GENRE fields so they split the same way.
 
 use crescendo_core::db::Db;
-use crescendo_core::model::{BrowseMode, BrowseValue, PlayContext};
+use crescendo_core::model::{BrowseMode, BrowseValue, FacetSelection, PlayContext};
 use crescendo_core::scanner::tags::read_meta;
 use crescendo_core::search;
 use std::collections::HashMap;
@@ -59,8 +59,10 @@ fn counts(vals: &[BrowseValue]) -> HashMap<String, i64> {
 
 fn genre_context(values: &[&str], query: Option<&str>) -> PlayContext {
     PlayContext::ValueTracks {
-        mode: BrowseMode::Genre,
-        values: values.iter().map(|v| v.to_string()).collect(),
+        filters: vec![FacetSelection {
+            mode: BrowseMode::Genre,
+            values: values.iter().map(|v| v.to_string()).collect(),
+        }],
         query: query.map(str::to_string),
         projection_revision: 0,
         sort: None,
