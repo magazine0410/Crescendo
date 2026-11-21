@@ -318,7 +318,7 @@
 {#snippet rowSnippet(i: number)}
   {@const r = rows[i]}
   {#if r.type === "playlist"}
-    <div class="pband">
+    <div class="pband" class:first={i === 0}>
       <span
         class="pdrag"
         use:fileDrag={{
@@ -444,6 +444,11 @@
     background: var(--bg-panel);
     border-top: 1px solid var(--hairline);
     border-bottom: 1px solid var(--hairline);
+  }
+  /* The list's first row sits right under the header, whose bottom line is
+     already there; a second one against it reads as one 2px line. */
+  .pband.first {
+    border-top: none;
   }
   .pdrag {
     display: flex;

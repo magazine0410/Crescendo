@@ -327,7 +327,7 @@
       <div class="trow placeholder" class:alt></div>
     {/if}
   {:else}
-    <div class="sep">
+    <div class="sep" class:first={i === 0}>
       <button
         class="sepname"
         use:fileDrag={{
@@ -439,6 +439,11 @@
     padding: 0 16px 0 12px;
     background: var(--bg-panel);
     border-top: 1px solid var(--hairline);
+  }
+  /* The list's first row sits right under the header, whose bottom line is
+     already there; a second one against it reads as one 2px line. */
+  .sep.first {
+    border-top: none;
   }
   .sepname {
     font-style: italic;
