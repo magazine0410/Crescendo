@@ -449,9 +449,10 @@
         />
         <p class="hint">
           How the left panel shows genre, artist, album and the other categories.
-          Tabs show one category's list at a time; the vertical list can have
-          several open, sharing the height. Either way, a track must match what
-          is selected in every category.
+          Tabs sit side by side above the open category's list; the vertical
+          list stacks them as headers that expand and collapse. Either way one
+          list shows at a time, and a track must match what is selected in
+          every category.
         </p>
       </div>
 

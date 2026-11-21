@@ -35,8 +35,8 @@
   const tabs = $derived(prefs.values.filter_panel_layout === "tabs");
   const filtering = $derived(library.activeFilters.length > 0);
 
-  // The vertical list can have several categories open, or none; the tabs
-  // show exactly one. Settle that when the layout is switched to tabs.
+  // The vertical list can have every category collapsed; the tabs always show
+  // one. Settle that when the layout is switched to tabs.
   $effect(() => {
     if (tabs) void library.showOneFacet();
   });
@@ -255,8 +255,8 @@
       </div>
     {/key}
   {:else}
-    <!-- Every header is always on screen. Expanded categories share the height
-         the headers leave, so the headers below an open list sit at the bottom,
+    <!-- Every header is always on screen. The open category's list takes the
+         height the headers leave, so the headers below it sit at the bottom,
          right above the Clear filters button. -->
     {#each library.facets as facet (facet.mode)}
       <button
@@ -442,7 +442,7 @@
     font-size: 11px;
     color: var(--txt);
   }
-  /* Equal shares: a zero basis ignores how many values each list holds. */
+  /* The open list takes what the headers leave. */
   .body {
     display: flex;
     flex-direction: column;

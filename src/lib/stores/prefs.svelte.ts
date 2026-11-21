@@ -9,8 +9,8 @@ export type PlaylistSort = "manual" | "name" | "count";
     below them under a separator. */
 export type CollectionsPlacement = "above" | "within" | "below";
 /** How the Library's left panel lays out its categories: "tabs" is a
-    horizontal strip showing one value list at a time, "list" is collapsible
-    headers stacked vertically, any number of them open. */
+    horizontal strip above the open category's value list, "list" is
+    collapsible headers stacked vertically, with one open or all collapsed. */
 export type FilterPanelLayout = "tabs" | "list";
 
 export type VisualizerMode = "bars" | "projectm_en_d" | "projectm_preset" | "projectm_import";

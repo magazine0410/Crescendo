@@ -455,34 +455,45 @@ test("a failed or superseded value load does not prune the selection", async () 
   assert.deepEqual([...artist.selectedValues], ["a", "gone"]);
 });
 
-test("the tabs layout keeps one category open and every selection", async () => {
-  const library = await store("library", libraryCalls(), preferences({ filter_panel_layout: "tabs" }));
-  const artist = library.facet("artist");
-  const album = library.facet("album");
-  artist.selectedValues = ["a"];
-  artist.valueFilter = "narrowing";
-  await library.openFacet(album);
-  assert.deepEqual(library.facets.filter(facet => facet.expanded).map(facet => facet.mode), ["album"]);
-  assert.equal(artist.valueFilter, "");
-  assert.deepEqual([...artist.selectedValues], ["a"]);
-  await library.openFacet(album);
-  assert.equal(album.expanded, true, "clicking the open tab leaves it open");
+const openFacets = library => library.facets.filter(facet => facet.expanded).map(facet => facet.mode);
+
+test("opening a category closes the others and keeps every selection", async () => {
+  for (const layout of ["tabs", "list"]) {
+    const library = await store("library", libraryCalls(), preferences({ filter_panel_layout: layout }));
+    const artist = library.facet("artist");
+    const album = library.facet("album");
+    artist.selectedValues = ["a"];
+    artist.valueFilter = "narrowing";
+    await library.openFacet(album);
+    assert.deepEqual(openFacets(library), ["album"], layout);
+    assert.equal(artist.valueFilter, "");
+    assert.deepEqual([...artist.selectedValues], ["a"]);
+    await library.openFacet(album);
+    assert.equal(album.expanded, true, "clicking the open tab leaves it open");
+  }
 });
 
-test("switching to the tabs layout keeps the first open category", async () => {
-  const prefs = preferences({ filter_panel_layout: "list" });
-  const library = await store("library", libraryCalls(), prefs);
+test("a vertical header toggles its own list, one open at most", async () => {
+  const library = await store("library", libraryCalls(), preferences({ filter_panel_layout: "list" }));
   await library.toggleFacet(library.facet("album"));
+  assert.deepEqual(openFacets(library), ["album"]);
   await library.toggleFacet(library.facet("genre"));
-  library.facet("album").selectedValues = ["x"];
-  prefs.values.filter_panel_layout = "tabs";
-  await library.showOneFacet();
-  assert.deepEqual(library.facets.filter(facet => facet.expanded).map(facet => facet.mode), ["genre"]);
-  assert.deepEqual([...library.facet("album").selectedValues], ["x"]);
+  assert.deepEqual(openFacets(library), ["genre"]);
+  await library.toggleFacet(library.facet("genre"));
+  assert.deepEqual(openFacets(library), [], "clicking the open header collapses it");
+});
 
+test("the tabs layout opens Artist when every category was collapsed", async () => {
+  const library = await store("library", libraryCalls(), preferences({ filter_panel_layout: "tabs" }));
+  library.facet("album").selectedValues = ["x"];
   for (const facet of library.facets) facet.expanded = false;
   await library.showOneFacet();
-  assert.equal(library.facet("artist").expanded, true, "with none open, Artist opens");
+  assert.deepEqual(openFacets(library), ["artist"]);
+  assert.deepEqual([...library.facet("album").selectedValues], ["x"]);
+
+  await library.openFacet(library.facet("genre"));
+  await library.showOneFacet();
+  assert.deepEqual(openFacets(library), ["genre"], "an open category stays");
 });
 
 test("clearing filters empties every category and reloads the albums once", async () => {

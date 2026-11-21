@@ -436,7 +436,7 @@ class LibraryStore {
     await this.rebuildQueue;
     await prefs.set("custom_browse_tag", raw);
     const facet = this.facet("custom");
-    if (prefs.values.filter_panel_layout === "tabs") this.closeOthers(facet);
+    this.closeOthers(facet);
     facet.expanded = true;
     facet.selectedValues = [];
     facet.valueAnchor = null;
@@ -538,10 +538,10 @@ class LibraryStore {
     facet.valueFilter = "";
   }
 
-  /** Show a category's value list. The tabs layout shows one list at a time,
-      so there the others close. */
+  /** Show a category's value list. One list shows at a time in either
+      layout, so any other open category closes. */
   async openFacet(facet: Facet) {
-    if (prefs.values.filter_panel_layout === "tabs") this.closeOthers(facet);
+    this.closeOthers(facet);
     if (facet.expanded) return;
     facet.expanded = true;
     await this.loadValues(facet);
@@ -556,8 +556,8 @@ class LibraryStore {
     }
   }
 
-  /** The category the tabs layout shows: the first open one, or Artist when
-      the vertical list was left with none open. */
+  /** The category the tabs layout shows: the open one, or Artist when the
+      vertical list was left with every category collapsed. */
   async showOneFacet() {
     await this.openFacet(this.facets.find((facet) => facet.expanded) ?? this.facet("artist"));
   }
