@@ -8,4 +8,4 @@ pub mod plugins;
 pub mod radio;
 pub mod update;
 
-pub mod lastfm;
+pub mod listenbrainz;

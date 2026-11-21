@@ -9,7 +9,7 @@ mod settle;
 mod station;
 
 use crescendo_core::db::Db;
-use crescendo_core::lastfm::scrobble::{now, Scrobbler};
+use crescendo_core::listenbrainz::scrobble::{now, Scrobbler};
 use crescendo_core::listening::ListeningProgress;
 use crescendo_core::model::{Track, MAX_SEEK_MS};
 pub use crescendo_core::playback::Status;
@@ -1148,7 +1148,7 @@ impl Engine {
                 .enqueue(&session.track, session.started_at, session.generation)
             {
                 Ok(()) => session.scrobble_recorded = true,
-                Err(e) => log::warn!("Cannot queue Last.fm scrobble: {e}"),
+                Err(e) => log::warn!("Cannot queue ListenBrainz listen: {e}"),
             }
         }
     }

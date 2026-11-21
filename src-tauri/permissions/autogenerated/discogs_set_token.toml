@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discogs-set-token"
+description = "Enables the discogs_set_token command without any pre-configured scope."
+commands.allow = ["discogs_set_token"]
+
+[[permission]]
+identifier = "deny-discogs-set-token"
+description = "Denies the discogs_set_token command without any pre-configured scope."
+commands.deny = ["discogs_set_token"]

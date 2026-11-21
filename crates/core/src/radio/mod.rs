@@ -121,7 +121,7 @@ pub struct RadioSong {
 }
 
 impl RadioSong {
-    /// Last.fm wants half of a song or 4 minutes heard, and the length of a
+    /// A listen counts after half of a song or 4 minutes heard, and the length of a
     /// radio song is unknown. So: 4 minutes at any time, or, once the song
     /// has ended, at least 30 seconds of a song heard from its start.
     pub fn scrobble_due(&self, ended: bool) -> bool {
@@ -285,7 +285,7 @@ mod tests {
         assert!(!song(29_000, true).scrobble_due(true));
         let mut untitled = song(300_000, true);
         untitled.artist = None;
-        assert!(!untitled.scrobble_due(true), "Last.fm needs an artist");
+        assert!(!untitled.scrobble_due(true), "a listen needs an artist");
         let mut done = song(300_000, true);
         done.scrobbled = true;
         assert!(!done.scrobble_due(true));

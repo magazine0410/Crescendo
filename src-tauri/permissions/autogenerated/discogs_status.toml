@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discogs-status"
+description = "Enables the discogs_status command without any pre-configured scope."
+commands.allow = ["discogs_status"]
+
+[[permission]]
+identifier = "deny-discogs-status"
+description = "Denies the discogs_status command without any pre-configured scope."
+commands.deny = ["discogs_status"]

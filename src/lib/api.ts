@@ -408,37 +408,33 @@ export interface PlayerState {
 export const RATE_MIN = 0.5;
 export const RATE_MAX = 2;
 
+/** An artist's profile text and the site it came from. */
+export interface Profile {
+  source: "TouhouDB" | "Discogs" | "TheAudioDB" | "VocaDB" | "Wikipedia";
+  text: string;
+  /** The artist's page on that site. */
+  url: string;
+}
+
 export interface ArtistInfo {
   name: string;
-  bio_summary: string | null;
-  bio_full: string | null;
+  bio: Profile | null;
+  /** From ListenBrainz, when it matched the playing song to this artist. */
   listeners: number | null;
   playcount: number | null;
   tags: string[];
   similar: string[];
-  url: string | null;
 }
 
-/** A Last.fm bio for a name in a track's artist or vocalist tag. */
+/** A profile for a name in a track's artist or vocalist tag. */
 export interface Credit {
   role: "artist" | "vocalist";
-  /** The name the bio was found under: a whole tag value, one name split from
+  /** The name the profile was found under: a whole tag value, one name split from
       it, or the original spelling of a romanized name. */
   name: string;
   /** Its romanization from a sort tag or the vocalist tag, when known. */
   sort: string | null;
   info: ArtistInfo;
-}
-
-export interface AlbumInfo {
-  name: string;
-  artist: string;
-  summary: string | null;
-  full: string | null;
-  listeners: number | null;
-  playcount: number | null;
-  tags: string[];
-  url: string | null;
 }
 
 /** One timed line of an LRC source. */

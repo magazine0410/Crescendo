@@ -1,7 +1,9 @@
 use crate::player::Cmd;
 use crate::state::AppState;
-use crescendo_core::lastfm::credits::{Credit, CreditTags};
-use crescendo_core::lastfm::{AlbumInfo, ArtistInfo};
+use crescendo_core::artistinfo::credits::{Credit, CreditTags};
+use crescendo_core::artistinfo::profile::Sites;
+use crescendo_core::artistinfo::{ArtistInfo, Lookups, Playing};
+use crescendo_core::listenbrainz::Endpoints;
 use crescendo_core::lyrics::LyricsResult;
 use crescendo_core::rating::ShuffleMode;
 use std::collections::HashMap;
@@ -36,6 +38,34 @@ static WAVEFORM_PERMITS: Semaphore = Semaphore::const_new(2);
 /// able to stack an unbounded number of blocking threads on the network.
 static LYRICS_PERMITS: Semaphore = Semaphore::const_new(2);
 
+/// Bound concurrent artist-info lookups for the same reason: one can ask
+/// five sites in turn, each at its own modest rate.
+static INFO_PERMITS: Semaphore = Semaphore::const_new(2);
+
+/// The newest request of one kind. Skipping through tracks queues a lookup
+/// per track behind `INFO_PERMITS`, and each can take many seconds; all but
+/// the newest are for a track no longer shown, so they give way to it.
+struct Newest(std::sync::atomic::AtomicU64);
+
+impl Newest {
+    const fn new() -> Self {
+        Self(std::sync::atomic::AtomicU64::new(0))
+    }
+
+    /// A ticket for a request arriving now.
+    fn arrive(&self) -> u64 {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+    }
+
+    /// Whether a later request has arrived since `ticket` was handed out.
+    fn superseded(&self, ticket: u64) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst) != ticket
+    }
+}
+
+static NEWEST_ARTIST_INFO: Newest = Newest::new();
+static NEWEST_CREDITS: Newest = Newest::new();
+
 #[tauri::command]
 pub async fn prefs_get_all(state: State<'_, AppState>) -> Result<HashMap<String, String>, String> {
     let mut prefs = state.db.prefs_get_all().map_err(|e| e.to_string())?;
@@ -51,8 +81,8 @@ pub async fn prefs_set(
     key: String,
     value: String,
 ) -> Result<PreferenceMutationResult, String> {
-    if key == "lastfm_scrobbling_enabled" {
-        return Err("use the Last.fm scrobbling control to change this preference".into());
+    if key == "listenbrainz_scrobbling_enabled" {
+        return Err("use the ListenBrainz control to change this preference".into());
     }
     if key == "volume" {
         return Err("use the volume control to change this preference".into());
@@ -231,48 +261,59 @@ pub async fn waveform_get(state: State<'_, AppState>, track_id: i64) -> Result<V
     .map_err(|e| e.to_string())?
 }
 
-fn api_key(state: &State<'_, AppState>) -> String {
-    state
-        .db
-        .prefs_get("lastfm_api_key")
-        .ok()
-        .flatten()
-        .unwrap_or_default()
+fn discogs_file() -> std::path::PathBuf {
+    crate::state::data_dir().join("discogs-credentials.json")
 }
 
+/// The sites to ask, with the saved Discogs token.
+fn sites() -> Sites {
+    Sites {
+        discogs_token: crescendo_core::artistinfo::discogs_token(&discogs_file()),
+        ..Default::default()
+    }
+}
+
+/// Profile text, tags, listener counts and similar artists for the artist a
+/// Now Playing section is headed by. `track_artist`, `title` and `album` are
+/// the playing song's tags, which tell same-name artists apart.
 #[tauri::command]
-pub async fn lastfm_artist_info(
+pub async fn artist_info(
     state: State<'_, AppState>,
     artist: String,
+    track_artist: Option<String>,
+    title: Option<String>,
+    album: Option<String>,
 ) -> Result<Option<ArtistInfo>, String> {
-    let key = api_key(&state);
+    let ticket = NEWEST_ARTIST_INFO.arrive();
+    let _permit = INFO_PERMITS.acquire().await.map_err(|e| e.to_string())?;
+    if NEWEST_ARTIST_INFO.superseded(ticket) {
+        return Ok(None);
+    }
     let db = state.db.clone();
+    let token = state.scrobbler.token();
     tauri::async_runtime::spawn_blocking(move || {
-        crescendo_core::lastfm::artist_info(&db, &key, &artist).map_err(|e| e.to_string())
+        let lookups = Lookups {
+            db: &db,
+            sites: &sites(),
+            listenbrainz: &Endpoints::default(),
+            token: token.as_deref(),
+        };
+        let song = Playing {
+            artist: track_artist.as_deref(),
+            title: title.as_deref(),
+            album: album.as_deref(),
+        };
+        crescendo_core::artistinfo::artist_info(&lookups, &artist, song)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
+/// Profiles for the names in a track's artist and vocalist tags that the
+/// album artist section does not already show.
 #[tauri::command]
-pub async fn lastfm_album_info(
-    state: State<'_, AppState>,
-    artist: String,
-    album: String,
-) -> Result<Option<AlbumInfo>, String> {
-    let key = api_key(&state);
-    let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crescendo_core::lastfm::album_info(&db, &key, &artist, &album).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Bios for the names in a track's artist and vocalist tags that the album
-/// artist section does not already show.
-#[tauri::command]
-pub async fn lastfm_credits(
+#[allow(clippy::too_many_arguments)]
+pub async fn track_credits(
     state: State<'_, AppState>,
     albumartist: Option<String>,
     albumartistsort: Option<String>,
@@ -280,10 +321,22 @@ pub async fn lastfm_credits(
     artistsort: Option<String>,
     vocalist: Option<String>,
     album: Option<String>,
+    title: Option<String>,
 ) -> Result<Vec<Credit>, String> {
-    let key = api_key(&state);
+    let ticket = NEWEST_CREDITS.arrive();
+    let _permit = INFO_PERMITS.acquire().await.map_err(|e| e.to_string())?;
+    if NEWEST_CREDITS.superseded(ticket) {
+        return Ok(Vec::new());
+    }
     let db = state.db.clone();
+    let token = state.scrobbler.token();
     tauri::async_runtime::spawn_blocking(move || {
+        let lookups = Lookups {
+            db: &db,
+            sites: &sites(),
+            listenbrainz: &Endpoints::default(),
+            token: token.as_deref(),
+        };
         let tags = CreditTags {
             albumartist: albumartist.as_deref(),
             albumartistsort: albumartistsort.as_deref(),
@@ -291,11 +344,31 @@ pub async fn lastfm_credits(
             artistsort: artistsort.as_deref(),
             vocalist: vocalist.as_deref(),
             album: album.as_deref(),
+            title: title.as_deref(),
         };
-        crescendo_core::lastfm::credits::credits(&db, &key, tags)
+        crescendo_core::artistinfo::credits(&lookups, tags)
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// The Discogs account whose token is saved, if any. The token itself never
+/// reaches the webview.
+#[tauri::command]
+pub async fn discogs_status() -> Result<Option<String>, String> {
+    Ok(crescendo_core::artistinfo::discogs_username(&discogs_file()))
+}
+
+/// Saves a Discogs personal access token once Discogs confirms it, and
+/// returns its account. An empty token removes the saved one.
+#[tauri::command]
+pub async fn discogs_set_token(token: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crescendo_core::artistinfo::set_discogs_token(&Sites::default(), &discogs_file(), &token)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Static lyrics for the Now Playing panel: sidecar `.lrc`/`.txt`, embedded
@@ -312,15 +385,6 @@ pub async fn lyrics_for_track(
             return Ok(None);
         };
         crescendo_core::lyrics::for_track(&db, &track).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn lastfm_test_key(api_key: String) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crescendo_core::lastfm::test_key(&api_key).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

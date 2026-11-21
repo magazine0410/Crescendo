@@ -11,7 +11,8 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { call, isTauri } from "$lib/api";
   import { formatLongDuration } from "$lib/format";
-  import LastfmSettings from "./LastfmSettings.svelte";
+  import ListenBrainzSettings from "./ListenBrainzSettings.svelte";
+  import DiscogsSettings from "./DiscogsSettings.svelte";
   import SongHistory from "./SongHistory.svelte";
   import PluginsSettings from "./PluginsSettings.svelte";
   import ColorPicker from "../common/ColorPicker.svelte";
@@ -43,7 +44,8 @@
     { id: "plugins", label: "Plugins" },
   ];
 
-  let keyTest = $state<"idle" | "testing" | "ok" | "bad">("idle");
+  /** The connected ListenBrainz account, which Song history's links need. */
+  let listenbrainzAccount = $state<string | null>(null);
   let autostart = $state(false);
   let replayGainSaving = $state(false);
   let replayGainError = $state("");
@@ -138,18 +140,6 @@
     const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
     const dir = await openDialog({ directory: true });
     if (typeof dir === "string") await prefs.set("library_path", dir);
-  }
-
-  async function testKey() {
-    keyTest = "testing";
-    try {
-      const ok = await call<boolean>("lastfm_test_key", {
-        apiKey: prefs.values.lastfm_api_key,
-      });
-      keyTest = ok ? "ok" : "bad";
-    } catch {
-      keyTest = "bad";
-    }
   }
 
   async function openAbout() {
@@ -571,26 +561,25 @@
         role="tabpanel"
         aria-labelledby="settings-tab-now-playing"
       >
-        <label for="lfmkey">Last.fm API key (get one at last.fm/api)</label>
-        <div class="pathrow">
+        <ListenBrainzSettings onaccount={(username) => (listenbrainzAccount = username)} />
+
+        <label class="check">
           <input
-            id="lfmkey"
-            type="text"
-            spellcheck="false"
-            value={prefs.values.lastfm_api_key}
-            onchange={(e) => {
-              prefs.set("lastfm_api_key", e.currentTarget.value.trim());
-              keyTest = "idle";
-            }}
+            type="checkbox"
+            checked={prefs.values.artist_info_online}
+            onchange={(e) => prefs.set("artist_info_online", e.currentTarget.checked)}
           />
-          <button class="btn" disabled={keyTest === "testing" || !prefs.values.lastfm_api_key} onclick={testKey}>
-            {keyTest === "testing" ? "Testing…" : "Test key"}
-          </button>
-        </div>
-        {#if keyTest === "ok"}<p class="ok">Key works.</p>{/if}
-        {#if keyTest === "bad"}<p class="bad">Key rejected by Last.fm.</p>{/if}
-        <p class="hint">Without a key, Now Playing falls back to local tags.</p>
-        <LastfmSettings />
+          Look up artist info online
+        </label>
+        <p class="hint">
+          Sends the names in the playing track's artist, album artist and vocalist tags,
+          and its album to tell same-name artists apart, to TouhouDB, Discogs, TheAudioDB,
+          VocaDB and Wikipedia, in that order, until one has a profile. With a
+          ListenBrainz account connected, the track's artist, title and album also go to
+          ListenBrainz for tags, listener counts and similar artists. Off keeps Now
+          Playing to local tags. Applies from the next song.
+        </p>
+        <DiscogsSettings />
 
         <label class="check">
           <input
@@ -605,7 +594,7 @@
           LRCLIB when there is no sidecar .lrc/.txt file or embedded lyrics tag. Off
           keeps lyrics to those local sources only.
         </p>
-        {#key prefs.values.lastfm_api_key}<SongHistory />{/key}
+        {#key listenbrainzAccount}<SongHistory connected={listenbrainzAccount !== null} />{/key}
       </div>
 
       {:else if activeSection === "visualizer"}
@@ -847,14 +836,6 @@
     font-size: 11px;
     line-height: 1.5;
     margin-bottom: 14px;
-  }
-  .ok {
-    color: #5fbf5f;
-    font-size: 11px;
-  }
-  .bad {
-    color: var(--search-invalid);
-    font-size: 11px;
   }
   footer {
     display: flex;

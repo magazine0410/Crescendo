@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-listenbrainz-links"
+description = "Enables the listenbrainz_links command without any pre-configured scope."
+commands.allow = ["listenbrainz_links"]
+
+[[permission]]
+identifier = "deny-listenbrainz-links"
+description = "Denies the listenbrainz_links command without any pre-configured scope."
+commands.deny = ["listenbrainz_links"]

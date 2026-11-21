@@ -30,7 +30,9 @@ export const SEARCH_FAVORITES_MAX = 100;
 /** Keys mirrored into the backend `prefs` table. */
 export interface Prefs {
   library_path: string;
-  lastfm_api_key: string;
+  /** Ask the profile sites and ListenBrainz about the playing track's
+      artists (Now Playing). Off keeps that tab to local tags. */
+  artist_info_online: boolean;
   history_time_format: "absolute" | "relative";
   /** Send the playing track's title/artist/album/duration to VocaDB and
       LRCLIB when no local lyrics exist (Now Playing). Off keeps lyrics to
@@ -111,7 +113,7 @@ const DEFAULTS: Prefs = {
   // The backend saves a folder at startup (see ensure_library_path), so this
   // shows only until prefs load.
   library_path: "",
-  lastfm_api_key: "",
+  artist_info_online: true,
   history_time_format: "absolute",
   lyrics_online: true,
   prefer_romanized: true,
@@ -196,7 +198,7 @@ class PrefsStore {
     const raw = await call<Record<string, string>>("prefs_get_all");
     const v: Prefs = { ...DEFAULTS };
     if (raw.library_path) v.library_path = raw.library_path;
-    if (raw.lastfm_api_key) v.lastfm_api_key = raw.lastfm_api_key;
+    if (raw.artist_info_online) v.artist_info_online = raw.artist_info_online === "true";
     if (raw.history_time_format === "relative") v.history_time_format = "relative";
     if (raw.lyrics_online) v.lyrics_online = raw.lyrics_online === "true";
     if (raw.prefer_romanized) v.prefer_romanized = raw.prefer_romanized === "true";

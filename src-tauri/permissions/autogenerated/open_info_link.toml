@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-info-link"
+description = "Enables the open_info_link command without any pre-configured scope."
+commands.allow = ["open_info_link"]
+
+[[permission]]
+identifier = "deny-open-info-link"
+description = "Denies the open_info_link command without any pre-configured scope."
+commands.deny = ["open_info_link"]

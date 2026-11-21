@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -438,6 +438,50 @@ pub fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
                uuid TEXT UNIQUE,
                position INTEGER NOT NULL
              );",
+        )?;
+    }
+    if version < 17 {
+        // ListenBrainz replaces Last.fm. `web_cache` holds what the online
+        // sources answered (see crate::listenbrainz and crate::artistinfo),
+        // `listenbrainz_outbox` the listens waiting to be sent, and
+        // `lastfm_links` the Last.fm track pages Song history still opens.
+        // The Last.fm tables stay as they are, so a build from before this
+        // version keeps working on the same file.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS web_cache (
+               key TEXT PRIMARY KEY,
+               json TEXT NOT NULL,
+               fetched_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS lastfm_links (
+               artist TEXT NOT NULL,
+               title TEXT NOT NULL,
+               url TEXT NOT NULL,
+               PRIMARY KEY(artist, title)
+             ) WITHOUT ROWID;
+             CREATE TABLE IF NOT EXISTS listenbrainz_outbox (
+               id INTEGER PRIMARY KEY,
+               account TEXT NOT NULL,
+               track_json TEXT NOT NULL,
+               started_at INTEGER NOT NULL,
+               state TEXT NOT NULL DEFAULT 'pending',
+               message TEXT,
+               attempts INTEGER NOT NULL DEFAULT 0,
+               UNIQUE(account, started_at, track_json)
+             );
+             CREATE INDEX IF NOT EXISTS idx_listenbrainz_outbox_pending
+               ON listenbrainz_outbox(state, id);
+             CREATE TABLE IF NOT EXISTS meta (
+               key TEXT PRIMARY KEY,
+               value TEXT
+             );",
+        )?;
+        crate::songlink::keep_lastfm_links(&tx)?;
+        // Plays before this moment keep their Last.fm link in Song history.
+        tx.execute(
+            "INSERT OR IGNORE INTO meta(key, value) \
+             VALUES (?1, CAST(strftime('%s', 'now') AS TEXT))",
+            [crate::songlink::SINCE_KEY],
         )?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-listenbrainz-status"
+description = "Enables the listenbrainz_status command without any pre-configured scope."
+commands.allow = ["listenbrainz_status"]
+
+[[permission]]
+identifier = "deny-listenbrainz-status"
+description = "Denies the listenbrainz_status command without any pre-configured scope."
+commands.deny = ["listenbrainz_status"]

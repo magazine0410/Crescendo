@@ -8,8 +8,13 @@
   import Select from "../common/Select.svelte";
   import { openContextMenu, closeContextMenu } from "../common/ContextMenu.svelte";
 
+  /** Whether a ListenBrainz account is connected: its pages are looked up
+      with the account's token. */
+  let { connected }: { connected: boolean } = $props();
   let rows = $state<HistoryEntry[]>([]);
-  let urls = $state<Record<number, string | null>>({});
+  /** ListenBrainz pages by track id; undefined until looked up, null for a
+      song ListenBrainz does not match. */
+  let listenbrainz = $state<Record<number, string | null>>({});
   let cursors = $state<(number | null)[]>([null]);
   let loading = $state(true);
   let error = $state("");
@@ -19,26 +24,29 @@
   let alive = true;
   let box: HTMLDivElement;
 
+  /** The page a play links to, if it has one. */
+  function link(row: HistoryEntry): string | null {
+    return row.service === "lastfm" ? row.url : (listenbrainz[row.track.id] ?? null);
+  }
+
+  /** One request for every play on the page that is not yet looked up. */
   async function resolveLinks(entries: HistoryEntry[], version: number) {
-    if (!prefs.values.lastfm_api_key) return;
-    const pending = [...new Map(entries.map(r => [r.track.id, r])).values()]
-      .filter(r => urls[r.track.id] === undefined);
-    // At most two requests; don't queue pages the user has already left.
-    let index = 0;
-    const worker = async () => {
-      while (alive && version === request && index < pending.length) {
-        const row = pending[index++];
-        try {
-          const url = await call<string | null>("lastfm_track_url", { trackId: row.track.id });
-          if (!alive || version !== request) return;
-          urls[row.track.id] = url;
-        } catch {
-          if (alive && version === request) lookupError = "Last.fm availability could not be checked. Refresh to retry.";
-          return;
-        }
+    if (!connected) return;
+    const trackIds = [...new Set(entries.filter(r => r.service === "listenbrainz").map(r => r.track.id))]
+      .filter(id => listenbrainz[id] === undefined);
+    if (!trackIds.length) return;
+    try {
+      const found = await call<{ urls: Record<number, string>; failed: boolean }>("listenbrainz_links", { trackIds });
+      if (!alive || version !== request) return;
+      // A failed lookup says nothing about a song, so it stays unknown.
+      for (const id of trackIds) {
+        if (found.urls[id]) listenbrainz[id] = found.urls[id];
+        else if (!found.failed) listenbrainz[id] = null;
       }
-    };
-    await Promise.all([worker(), worker()]);
+      if (found.failed) lookupError = "ListenBrainz availability could not be checked. Refresh to retry.";
+    } catch {
+      if (alive && version === request) lookupError = "ListenBrainz availability could not be checked. Refresh to retry.";
+    }
   }
 
   async function load(nextCursors = cursors, quiet = false) {
@@ -66,10 +74,24 @@
     return () => { alive = false; request++; clearInterval(timer); closeContextMenu(); };
   });
 
+  const serviceName = { lastfm: "Last.fm", listenbrainz: "ListenBrainz" };
+
+  /** What the note in front of a play says, or null for no note. Every play
+      since the move to ListenBrainz gets one once its match is known: white
+      when ListenBrainz matches the song, faint when it does not. An older
+      play gets a faint one when Last.fm has a page for it. */
+  function mark(row: HistoryEntry): { title: string; matched: boolean } | null {
+    if (row.service === "lastfm") return row.url ? { title: "Available on Last.fm", matched: false } : null;
+    const page = listenbrainz[row.track.id];
+    if (page === undefined) return null;
+    return page ? { title: "Available on ListenBrainz", matched: true } : { title: "Not matched on ListenBrainz", matched: false };
+  }
+
   function context(event: MouseEvent, row: HistoryEntry) {
-    if (!urls[row.track.id]) { event.preventDefault(); closeContextMenu(); return; }
-    openContextMenu(event, [{ label: "Open on Last.fm", action: () => {
-      void call("lastfm_open_track", { trackId: row.track.id }).catch(e => error = String(e));
+    const url = link(row);
+    if (!url) { event.preventDefault(); closeContextMenu(); return; }
+    openContextMenu(event, [{ label: `Open on ${serviceName[row.service]}`, action: () => {
+      void call("open_info_link", { url }).catch(e => error = String(e));
     } }]);
   }
 </script>
@@ -87,13 +109,15 @@
     onchange={(value) => prefs.set("history_time_format", value as "absolute" | "relative").catch(e => error = String(e))}
   />
   <p class="hint">Songs appear after listening to more than half, whether or not scrobbling is enabled. Times show when playback started. Hover over a time for the exact date.</p>
-  {#if !prefs.values.lastfm_api_key}<p class="hint">Add a Last.fm API key above to check song availability.</p>{/if}
+  <p class="hint">Songs played since Crescendo moved to ListenBrainz have a white note when ListenBrainz matches them and a grey one when it does not. Older songs have a grey note when Last.fm has a page for them. Right-click a song to open its page, where it has one.</p>
+  {#if !connected}<p class="hint">Connect ListenBrainz above to check song availability.</p>{/if}
   <div class="history" bind:this={box} aria-busy={loading}>
     {#each rows as row (row.id)}
+      {@const note = mark(row)}
       <button class="history-row" oncontextmenu={(e) => context(e, row)}
         aria-label={`${displayAlbumartist(row.track) ?? "Unknown artist"} - ${displayTitle(row.track)}, ${historyDate(row.played_at)}`}>
-        <span class="availability" title={urls[row.track.id] ? "Available on Last.fm" : undefined}>
-          {#if urls[row.track.id]}<Icon name="music-2" size={14} />{/if}
+        <span class="availability" class:matched={note?.matched} title={note?.title}>
+          {#if note}<Icon name="music-2" size={14} />{/if}
         </span>
         <span class="song" title={`${displayAlbumartist(row.track) ?? "Unknown artist"} - ${displayTitle(row.track)}`}>
           {displayAlbumartist(row.track) ?? "Unknown artist"} - {displayTitle(row.track)}
@@ -126,6 +150,7 @@
   .history-row:nth-child(even) { background: var(--row-alt); }
   .history-row:hover, .history-row:focus-visible { background: var(--hover-row); }
   .availability { width: 14px; height: 14px; flex: none; color: var(--txt-faded); }
+  .availability.matched { color: var(--txt-full); }
   .song { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   time { color: var(--txt-faded); white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; }
   .empty { padding: 16px; color: var(--txt-faded); }

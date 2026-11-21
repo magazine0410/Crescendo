@@ -271,7 +271,8 @@ pub fn read_meta(path: &Path) -> Result<TrackMeta> {
     read_meta_inner(path, true)
 }
 
-/// Last.fm forbids deriving scrobble metadata from filenames.
+/// The tags as the file has them, for a listen sent to ListenBrainz: a title
+/// the library filled in from the filename is not the song's name.
 pub fn read_scrobble_meta(path: &Path) -> Result<TrackMeta> {
     read_meta_inner(path, false)
 }

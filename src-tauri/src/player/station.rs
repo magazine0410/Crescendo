@@ -13,7 +13,7 @@
 //! instead of resuming stale audio.
 
 use super::{Engine, Status};
-use crescendo_core::lastfm::scrobble::{now, Scrobbler};
+use crescendo_core::listenbrainz::scrobble::{now, Scrobbler};
 use crescendo_core::radio::{check_stream_url, neighbour, song_from_tags, RadioSong, Station};
 use gstreamer::prelude::*;
 use serde::Serialize;
@@ -112,7 +112,7 @@ impl StationSession {
             if let Err(error) =
                 scrobbler.enqueue(&song.as_track(), song.started_at, self.song_generation)
             {
-                log::warn!("Cannot queue Last.fm scrobble: {error}");
+                log::warn!("Cannot queue ListenBrainz listen: {error}");
             }
         }
     }
@@ -431,7 +431,7 @@ impl Engine {
                     self.scrobbler
                         .enqueue(&song.as_track(), song.started_at, generation)
                 {
-                    log::warn!("Cannot queue Last.fm scrobble: {error}");
+                    log::warn!("Cannot queue ListenBrainz listen: {error}");
                 }
             }
         }

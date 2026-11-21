@@ -52,7 +52,7 @@ mod tests {
     }
 
     #[test]
-    fn lastfm_thresholds_differ_from_local_history() {
+    fn scrobble_thresholds_differ_from_local_history() {
         let mut p = ListeningProgress::default();
         p.heard_ms = 15_000;
         assert!(!p.scrobble_due(30_000));

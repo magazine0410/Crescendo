@@ -33,7 +33,11 @@ impl Db {
         };
         // Once per process, not in `open_conn` — the scanner's side connection
         // must not repeat it.
-        db.lastfm_cache_prune(crate::lastfm::CACHE_TTL_SECS)?;
+        db.web_cache_prune(crate::web::MAX_AGE_SECS)?;
+        db.web_cache_prune_prefix(
+            crate::artistinfo::profile::DISCOGS_KEY,
+            crate::artistinfo::profile::DISCOGS_MAX_AGE_SECS,
+        )?;
         db.lyrics_cache_prune(crate::lyrics::CACHE_TTL_SECS)?;
         Ok(db)
     }

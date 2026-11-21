@@ -9,8 +9,8 @@
     isTauri,
     type Album,
     type ArtistInfo,
-    type AlbumInfo,
     type Credit,
+    type Profile,
     type LyricsResult,
   } from "$lib/api";
   import { COVER_MISSING } from "$lib/icons";
@@ -19,8 +19,7 @@
   import Icon from "../common/Icon.svelte";
 
   let artistInfo = $state<ArtistInfo | null>(null);
-  let albumInfo = $state<AlbumInfo | null>(null);
-  /** Bios for the artist and vocalist tags, minus the album artist's. */
+  /** Profiles for the artist and vocalist tags, minus the album artist's. */
   let credits = $state<Credit[]>([]);
   /** Tags the credits belong to. Plain `let` for the same reason as
       lyricsFor below. */
@@ -42,7 +41,6 @@
     const t = player.track;
     if (!t) {
       artistInfo = null;
-      albumInfo = null;
       localAlbum = null;
       loadedFor = "";
       return;
@@ -52,7 +50,6 @@
     if (key === loadedFor) return;
     loadedFor = key;
     artistInfo = null;
-    albumInfo = null;
     localAlbum = null;
     if (t.album_id != null) {
       call<Album | null>("album_by_id", { albumId: t.album_id })
@@ -62,18 +59,12 @@
         .catch(() => {});
     }
     if (!isTauri || !artist) return;
-    call<ArtistInfo | null>("lastfm_artist_info", { artist })
+    // The song's own tags go along: they tell artists of one name apart.
+    call<ArtistInfo | null>("artist_info", { artist, trackArtist: t.artist, title: t.title, album: t.album })
       .then((r) => {
         if (loadedFor === key) artistInfo = r;
       })
       .catch(() => {});
-    if (t.album) {
-      call<AlbumInfo | null>("lastfm_album_info", { artist, album: t.album })
-        .then((r) => {
-          if (loadedFor === key) albumInfo = r;
-        })
-        .catch(() => {});
-    }
   });
 
   // Keyed on the tags rather than the album, since a compilation changes
@@ -87,18 +78,19 @@
     }
     const albumartist = t.albumartist ?? t.artist;
     const albumartistsort = t.albumartist ? t.albumartistsort : t.artistsort;
-    const key = [albumartist, albumartistsort, t.artist, t.artistsort, t.vocalist, t.album].join("\u001f");
+    const key = [albumartist, albumartistsort, t.artist, t.artistsort, t.vocalist, t.album, t.title].join("\u001f");
     if (key === creditsFor) return;
     creditsFor = key;
     credits = [];
     if (!t.artist && !t.vocalist) return;
-    call<Credit[]>("lastfm_credits", {
+    call<Credit[]>("track_credits", {
       albumartist,
       albumartistsort,
       artist: t.artist,
       artistsort: t.artistsort,
       vocalist: t.vocalist,
       album: t.album,
+      title: t.title,
     })
       .then((r) => {
         if (creditsFor === key) credits = r;
@@ -194,7 +186,7 @@
     songInfoFor = artist;
     songArtistInfo = null;
     if (!artist || !isTauri) return;
-    call<ArtistInfo | null>("lastfm_artist_info", { artist })
+    call<ArtistInfo | null>("artist_info", { artist, trackArtist: artist, title: station?.title ?? null, album: null })
       .then((r) => {
         if (songInfoFor === artist) songArtistInfo = r;
       })
@@ -225,6 +217,17 @@
   const romanizedTitle = $derived(track ? latinTitleSort(track) : null);
   const originalTitle = $derived(track ? displayOriginalTitle(track) : "");
 
+  function sourceLabel(source: Profile["source"]): string {
+    // Discogs asks for this wording wherever its data is shown.
+    if (source === "Discogs") return "Data provided by Discogs";
+    if (source === "Wikipedia") return "From Wikipedia (CC BY-SA)";
+    return `From ${source}`;
+  }
+
+  function openSource(url: string) {
+    call("open_info_link", { url }).catch(() => {});
+  }
+
   function onImgError(e: Event) {
     (e.currentTarget as HTMLImageElement).src = COVER_MISSING;
   }
@@ -251,6 +254,20 @@
     };
   }
 </script>
+
+{#snippet bio(info: ArtistInfo)}
+  {#if info.bio}
+    {@const profile = info.bio}
+    <p class="bio">{profile.text}</p>
+    <p class="stats">
+      <button class="source" onclick={() => openSource(profile.url)}>{sourceLabel(profile.source)}</button>
+      {#if info.listeners}
+        · {info.listeners.toLocaleString()} listeners on ListenBrainz
+        {#if info.playcount}· {info.playcount.toLocaleString()} plays{/if}
+      {/if}
+    </p>
+  {/if}
+{/snippet}
 
 {#if !track && station}
   {@const logo = logoUrl(station.logo)}
@@ -279,10 +296,10 @@
           {/each}
         </div>
       {/if}
-      {#if songArtistInfo?.bio_full || songArtistInfo?.bio_summary}
+      {#if songArtistInfo?.bio}
         <section>
           <h3>About the artist</h3>
-          <p class="bio">{songArtistInfo.bio_full || songArtistInfo.bio_summary}</p>
+          {@render bio(songArtistInfo)}
         </section>
       {/if}
       {#if songArtistInfo?.similar?.length}
@@ -294,7 +311,7 @@
       {#if !songArtistInfo}
         <p class="offline">
           {station.artist
-            ? `No Last.fm info${isTauri ? "" : " (browser preview)"} for this artist.`
+            ? `No artist info${isTauri ? "" : " (browser preview)"} for this artist.`
             : "The station has not announced a song yet."}
         </p>
       {/if}
@@ -363,17 +380,7 @@
         </div>
       {/if}
 
-      {#snippet bio(info: ArtistInfo)}
-        <p class="bio">{info.bio_full || info.bio_summary}</p>
-        {#if info.listeners}
-          <p class="stats">
-            {info.listeners.toLocaleString()} listeners on Last.fm
-            {#if info.playcount}· {info.playcount.toLocaleString()} plays{/if}
-          </p>
-        {/if}
-      {/snippet}
-
-      {#if artistInfo?.bio_full || artistInfo?.bio_summary}
+      {#if artistInfo?.bio}
         <section>
           <h3>{artistCredits.length ? "About the album artist" : "About the artist"}</h3>
           {@render bio(artistInfo)}
@@ -386,13 +393,6 @@
           {@render bio(c.info)}
         </section>
       {/each}
-
-      {#if albumInfo?.summary || albumInfo?.full}
-        <section>
-          <h3>About the album</h3>
-          <p class="bio">{albumInfo.full ?? albumInfo.summary}</p>
-        </section>
-      {/if}
 
       {#if artistInfo?.similar?.length}
         <section>
@@ -408,9 +408,9 @@
         </section>
       {/each}
 
-      {#if !artistInfo && !albumInfo && !credits.length}
+      {#if !artistInfo && !credits.length}
         <p class="offline">
-          No Last.fm info{isTauri ? "" : " (browser preview)"} — showing local tags.
+          No artist info{isTauri ? "" : " (browser preview)"} — showing local tags.
         </p>
       {/if}
     </div>
@@ -625,6 +625,16 @@
     margin-top: 8px;
     color: var(--txt-faded);
     font-size: 11px;
+  }
+  .source {
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .source:hover {
+    color: var(--txt);
   }
   .similar {
     color: var(--txt);

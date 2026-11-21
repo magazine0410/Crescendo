@@ -49,6 +49,20 @@ impl Db {
         )
     }
 
+    /// The frontend's "Look up artist info online" tick box (default on). When
+    /// off, no artist name is sent to the profile sites or to ListenBrainz
+    /// for the Now Playing tab. Read it like `prefer_romanized` — never from
+    /// inside a `with` closure.
+    pub fn artist_info_online(&self) -> bool {
+        !matches!(
+            self.prefs_get("artist_info_online")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("false")
+        )
+    }
+
     pub fn prefs_set(&self, key: &str, value: &str) -> Result<()> {
         self.with(|conn| {
             conn.execute(

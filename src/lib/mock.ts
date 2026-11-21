@@ -1136,15 +1136,13 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       }
       return out as T;
     }
-    case "lastfm_artist_info":
-    case "lastfm_album_info":
+    case "artist_info":
       return null as T;
-    case "lastfm_credits": {
-      // A sample vocalist bio whenever the vocalist is not the album artist,
-      // so the credit sections are visible in `npm run dev`.
+    case "track_credits": {
+      // A sample vocalist profile whenever the vocalist is not the album
+      // artist, so the credit sections are visible in `npm run dev`.
       const { albumartist, vocalist } = args as { albumartist: string | null; vocalist: string | null };
       if (!vocalist || vocalist === albumartist) return [] as T;
-      const bio = `${vocalist} is a singer known for doujin vocal arrangements. This mock bio stands in for the Last.fm one.`;
       return [
         {
           role: "vocalist",
@@ -1152,26 +1150,31 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
           sort: null,
           info: {
             name: vocalist,
-            bio_summary: bio,
-            bio_full: bio,
+            bio: {
+              source: "TouhouDB",
+              text: `${vocalist} is a singer known for doujin vocal arrangements. This mock profile stands in for one from a profile site.`,
+              url: "https://touhoudb.com/Ar/1",
+            },
             listeners: 12_345,
             playcount: 678_901,
             tags: [],
             similar: [],
-            url: null,
           },
         },
       ] as T;
     }
-    case "lastfm_status":
-      return { username: null, enabled: false, suspended: false, pending: 0, error: null, authorizing: false } as T;
-    case "lastfm_cancel_connect":
-      return undefined as T;
-    case "lastfm_connect":
-    case "lastfm_finish_connect":
-    case "lastfm_set_enabled":
-    case "lastfm_disconnect":
-      throw new Error("Last.fm account connection is available in the desktop app.");
+    case "listenbrainz_status":
+      // A connected account, so Song history's ListenBrainz marks are
+      // visible in `npm run dev`.
+      return { username: "preview", enabled: false, suspended: false, pending: 0, error: null } as T;
+    case "listenbrainz_connect":
+    case "listenbrainz_set_enabled":
+    case "listenbrainz_disconnect":
+      throw new Error("Account connection is available in the desktop app.");
+    case "discogs_status":
+      return null as T;
+    case "discogs_set_token":
+      throw new Error("The Discogs token is saved by the desktop app.");
     case "track_set_rating": {
       const { trackId, rating } = args as { trackId: number; rating: number | null };
       if (rating != null && !(rating >= 0.5 && rating <= 5 && Number.isInteger(rating * 2)))
@@ -1182,22 +1185,32 @@ export async function mockCall<T>(cmd: string, args: Record<string, unknown>): P
       return undefined as T;
     }
     case "song_history": {
+      // The newest 20 plays are from after the move to ListenBrainz; of the
+      // older ones, two in three have a saved Last.fm page.
       const before = (args as { before?: number } | undefined)?.before ?? 121;
-      return Array.from({ length: 120 }, (_, i) => ({
-        id: 120 - i,
-        played_at: mockHistoryStart - (i < 20 ? i * 210 : i * 86400),
-        track: tracks[i % tracks.length],
-      })).filter(row => row.id < before).slice(0, 50) as T;
+      return Array.from({ length: 120 }, (_, i) => {
+        const track = tracks[i % tracks.length];
+        const lastfm = i >= 20;
+        return {
+          id: 120 - i,
+          played_at: mockHistoryStart - (i < 20 ? i * 210 : i * 86400),
+          track,
+          service: lastfm ? "lastfm" : "listenbrainz",
+          url: lastfm && track.id % 3 !== 0 ? "https://www.last.fm/music/Cher/_/Believe" : null,
+        };
+      }).filter(row => row.id < before).slice(0, 50) as T;
     }
-    case "lastfm_track_url": {
-      const id = (args as { trackId: number }).trackId;
-      return (id % 3 === 0 ? null : "https://www.last.fm/music/Cher/_/Believe") as T;
+    case "listenbrainz_links": {
+      const { trackIds } = args as { trackIds: number[] };
+      const urls: Record<number, string> = {};
+      for (const id of trackIds) {
+        if (id % 3 !== 0) urls[id] = "https://listenbrainz.org/track/e97f805a-ab48-4c52-855e-07049142113d/";
+      }
+      return { urls, failed: false } as T;
     }
-    case "lastfm_open_track":
-      window.open("https://www.last.fm/music/Cher/_/Believe", "_blank", "noopener,noreferrer");
+    case "open_info_link":
+      window.open((args as { url: string }).url, "_blank", "noopener,noreferrer");
       return undefined as T;
-    case "lastfm_test_key":
-      return Boolean((args as { apiKey?: string } | undefined)?.apiKey?.trim()) as T;
     case "lyrics_for_track": {
       if (!lyricsOnline) return null as T;
       // Long enough to scroll, and timed across the mock track's 3:04 so the

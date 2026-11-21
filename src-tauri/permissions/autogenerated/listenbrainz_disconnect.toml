@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-listenbrainz-disconnect"
+description = "Enables the listenbrainz_disconnect command without any pre-configured scope."
+commands.allow = ["listenbrainz_disconnect"]
+
+[[permission]]
+identifier = "deny-listenbrainz-disconnect"
+description = "Denies the listenbrainz_disconnect command without any pre-configured scope."
+commands.deny = ["listenbrainz_disconnect"]

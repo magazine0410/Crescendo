@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-listenbrainz-set-enabled"
+description = "Enables the listenbrainz_set_enabled command without any pre-configured scope."
+commands.allow = ["listenbrainz_set_enabled"]
+
+[[permission]]
+identifier = "deny-listenbrainz-set-enabled"
+description = "Denies the listenbrainz_set_enabled command without any pre-configured scope."
+commands.deny = ["listenbrainz_set_enabled"]

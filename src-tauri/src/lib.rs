@@ -63,9 +63,9 @@ pub fn run() {
                         )
                     }),
             );
-            let scrobbler = crescendo_core::lastfm::scrobble::Scrobbler::start(
+            let scrobbler = crescendo_core::listenbrainz::scrobble::Scrobbler::start(
                 db.clone(),
-                state::data_dir().join("lastfm-credentials.json"),
+                state::data_dir().join("listenbrainz-credentials.json"),
             )?;
             let logos = Arc::new(crescendo_core::radio::logo::LogoStore::new(
                 &state::cache_dir(),
@@ -280,19 +280,17 @@ pub fn run() {
             commands::misc::prefs_set,
             commands::misc::about_info,
             commands::misc::waveform_get,
-            commands::misc::lastfm_artist_info,
-            commands::misc::lastfm_album_info,
-            commands::misc::lastfm_credits,
-            commands::misc::lastfm_test_key,
-            commands::lastfm::lastfm_status,
-            commands::lastfm::lastfm_connect,
-            commands::lastfm::lastfm_finish_connect,
-            commands::lastfm::lastfm_set_enabled,
-            commands::lastfm::lastfm_cancel_connect,
-            commands::lastfm::lastfm_disconnect,
-            commands::lastfm::song_history,
-            commands::lastfm::lastfm_track_url,
-            commands::lastfm::lastfm_open_track,
+            commands::misc::artist_info,
+            commands::misc::track_credits,
+            commands::misc::discogs_status,
+            commands::misc::discogs_set_token,
+            commands::listenbrainz::listenbrainz_status,
+            commands::listenbrainz::listenbrainz_connect,
+            commands::listenbrainz::listenbrainz_set_enabled,
+            commands::listenbrainz::listenbrainz_disconnect,
+            commands::listenbrainz::song_history,
+            commands::listenbrainz::listenbrainz_links,
+            commands::listenbrainz::open_info_link,
             commands::misc::lyrics_for_track,
             commands::misc::autostart_get,
             commands::misc::autostart_set,

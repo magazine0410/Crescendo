@@ -11,7 +11,7 @@ Built with **Tauri 2**, **Svelte 5**, and **GStreamer**.
 - sleek dark user interface
 - library view with two main versions: album wall or a track list view
 - powerful searching & filtering capabilities
-- last.fm support for additional artist details
+- artist profiles from TouhouDB, Discogs, TheAudioDB, VocaDB and Wikipedia, and listens sent to ListenBrainz
 - MPRIS media controls, and a KDE Plasma system-tray widget with cover art, song info and transport controls
 - designed for large libraries; the player is tested with a library containing 100k+ songs
 
@@ -26,13 +26,17 @@ Built with **Tauri 2**, **Svelte 5**, and **GStreamer**.
 - **Art**: no blobs in the DB; `folder.jpg`/embedded art resolved lazily,
   256px thumbnails cached in `~/.cache/crescendo/thumbs/`, served over the
   `crescendo-art://` protocol, icons provided by [Lucide](https://github.com/lucide-icons/lucide)
-- **Now Playing**: Last.fm artist/album info (API key set in Settings, 30-day
-  cache) with local-tag fallback
+- **Now Playing**: an artist profile from the first of TouhouDB, Discogs,
+  TheAudioDB, VocaDB and English Wikipedia that has one, plus ListenBrainz
+  tags, listener counts and similar artists when an account is connected
+  (30-day cache; six hours for Discogs), with local-tag fallback. This
+  application uses Discogs' API but is not affiliated with, sponsored or
+  endorsed by Discogs. 'Discogs' is a trademark of Zink Media, LLC.
 
 ## Workspace layout
 
 ```
-crates/core/   # crescendo-core: db, scanner, search, playlists, m3u, art, lastfm
+crates/core/   # crescendo-core: db, scanner, search, playlists, m3u, art, listenbrainz
                # (no UI deps — builds and tests standalone)
 src-tauri/     # tauri shell: player engine, commands, art protocol
 src/           # SvelteKit frontend (runs against a mock backend in plain vite dev)

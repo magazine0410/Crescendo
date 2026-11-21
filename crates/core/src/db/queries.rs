@@ -1144,12 +1144,14 @@ impl Db {
         }
     }
 
-    pub fn lastfm_cache_get(&self, key: &str, max_age_secs: i64) -> Result<Option<String>> {
+    /// What an online source answered for `key`, if it was fetched within
+    /// `max_age_secs`.
+    pub fn web_cache_get(&self, key: &str, max_age_secs: i64) -> Result<Option<String>> {
         self.with(|conn| {
             let now = now_unix();
             Ok(conn
                 .query_row(
-                    "SELECT json FROM lastfm_cache WHERE key = ?1 AND fetched_at > ?2",
+                    "SELECT json FROM web_cache WHERE key = ?1 AND fetched_at > ?2",
                     rusqlite::params![key, now - max_age_secs],
                     |r| r.get(0),
                 )
@@ -1157,10 +1159,10 @@ impl Db {
         })
     }
 
-    pub fn lastfm_cache_put(&self, key: &str, json: &str) -> Result<()> {
+    pub fn web_cache_put(&self, key: &str, json: &str) -> Result<()> {
         self.with(|conn| {
             conn.execute(
-                "INSERT INTO lastfm_cache(key, json, fetched_at) VALUES (?1, ?2, ?3)
+                "INSERT INTO web_cache(key, json, fetched_at) VALUES (?1, ?2, ?3)
                  ON CONFLICT(key) DO UPDATE SET json = excluded.json, \
                  fetched_at = excluded.fetched_at",
                 rusqlite::params![key, json, now_unix()],
@@ -1169,22 +1171,26 @@ impl Db {
         })
     }
 
-    /// Expired Last.fm responses are never read again, so remove them at app
-    /// startup instead of letting one row per viewed artist/album accumulate
-    /// for the lifetime of the library database.
-    pub fn lastfm_cache_prune(&self, max_age_secs: i64) -> Result<()> {
+    /// Expired answers are never read again, so remove them at app startup
+    /// instead of letting one row per looked-up artist accumulate for the
+    /// lifetime of the library database.
+    pub fn web_cache_prune(&self, max_age_secs: i64) -> Result<()> {
         self.with(|conn| {
-            let exists: bool = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lastfm_cache')",
-                [],
-                |row| row.get(0),
-            )?;
-            if !exists {
-                return Ok(());
-            }
             conn.execute(
-                "DELETE FROM lastfm_cache WHERE fetched_at < ?1",
+                "DELETE FROM web_cache WHERE fetched_at < ?1",
                 rusqlite::params![now_unix() - max_age_secs],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Removes the answers of one source, by the start of its keys, once they
+    /// are older than that source allows to be kept.
+    pub fn web_cache_prune_prefix(&self, prefix: &str, max_age_secs: i64) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                "DELETE FROM web_cache WHERE substr(key, 1, length(?1)) = ?1 AND fetched_at < ?2",
+                rusqlite::params![prefix, now_unix() - max_age_secs],
             )?;
             Ok(())
         })

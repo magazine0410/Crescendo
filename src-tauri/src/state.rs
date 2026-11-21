@@ -41,7 +41,7 @@ pub struct AppState {
     pub waveform: Arc<WaveformStore>,
     pub plugins: Arc<PluginManager>,
     pub player: PlayerHandle,
-    pub scrobbler: Arc<crescendo_core::lastfm::scrobble::Scrobbler>,
+    pub scrobbler: Arc<crescendo_core::listenbrainz::scrobble::Scrobbler>,
     pub projectm_grants: Arc<Mutex<ProjectMGrants>>,
     pub library_lock: Arc<LibraryLock>,
     pub scan_cancel: Arc<AtomicBool>,

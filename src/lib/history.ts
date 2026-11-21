@@ -4,6 +4,11 @@ export interface HistoryEntry {
   id: number;
   played_at: number;
   track: Track;
+  /** Whose page the play can link to: Last.fm's for a play from before
+      ListenBrainz took over, ListenBrainz's after. */
+  service: "lastfm" | "listenbrainz";
+  /** The saved Last.fm page. ListenBrainz pages come from `listenbrainz_links`. */
+  url: string | null;
 }
 
 /** Local calendar time, deliberately independent of the machine's locale. */
