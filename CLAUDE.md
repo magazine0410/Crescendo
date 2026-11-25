@@ -30,7 +30,7 @@ cargo run --release -p crescendo-core --example m3u_art_test -- <db> <m3u> <cach
 cargo run -p crescendo-core --example profile_test -- <scratch-db> "<name>[|<album>[|<album artist>]]"...   # the profile sites, live
 ```
 
-The Fedora toolbox `dev` has the `-devel` packages the Rust build needs: `webkit2gtk4.1-devel` (which brings in GTK 3, libsoup 3 and JavaScriptCore), `dbus-devel`, `gstreamer1-devel`, `gstreamer1-plugins-base-devel`, and the README's `openssl-devel`, `librsvg2-devel` and `libappindicator-gtk3-devel`. Run commands in it with `toolbox run -c dev <command>`, or open a shell with `toolbox enter dev`. Cargo works there because it is installed in the home directory; Node.js is not installed in the toolbox.
+Development packages (compilers, SDKs, `-devel` headers, linters and other code checks, packaging tools) are in the Fedora toolbox `dev`, not on the host. Run commands that need them with `toolbox run -c dev <command>`; it keeps the current directory. If a development package or tool is missing, install it in the toolbox (`toolbox run -c dev sudo dnf install <package>`), not on the host.
 
 Runtime data: DB at `~/.local/share/crescendo/library.db` (SQLite WAL — safe to open with a second connection while the app runs), thumbnails at `~/.cache/crescendo/thumbs/`.
 
